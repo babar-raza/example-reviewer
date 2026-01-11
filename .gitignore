@@ -31,3 +31,4 @@ snippet_*_content.txt
 .idea/
 *.swp
 *.swo
+/Python313Libsite-packages

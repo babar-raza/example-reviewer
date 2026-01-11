@@ -19,6 +19,7 @@ from ollama_integration import OllamaClient
 from workspace_manager import WorkspaceManager
 from validation_orchestrator import ValidationOrchestrator
 from patching_service import PatchingService
+from gist_service import GistService
 
 
 class CLI:
@@ -63,6 +64,17 @@ class CLI:
         if not family_config_path.exists():
             print(f"[!] Family config not found: {family_config_path}")
             return 1
+
+        # Verify cache integrity before discovery
+        print("[*] Verifying gist cache integrity...")
+        gist_cache_dir = self.script_dir / "data" / "gist_cache"
+        gist_service = GistService(cache_dir=gist_cache_dir, db=self.db)
+        cache_result = gist_service.verify_cache()
+
+        if cache_result['corrupted_files'] > 0:
+            print(f"[!] Found and removed {cache_result['corrupted_files']} corrupted cache files")
+        else:
+            print(f"[OK] Cache verification complete: {cache_result['valid_files']} files verified")
 
         # Create run
         run_id = self.db.create_run('discovery', family)

@@ -31,6 +31,19 @@ scripts/example-reviewer/
 └── validation-results/           # Validation output files
 ```
 
+## Documentation
+
+Comprehensive guides for using and maintaining the Example Reviewer:
+
+- **[Configuration Guide](docs/configuration.md)** - Environment variables, cache, and database setup
+- **[Security Guide](docs/security.md)** - GitHub token management and security best practices
+- **[Operations Guide](docs/operations.md)** - Cache/database management, monitoring, and troubleshooting
+- **[Architecture](docs/architecture.md)** - System design and component overview
+- **[Development Guide](docs/development-guide.md)** - Contributing and development workflow
+- **[Troubleshooting](docs/troubleshooting.md)** - Common issues and detailed solutions
+- **[API Reference](docs/api-reference.md)** - Code API documentation
+- **[Testing Guide](docs/testing-guide.md)** - Test suite and testing practices
+
 ## Installation
 
 ### Prerequisites
@@ -38,6 +51,7 @@ scripts/example-reviewer/
 - Python 3.8+
 - .NET 8.0 SDK
 - Git
+- GitHub Personal Access Token (optional, for higher rate limits)
 
 ### Setup
 

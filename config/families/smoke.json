@@ -1,0 +1,18 @@
+{
+  "family": "smoke",
+  "display_name": "Smoke Test Family",
+  "content_pattern": "**/smoke/**/*.md",
+  "nuget_config": {
+    "primary_package": {
+      "name": "Newtonsoft.Json",
+      "version_strategy": "latest_stable"
+    },
+    "target_frameworks": ["net8.0"],
+    "version_strategy": "latest_stable"
+  },
+  "code_defaults": {
+    "default_usings": ["Newtonsoft.Json"]
+  },
+  "patterns": [],
+  "non_existent_apis": []
+}

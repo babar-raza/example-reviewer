@@ -1,5 +1,11 @@
 # Configuration Guide
 
+**See also**:
+- [Security Guide](security.md) - GitHub token security and best practices
+- [Operations Guide](operations.md) - Cache and database management
+
+---
+
 ## Environment Variables
 
 ### GITHUB_TOKEN (Optional)
@@ -24,13 +30,14 @@ $env:GITHUB_TOKEN="ghp_your_personal_access_token_here"
 **Creating a Token:**
 1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
 2. Generate new token
-3. **Scopes required**: `gist` (read access)
+3. **Scopes required**: None for public gists (see [Security Guide](security.md#token-scopes) for details)
 4. Copy token and set environment variable
 
 **Security Note:**
 - Never commit tokens to git
 - Use environment variables or secure key vaults
 - Rotate tokens periodically
+- **See [Security Guide](security.md)** for comprehensive token management and security best practices
 
 ### CACHE_DIR (Optional)
 **Purpose**: Override default gist cache location.
@@ -68,6 +75,8 @@ Safe to delete `cache/gists/` directory:
 - Database still retains gist metadata
 - Content re-cached on next fetch
 
+**See [Operations Guide](operations.md#cache-management)** for detailed cache management procedures.
+
 ### Database
 **Path**: `data/examples.db`
 
@@ -81,6 +90,8 @@ Safe to delete `cache/gists/` directory:
 Schema version 2 adds gist tables.
 - Old databases: tables created automatically on `init-db`
 - New databases: full schema including gists
+
+**See [Operations Guide](operations.md#database-management)** for database maintenance and monitoring.
 
 ## CLI Configuration
 

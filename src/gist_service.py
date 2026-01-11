@@ -7,6 +7,7 @@ import re
 import os
 import json
 import hashlib
+import logging
 import requests
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
@@ -14,6 +15,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from database import Database
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -410,3 +413,135 @@ class GistService:
             language=file_data.get('language'),
             updated_at=cached_data.get('data', {}).get('updated_at')
         )
+
+    def verify_cache(self) -> Dict[str, any]:
+        """
+        Verify cache integrity and remove corrupted files.
+
+        Scans all .json cache files and validates:
+        - Valid JSON structure
+        - Required fields: gist_id, etag, cached_at, data
+        - Valid cached_at timestamp format (ISO8601)
+        - data is dict and contains files key
+
+        Corrupted files are automatically removed and logged at WARNING level.
+
+        Returns:
+            Dict with keys:
+            - total_files: int (total cache files scanned)
+            - valid_files: int (valid cache files)
+            - corrupted_files: int (corrupted files removed)
+            - removed_files: List[str] (paths of removed files)
+            - errors: List[Dict] (file paths and error messages)
+        """
+        total_files = 0
+        valid_files = 0
+        corrupted_files = 0
+        removed_files = []
+        errors = []
+
+        # Ensure cache directory exists
+        if not self.cache_dir.exists():
+            return {
+                'total_files': 0,
+                'valid_files': 0,
+                'corrupted_files': 0,
+                'removed_files': [],
+                'errors': []
+            }
+
+        # Scan all .json files in cache directory
+        try:
+            cache_files = list(self.cache_dir.glob('*.json'))
+            total_files = len(cache_files)
+
+            for cache_file in cache_files:
+                file_path = str(cache_file)
+                is_valid = True
+                error_msg = None
+
+                try:
+                    # Attempt to read and parse JSON
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        cache_data = json.load(f)
+
+                    # Validate required fields
+                    required_fields = ['gist_id', 'etag', 'cached_at', 'data']
+                    missing_fields = [field for field in required_fields if field not in cache_data]
+
+                    if missing_fields:
+                        is_valid = False
+                        error_msg = f"Missing required fields: {', '.join(missing_fields)}"
+                    else:
+                        # Validate cached_at is valid ISO timestamp
+                        try:
+                            datetime.fromisoformat(cache_data['cached_at'])
+                        except (ValueError, TypeError):
+                            is_valid = False
+                            error_msg = "Invalid cached_at timestamp format"
+
+                        # Validate data is dict and has files
+                        if is_valid:
+                            if not isinstance(cache_data['data'], dict):
+                                is_valid = False
+                                error_msg = "data field is not a dict"
+                            elif 'files' not in cache_data['data']:
+                                is_valid = False
+                                error_msg = "data.files field missing"
+
+                except json.JSONDecodeError as e:
+                    is_valid = False
+                    error_msg = f"Invalid JSON: {str(e)}"
+                except Exception as e:
+                    is_valid = False
+                    error_msg = f"Read error: {str(e)}"
+
+                # Handle corrupted files
+                if not is_valid:
+                    logger.warning(
+                        f"Corrupted cache file detected: {file_path} - {error_msg}, removing"
+                    )
+
+                    # Attempt to remove corrupted file
+                    try:
+                        cache_file.unlink()
+                        corrupted_files += 1
+                        removed_files.append(file_path)
+                    except Exception as remove_error:
+                        error_detail = {
+                            'file': file_path,
+                            'validation_error': error_msg,
+                            'removal_error': str(remove_error)
+                        }
+                        errors.append(error_detail)
+                        logger.error(
+                            f"Failed to remove corrupted cache file {file_path}: {remove_error}"
+                        )
+                else:
+                    valid_files += 1
+
+        except Exception as scan_error:
+            logger.error(f"Error scanning cache directory {self.cache_dir}: {scan_error}")
+            errors.append({
+                'file': str(self.cache_dir),
+                'error': f"Directory scan error: {str(scan_error)}"
+            })
+
+        # Log summary
+        if corrupted_files > 0:
+            logger.warning(
+                f"Cache validation complete: {total_files} files scanned, "
+                f"{valid_files} valid, {corrupted_files} corrupted (removed)"
+            )
+        else:
+            logger.info(
+                f"Cache validation complete: {total_files} files scanned, all valid"
+            )
+
+        return {
+            'total_files': total_files,
+            'valid_files': valid_files,
+            'corrupted_files': corrupted_files,
+            'removed_files': removed_files,
+            'errors': errors
+        }
