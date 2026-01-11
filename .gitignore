@@ -6,6 +6,7 @@ __pycache__/
 
 # Runtime directories
 artifacts/
+cache/
 data/
 logs/
 reports/
@@ -22,6 +23,7 @@ test-examples/obj/
 # Temporary files
 *.db
 *.db-journal
+*.zip
 snippet_*_content.txt
 
 # IDE
