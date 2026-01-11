@@ -80,7 +80,7 @@ class GistService:
         Returns:
             Tuple of (username, gist_id, filename) or None if parse fails
         """
-        # Try quoted form first (most common)
+        # Try quoted form first (fully quoted)
         quoted_pattern = r'{{<\s*gist\s+"([^"]+)"\s+"([^"]+)"(?:\s+"([^"]+)")?\s*>}}'
         match = re.search(quoted_pattern, shortcode)
 
@@ -90,7 +90,17 @@ class GistService:
             filename = match.group(3) if match.group(3) else None
             return (username, gist_id, filename)
 
-        # Try unquoted form (fallback)
+        # Try mixed form (unquoted owner/ID, quoted filename) - ACTUAL Aspose format
+        mixed_pattern = r'{{<\s*gist\s+(\S+)\s+(\S+)(?:\s+"([^"]+)")?\s*>}}'
+        match = re.search(mixed_pattern, shortcode)
+
+        if match:
+            username = match.group(1)
+            gist_id = match.group(2)
+            filename = match.group(3) if match.group(3) else None
+            return (username, gist_id, filename)
+
+        # Try fully unquoted form (fallback)
         unquoted_pattern = r'{{<\s*gist\s+(\S+)\s+(\S+)(?:\s+(\S+))?\s*>}}'
         match = re.search(unquoted_pattern, shortcode)
 
