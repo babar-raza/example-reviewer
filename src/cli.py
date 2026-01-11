@@ -55,7 +55,7 @@ class CLI:
             print(f"[!] Failed to initialize database: {e}")
             return 1
 
-    def discover(self, family: str, max_pages: int = None):
+    def discover(self, family: str, max_pages: int = None, content_root: str = None):
         """Run discovery for a family."""
         print(f"[*] Starting discovery for family: {family}")
 
@@ -64,6 +64,14 @@ class CLI:
         if not family_config_path.exists():
             print(f"[!] Family config not found: {family_config_path}")
             return 1
+
+        # Determine content root
+        if content_root:
+            repo_root = Path(content_root)
+            print(f"[i] Using custom content root: {repo_root}")
+        else:
+            repo_root = self.repo_root
+            print(f"[i] Using default content root: {repo_root}")
 
         # Verify cache integrity before discovery
         print("[*] Verifying gist cache integrity...")
@@ -85,7 +93,7 @@ class CLI:
 
         try:
             # Run discovery
-            discovery = DiscoveryService(self.repo_root, self.db, self.telemetry)
+            discovery = DiscoveryService(repo_root, self.db, self.telemetry, self.config_dir)
 
             if max_pages:
                 print(f"[i] Limiting to {max_pages} pages")
@@ -210,9 +218,17 @@ class CLI:
 
         return 0
 
-    def validate(self, family: str, max_snippets: int = None, use_ollama: bool = True):
+    def validate(self, family: str, max_snippets: int = None, use_ollama: bool = True, content_root: str = None):
         """Run validation for a family."""
         print(f"[*] Starting validation for family: {family}")
+
+        # Determine content root (for future use)
+        if content_root:
+            repo_root = Path(content_root)
+            print(f"[i] Using custom content root: {repo_root}")
+        else:
+            repo_root = self.repo_root
+            print(f"[i] Using default content root: {repo_root}")
 
         # Check family config exists
         family_config_path = self.config_dir / f"{family}.json"
@@ -359,7 +375,7 @@ class CLI:
         except Exception as e:
             print(f"[!] Failed to generate report: {e}")
 
-    def patch(self, family: str, dry_run: bool = False, gist_mode: str = 'inline-on-change'):
+    def patch(self, family: str, dry_run: bool = False, gist_mode: str = 'inline-on-change', content_root: str = None):
         """Patch verified snippets back into original files."""
         print(f"[*] Starting patching for family: {family}")
 
@@ -367,6 +383,14 @@ class CLI:
             print("[i] DRY RUN MODE - No files will be modified")
 
         print(f"[i] Gist mode: {gist_mode}")
+
+        # Determine content root
+        if content_root:
+            repo_root = Path(content_root)
+            print(f"[i] Using custom content root: {repo_root}")
+        else:
+            repo_root = self.repo_root
+            print(f"[i] Using default content root: {repo_root}")
 
         # Check family config exists
         family_config_path = self.config_dir / f"{family}.json"
@@ -400,7 +424,7 @@ class CLI:
             gist_publisher = GistPublisher(gist_owner, gist_token, self.db, gist_public)
 
         # Create patching service WITH gist_publisher
-        patcher = PatchingService(self.db, self.repo_root, gist_publisher)
+        patcher = PatchingService(self.db, repo_root, gist_publisher)
 
         try:
             # Patch all verified snippets
@@ -446,12 +470,14 @@ def main():
     discover_parser = subparsers.add_parser('discover', help='Discover code snippets')
     discover_parser.add_argument('--family', required=True, help='Product family (e.g., zip)')
     discover_parser.add_argument('--max-pages', type=int, help='Maximum pages to process')
+    discover_parser.add_argument('--content-root', help='Content root directory (default: repository root)')
 
     # validate command
     validate_parser = subparsers.add_parser('validate', help='Validate code snippets')
     validate_parser.add_argument('--family', required=True, help='Product family (e.g., zip)')
     validate_parser.add_argument('--max-snippets', type=int, help='Maximum snippets to validate')
     validate_parser.add_argument('--no-ollama', action='store_true', help='Disable Ollama LLM fixes')
+    validate_parser.add_argument('--content-root', help='Content root directory (default: repository root)')
 
     # db-status command
     status_parser = subparsers.add_parser('db-status', help='Show database status')
@@ -472,6 +498,7 @@ def main():
              'inline-always (always replace), upload-on-change (publish new gist if changed), '
              'upload-always (always publish new gist)'
     )
+    patch_parser.add_argument('--content-root', help='Content root directory (default: repository root)')
 
     # Parse args
     args = parser.parse_args()
@@ -487,16 +514,16 @@ def main():
     if args.command == 'init-db':
         return cli.init_db()
     elif args.command == 'discover':
-        return cli.discover(args.family, args.max_pages)
+        return cli.discover(args.family, args.max_pages, getattr(args, 'content_root', None))
     elif args.command == 'validate':
         use_ollama = not args.no_ollama
-        return cli.validate(args.family, args.max_snippets, use_ollama)
+        return cli.validate(args.family, args.max_snippets, use_ollama, getattr(args, 'content_root', None))
     elif args.command == 'db-status':
         return cli.db_status(args.family)
     elif args.command == 'check-ollama':
         return cli.check_ollama()
     elif args.command == 'patch':
-        return cli.patch(args.family, args.dry_run, args.gist_mode)
+        return cli.patch(args.family, args.dry_run, args.gist_mode, getattr(args, 'content_root', None))
     else:
         print(f"[!] Unknown command: {args.command}")
         return 1

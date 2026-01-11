@@ -48,21 +48,24 @@ class DiscoveryService:
         'products': 'content/products.aspose.net'
     }
 
-    def __init__(self, repo_root: Path, db: Database, telemetry: TelemetryClient):
+    def __init__(self, repo_root: Path, db: Database, telemetry: TelemetryClient, config_dir: Optional[Path] = None):
         """
         Initialize discovery service.
 
         Args:
-            repo_root: Root directory of repository
+            repo_root: Root directory of content repository
             db: Database instance
             telemetry: Telemetry client
+            config_dir: Directory containing family configs (defaults to repo_root/config/families)
         """
         self.repo_root = repo_root
         self.db = db
         self.telemetry = telemetry
+        self.config_dir = config_dir or (repo_root / 'config' / 'families')
 
         # Initialize gist service with cache directory
-        cache_dir = repo_root / 'cache' / 'gists'
+        # Cache dir should be in the script directory, not content dir
+        cache_dir = self.config_dir.parent.parent / 'cache' / 'gists'
         self.gist_service = GistService(cache_dir, db)
 
     def discover_family(self, family: str, max_pages: Optional[int] = None) -> Dict[str, int]:
@@ -83,6 +86,22 @@ class DiscoveryService:
             'errors': 0
         }
 
+        # Load family config to get content patterns
+        config_path = self.config_dir / f'{family}.json'
+        content_patterns = {}
+        if config_path.exists():
+            import json
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                pattern_config = config.get('content_pattern', {})
+                # Support both dict (site-specific) and string (global) patterns
+                if isinstance(pattern_config, dict):
+                    content_patterns = pattern_config
+                elif isinstance(pattern_config, str):
+                    # Use same pattern for all sites
+                    for site in self.SITE_CONFIGS:
+                        content_patterns[site] = pattern_config
+
         # Scan all sites
         for site_name, site_path in self.SITE_CONFIGS.items():
             site_dir = self.repo_root / site_path
@@ -90,15 +109,22 @@ class DiscoveryService:
                 print(f"[!] Site directory not found: {site_dir}")
                 continue
 
-            # Find all markdown files containing family name
-            family_pattern = f"*{family}*"
-            markdown_files = list(site_dir.rglob("*.md"))
+            # Get site-specific pattern or use fallback
+            site_pattern = content_patterns.get(site_name)
 
-            # Filter for family-related files
-            relevant_files = [
-                f for f in markdown_files
-                if family.lower() in str(f).lower()
-            ]
+            if site_pattern:
+                # Use glob pattern from config
+                from pathlib import Path
+                relevant_files = list(site_dir.glob(site_pattern))
+                print(f"[i] Site {site_name}: Found {len(relevant_files)} files matching pattern '{site_pattern}'")
+            else:
+                # Fallback: Find all markdown files containing family name
+                markdown_files = list(site_dir.rglob("*.md"))
+                relevant_files = [
+                    f for f in markdown_files
+                    if family.lower() in str(f).lower()
+                ]
+                print(f"[i] Site {site_name}: Found {len(relevant_files)} files (fallback method)")
 
             stats['pages_found'] += len(relevant_files)
 
