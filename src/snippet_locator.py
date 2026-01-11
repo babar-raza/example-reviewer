@@ -36,6 +36,7 @@ class SnippetLocator:
     language: Optional[str]     # "csharp" | "vb" | etc.
     gist_id: Optional[str] = None      # If type == "gist"
     gist_file: Optional[str] = None    # If type == "gist"
+    notes: Optional[str] = None        # JSON-encoded metadata (e.g., gist shortcode)
 
     def to_json(self) -> str:
         """Serialize to JSON string for database storage."""
@@ -118,7 +119,8 @@ def create_locator(page_path: str, snippet_ordinal: int, heading_context: List[s
                   preceding_text: str, snippet_content: str, line_start: int, line_end: int,
                   char_offset_start: int, char_offset_end: int, snippet_type: str,
                   language: Optional[str], gist_id: Optional[str] = None,
-                  gist_file: Optional[str] = None) -> SnippetLocator:
+                  gist_file: Optional[str] = None,
+                  gist_shortcode_original: Optional[str] = None) -> SnippetLocator:
     """
     Factory function to create a SnippetLocator.
 
@@ -136,10 +138,16 @@ def create_locator(page_path: str, snippet_ordinal: int, heading_context: List[s
         language: Programming language
         gist_id: Gist ID (if applicable)
         gist_file: Gist filename (if applicable)
+        gist_shortcode_original: Original gist shortcode (for patching)
 
     Returns:
         SnippetLocator instance
     """
+    # Store gist shortcode in notes as JSON for patching
+    notes = None
+    if gist_shortcode_original:
+        notes = json.dumps({"gist_shortcode": gist_shortcode_original})
+
     return SnippetLocator(
         page_path=page_path,
         snippet_ordinal=snippet_ordinal,
@@ -153,7 +161,8 @@ def create_locator(page_path: str, snippet_ordinal: int, heading_context: List[s
         snippet_type=snippet_type,
         language=language,
         gist_id=gist_id,
-        gist_file=gist_file
+        gist_file=gist_file,
+        notes=notes
     )
 
 

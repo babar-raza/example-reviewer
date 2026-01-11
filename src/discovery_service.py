@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from snippet_locator import create_locator, extract_heading_context, extract_preceding_text, SnippetLocator
 from database import Database
 from telemetry import TelemetryClient
+from gist_service import GistService
 
 
 @dataclass
@@ -30,6 +31,7 @@ class DiscoveredSnippet:
     preceding_text: str
     gist_id: Optional[str] = None
     gist_file: Optional[str] = None
+    gist_shortcode_original: Optional[str] = None  # Original shortcode for patching
 
 
 class DiscoveryService:
@@ -58,6 +60,10 @@ class DiscoveryService:
         self.repo_root = repo_root
         self.db = db
         self.telemetry = telemetry
+
+        # Initialize gist service with cache directory
+        cache_dir = repo_root / 'cache' / 'gists'
+        self.gist_service = GistService(cache_dir, db)
 
     def discover_family(self, family: str, max_pages: Optional[int] = None) -> Dict[str, int]:
         """
@@ -201,6 +207,11 @@ class DiscoveryService:
 
             # Save snippets to database
             for snippet in snippets:
+                # For gist snippets, preserve original shortcode for patching
+                gist_shortcode = None
+                if snippet.snippet_type == 'gist' and hasattr(snippet, 'gist_shortcode_original'):
+                    gist_shortcode = snippet.gist_shortcode_original
+
                 locator = create_locator(
                     page_path=str(file_path),
                     snippet_ordinal=snippet.ordinal,
@@ -214,7 +225,8 @@ class DiscoveryService:
                     snippet_type=snippet.snippet_type,
                     language=snippet.language,
                     gist_id=snippet.gist_id,
-                    gist_file=snippet.gist_file
+                    gist_file=snippet.gist_file,
+                    gist_shortcode_original=gist_shortcode
                 )
 
                 # Create snippet in database

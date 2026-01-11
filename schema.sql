@@ -313,6 +313,46 @@ BEGIN
 END;
 
 -- ============================================================================
+-- GIST SUPPORT TABLES
+-- ============================================================================
+
+-- Gists: Metadata for GitHub Gists
+CREATE TABLE IF NOT EXISTS gists (
+    gist_id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    description TEXT,
+    is_public BOOLEAN NOT NULL DEFAULT 1,
+    updated_at TEXT,
+    etag TEXT,
+    last_fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_status TEXT CHECK(last_status IN ('success', 'not_found', 'rate_limited', 'error')),
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_gists_owner ON gists(owner);
+CREATE INDEX idx_gists_last_fetched ON gists(last_fetched_at);
+CREATE INDEX idx_gists_status ON gists(last_status);
+
+-- Gist Files: Individual files within a gist
+CREATE TABLE IF NOT EXISTS gist_files (
+    gist_id TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    raw_url TEXT NOT NULL,
+    language TEXT,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    file_size INTEGER,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (gist_id) REFERENCES gists(gist_id) ON DELETE CASCADE,
+    PRIMARY KEY (gist_id, filename)
+);
+
+CREATE INDEX idx_gist_files_language ON gist_files(language);
+CREATE INDEX idx_gist_files_hash ON gist_files(content_hash);
+
+-- ============================================================================
 -- INITIAL DATA
 -- ============================================================================
 
@@ -325,3 +365,6 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 INSERT OR IGNORE INTO schema_version (version, description)
 VALUES (1, 'Initial schema - core tables, views, triggers');
+
+INSERT OR IGNORE INTO schema_version (version, description)
+VALUES (2, 'Gist support - gists and gist_files tables');
