@@ -33,6 +33,11 @@ test-examples/obj/
 *.zip
 snippet_*_content.txt
 
+# Secrets and environment variables
+.env
+.env.local
+secrets/
+
 # IDE
 .vscode/
 .idea/
