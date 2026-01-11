@@ -28,10 +28,10 @@ CREATE TABLE IF NOT EXISTS pages (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_pages_family ON pages(family);
-CREATE INDEX idx_pages_state ON pages(state);
-CREATE INDEX idx_pages_site ON pages(site);
-CREATE INDEX idx_pages_language ON pages(language);
+CREATE INDEX IF NOT EXISTS idx_pages_family ON pages(family);
+CREATE INDEX IF NOT EXISTS idx_pages_state ON pages(state);
+CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(site);
+CREATE INDEX IF NOT EXISTS idx_pages_language ON pages(language);
 
 -- Snippets: Individual code snippets within pages
 CREATE TABLE IF NOT EXISTS snippets (
@@ -51,9 +51,9 @@ CREATE TABLE IF NOT EXISTS snippets (
     UNIQUE(page_id, snippet_ordinal)
 );
 
-CREATE INDEX idx_snippets_page ON snippets(page_id);
-CREATE INDEX idx_snippets_status ON snippets(status);
-CREATE INDEX idx_snippets_type ON snippets(snippet_type);
+CREATE INDEX IF NOT EXISTS idx_snippets_page ON snippets(page_id);
+CREATE INDEX IF NOT EXISTS idx_snippets_status ON snippets(status);
+CREATE INDEX IF NOT EXISTS idx_snippets_type ON snippets(snippet_type);
 
 -- Snippet Versions: Track all versions of a snippet (original, fixed, current)
 CREATE TABLE IF NOT EXISTS snippet_versions (
@@ -68,8 +68,8 @@ CREATE TABLE IF NOT EXISTS snippet_versions (
     FOREIGN KEY (snippet_id) REFERENCES snippets(snippet_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_versions_snippet ON snippet_versions(snippet_id);
-CREATE INDEX idx_versions_type ON snippet_versions(version_type);
+CREATE INDEX IF NOT EXISTS idx_versions_snippet ON snippet_versions(snippet_id);
+CREATE INDEX IF NOT EXISTS idx_versions_type ON snippet_versions(version_type);
 
 -- ============================================================================
 -- EXECUTION TRACKING
@@ -90,9 +90,9 @@ CREATE TABLE IF NOT EXISTS runs (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_runs_family ON runs(family);
-CREATE INDEX idx_runs_type ON runs(run_type);
-CREATE INDEX idx_runs_status ON runs(status);
+CREATE INDEX IF NOT EXISTS idx_runs_family ON runs(family);
+CREATE INDEX IF NOT EXISTS idx_runs_type ON runs(run_type);
+CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 
 -- Run Events: Detailed event log for runs
 CREATE TABLE IF NOT EXISTS run_events (
@@ -106,9 +106,9 @@ CREATE TABLE IF NOT EXISTS run_events (
     FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_events_run ON run_events(run_id);
-CREATE INDEX idx_events_severity ON run_events(severity);
-CREATE INDEX idx_events_occurred ON run_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id);
+CREATE INDEX IF NOT EXISTS idx_events_severity ON run_events(severity);
+CREATE INDEX IF NOT EXISTS idx_events_occurred ON run_events(occurred_at);
 
 -- ============================================================================
 -- VALIDATION TRACKING
@@ -126,8 +126,8 @@ CREATE TABLE IF NOT EXISTS snippet_issues (
     FOREIGN KEY (snippet_id) REFERENCES snippets(snippet_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_issues_snippet ON snippet_issues(snippet_id);
-CREATE INDEX idx_issues_resolved ON snippet_issues(resolved_at);
+CREATE INDEX IF NOT EXISTS idx_issues_snippet ON snippet_issues(snippet_id);
+CREATE INDEX IF NOT EXISTS idx_issues_resolved ON snippet_issues(resolved_at);
 
 -- Fixes Applied: Track all fixes applied to snippets
 CREATE TABLE IF NOT EXISTS fixes_applied (
@@ -146,9 +146,9 @@ CREATE TABLE IF NOT EXISTS fixes_applied (
     FOREIGN KEY (after_version_id) REFERENCES snippet_versions(version_id)
 );
 
-CREATE INDEX idx_fixes_snippet ON fixes_applied(snippet_id);
-CREATE INDEX idx_fixes_type ON fixes_applied(fix_type);
-CREATE INDEX idx_fixes_successful ON fixes_applied(successful);
+CREATE INDEX IF NOT EXISTS idx_fixes_snippet ON fixes_applied(snippet_id);
+CREATE INDEX IF NOT EXISTS idx_fixes_type ON fixes_applied(fix_type);
+CREATE INDEX IF NOT EXISTS idx_fixes_successful ON fixes_applied(successful);
 
 -- Build Attempts: Compilation attempts
 CREATE TABLE IF NOT EXISTS build_attempts (
@@ -166,9 +166,9 @@ CREATE TABLE IF NOT EXISTS build_attempts (
     FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_attempts_snippet ON build_attempts(snippet_id);
-CREATE INDEX idx_attempts_success ON build_attempts(success);
-CREATE INDEX idx_attempts_run ON build_attempts(run_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_snippet ON build_attempts(snippet_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_success ON build_attempts(success);
+CREATE INDEX IF NOT EXISTS idx_attempts_run ON build_attempts(run_id);
 
 -- ============================================================================
 -- REPORTING VIEWS
@@ -330,9 +330,9 @@ CREATE TABLE IF NOT EXISTS gists (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_gists_owner ON gists(owner);
-CREATE INDEX idx_gists_last_fetched ON gists(last_fetched_at);
-CREATE INDEX idx_gists_status ON gists(last_status);
+CREATE INDEX IF NOT EXISTS idx_gists_owner ON gists(owner);
+CREATE INDEX IF NOT EXISTS idx_gists_last_fetched ON gists(last_fetched_at);
+CREATE INDEX IF NOT EXISTS idx_gists_status ON gists(last_status);
 
 -- Gist Files: Individual files within a gist
 CREATE TABLE IF NOT EXISTS gist_files (
@@ -349,8 +349,8 @@ CREATE TABLE IF NOT EXISTS gist_files (
     PRIMARY KEY (gist_id, filename)
 );
 
-CREATE INDEX idx_gist_files_language ON gist_files(language);
-CREATE INDEX idx_gist_files_hash ON gist_files(content_hash);
+CREATE INDEX IF NOT EXISTS idx_gist_files_language ON gist_files(language);
+CREATE INDEX IF NOT EXISTS idx_gist_files_hash ON gist_files(content_hash);
 
 -- ============================================================================
 -- INITIAL DATA

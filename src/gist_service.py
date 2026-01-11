@@ -11,7 +11,7 @@ import requests
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database import Database
 
@@ -137,7 +137,6 @@ class GistService:
                         # Verify cache is still valid (less than 1 hour old)
                         cached_time = cached_data.get('cached_at')
                         if cached_time:
-                            from datetime import datetime, timedelta
                             cached_dt = datetime.fromisoformat(cached_time)
                             if datetime.utcnow() - cached_dt < timedelta(hours=1):
                                 # Use cached version

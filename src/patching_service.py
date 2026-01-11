@@ -4,6 +4,8 @@ Updates original markdown files with verified code snippets.
 """
 
 import re
+import hashlib
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
