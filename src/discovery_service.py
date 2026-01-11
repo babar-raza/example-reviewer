@@ -423,7 +423,13 @@ class DiscoveryService:
     def _extract_gist_snippet(self, lines: List[str], line_idx: int,
                             char_offset: int, ordinal: int) -> Optional[DiscoveredSnippet]:
         """
-        Extract a gist shortcode snippet.
+        Extract a gist shortcode snippet and fetch its real content.
+
+        NEW BEHAVIOR: Fetches actual gist code from GitHub API, not just the shortcode.
+        - Parses shortcode to extract gist_id, owner, filename
+        - Fetches gist content via GistService
+        - Returns real C# code for validation
+        - Skips non-C# gists or fetch failures with recorded reason
 
         Args:
             lines: File lines
@@ -432,40 +438,53 @@ class DiscoveryService:
             ordinal: Snippet ordinal (1-indexed)
 
         Returns:
-            DiscoveredSnippet or None
+            DiscoveredSnippet with real code content, or None if should be skipped
         """
         line = lines[line_idx]
+        shortcode_original = line.strip()  # Preserve exact shortcode for patching
 
-        # Parse gist shortcode
-        # Format: {{< gist "username" "gist-id" "filename" >}}
-        # or: {{< gist "username" "gist-id" >}}
-        match = re.search(r'{{<\s*gist\s+"([^"]+)"\s+"([^"]+)"(?:\s+"([^"]+)")?\s*>}}', line)
+        # Parse gist shortcode using GistService
+        parse_result = self.gist_service.parse_gist_shortcode(shortcode_original)
 
-        if not match:
+        if not parse_result:
+            # Malformed shortcode, skip
+            print(f"[!] Failed to parse gist shortcode at line {line_idx + 1}: {shortcode_original}")
             return None
 
-        username = match.group(1)
-        gist_id = match.group(2)
-        gist_file = match.group(3) if match.group(3) else None
+        owner, gist_id, filename = parse_result
 
-        # Extract language from filename
-        language = None
-        if gist_file:
-            ext = Path(gist_file).suffix.lstrip('.')
-            language = ext if ext else None
+        # Fetch gist content from GitHub API (or cache)
+        fetch_result = self.gist_service.fetch_gist(gist_id, owner, filename)
 
-        # Extract context
+        # Handle fetch failures and skip cases
+        if not fetch_result.success:
+            if fetch_result.skip_reason:
+                # Gist was fetched but should be skipped (non-C#, ambiguous, etc.)
+                print(f"[i] Skipping gist {gist_id}: {fetch_result.skip_reason}")
+            elif fetch_result.error:
+                # Fetch error (rate limit, network, etc.)
+                print(f"[!] Error fetching gist {gist_id}: {fetch_result.error}")
+            return None  # Skip this gist
+
+        # Successfully fetched gist content
+        content = fetch_result.content
+        gist_filename = fetch_result.filename
+        language = fetch_result.language or 'csharp'  # Default to csharp if GitHub didn't detect
+
+        # Extract context from markdown
         heading_context = extract_heading_context(lines, line_idx)
         preceding_text = extract_preceding_text(lines, line_idx)
 
-        # For gist, content is the shortcode itself
-        content = line.strip()
-
         char_end = char_offset + len(line) + 1
+
+        # Check if gist code should be validated (same rules as fenced code)
+        if self._should_skip_snippet(content, language):
+            print(f"[i] Skipping gist {gist_id}: code doesn't meet C# validation criteria")
+            return None
 
         return DiscoveredSnippet(
             ordinal=ordinal,
-            content=content,
+            content=content,  # REAL gist code, not shortcode
             snippet_type='gist',
             language=language,
             line_start=line_idx,
@@ -475,7 +494,8 @@ class DiscoveryService:
             heading_context=heading_context,
             preceding_text=preceding_text,
             gist_id=gist_id,
-            gist_file=gist_file
+            gist_file=gist_filename,
+            gist_shortcode_original=shortcode_original  # Preserve for patching
         )
 
     def get_discovery_stats(self, family: str) -> Dict[str, any]:
