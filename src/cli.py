@@ -26,7 +26,7 @@ class CLI:
 
     def __init__(self):
         self.script_dir = Path(__file__).parent.parent
-        self.repo_root = self.script_dir.parent.parent
+        self.repo_root = self.script_dir
         self.db_path = self.script_dir / "data" / "examples.db"
         self.artifacts_dir = self.script_dir / "artifacts"
         self.config_dir = self.repo_root / "config" / "families"
