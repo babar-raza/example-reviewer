@@ -67,7 +67,7 @@ class CLI:
 
         # Verify cache integrity before discovery
         print("[*] Verifying gist cache integrity...")
-        gist_cache_dir = self.script_dir / "data" / "gist_cache"
+        gist_cache_dir = self.script_dir / "cache" / "gists"
         gist_service = GistService(cache_dir=gist_cache_dir, db=self.db)
         cache_result = gist_service.verify_cache()
 
@@ -359,12 +359,14 @@ class CLI:
         except Exception as e:
             print(f"[!] Failed to generate report: {e}")
 
-    def patch(self, family: str, dry_run: bool = False):
+    def patch(self, family: str, dry_run: bool = False, gist_mode: str = 'inline-on-change'):
         """Patch verified snippets back into original files."""
         print(f"[*] Starting patching for family: {family}")
 
         if dry_run:
             print("[i] DRY RUN MODE - No files will be modified")
+
+        print(f"[i] Gist mode: {gist_mode}")
 
         # Check family config exists
         family_config_path = self.config_dir / f"{family}.json"
@@ -381,12 +383,14 @@ class CLI:
 
         try:
             # Patch all verified snippets
-            results = patcher.patch_verified_snippets(family, dry_run)
+            results = patcher.patch_verified_snippets(family, dry_run, gist_mode)
 
             print(f"\n[OK] Patching completed")
             print(f"[i] Total snippets: {results['total_snippets']}")
             print(f"[i] Patches applied: {results['patches_applied']}")
             print(f"[i] Files modified: {results['files_modified']}")
+            print(f"[i] Gists unchanged: {results['gists_unchanged']}")
+            print(f"[i] Gists inlined: {results['gists_inlined']}")
             print(f"[i] Errors: {results['errors']}")
 
             # Show details for each patch
@@ -439,6 +443,12 @@ def main():
     patch_parser = subparsers.add_parser('patch', help='Patch verified snippets into original files')
     patch_parser.add_argument('--family', required=True, help='Product family (e.g., zip)')
     patch_parser.add_argument('--dry-run', action='store_true', help='Dry run mode (don\'t modify files)')
+    patch_parser.add_argument(
+        '--gist-mode',
+        choices=['preserve', 'inline-on-change', 'inline-always'],
+        default='inline-on-change',
+        help='How to handle gist snippets: preserve (keep shortcode), inline-on-change (replace if changed), inline-always (always replace)'
+    )
 
     # Parse args
     args = parser.parse_args()
@@ -463,7 +473,7 @@ def main():
     elif args.command == 'check-ollama':
         return cli.check_ollama()
     elif args.command == 'patch':
-        return cli.patch(args.family, args.dry_run)
+        return cli.patch(args.family, args.dry_run, args.gist_mode)
     else:
         print(f"[!] Unknown command: {args.command}")
         return 1

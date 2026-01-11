@@ -1,6 +1,6 @@
 # Sonnet: Repo Hardening + Multi-Family Scale-out + Gist Publishing
 
-**Mission:** Make example-reviewer production-grade, implement multi-family scaling (30+ families), and add optional GitHub gist publishing for changed snippets.
+**Mission:** Make example-reviewer production-grade, implement multi-family scaling (30+ families), and add **MANDATORY** GitHub gist publishing capability for changed snippets.
 
 **Engineer:** Claude Sonnet 4.5 (Acting as Repo Hardener + Scale-out Implementer)
 **Started:** 2026-01-11
@@ -243,3 +243,187 @@ e385ef6 test: add comprehensive gist parsing regression tests
 ---
 
 **Log Format:** This is an append-only log. New entries will be added below as work progresses.
+
+---
+
+## Phase 1: Bootstrap Hygiene - COMPLETED
+
+**Commit:** e46fd75
+
+### Actions Taken
+
+1. **Refined .gitignore**
+   - Added `.pytest_cache/` to ignore list
+   - Refined reports/ handling: ignore all reports/* but preserve engineering logs
+   - Kept existing ignores for data/, cache/, workspaces/, etc.
+   - Result: Engineering logs tracked while runtime artifacts ignored
+
+2. **Verified bootstrap files**
+   - ✅ schema.sql exists at repo root and properly referenced by CLI
+   - ✅ requirements.txt exists with comprehensive dependencies
+   - ✅ Dependencies already available in Python313Libsite-packages/ (vendored)
+
+3. **Created engineering log**
+   - Established reports/SONNET_hardening_and_scaleout.md
+   - Documented baseline state, directory structure, and Phase 0 findings
+
+### Verification
+
+- Git commit successful
+- Bootstrap files verified in place
+- Dependencies available (vendored in Python313Libsite-packages/)
+
+---
+
+## Phase 2: Fix Test Collection Failure - COMPLETED
+
+**Commit:** 812f309
+
+### Problem Identified
+
+Test collection failed with:
+```
+ERROR collecting tests/test_gist_integration.py
+ModuleNotFoundError: No module named 'fixtures'
+```
+
+**Root Cause:** test_gist_integration.py line 26 imports `fixtures.gist_fixtures` at module level, causing import error during collection even when --integration flag is not passed.
+
+### Solution Implemented
+
+Implemented **Option 1** from requirements: `pytest_ignore_collect` hook in conftest.py
+
+**Changes to tests/conftest.py:**
+- Added `pytest_ignore_collect(collection_path, path, config)` function
+- Completely ignores test_gist_integration.py during collection unless --integration flag is passed
+- Prevents module-level imports from causing collection failures
+- Maintains backward compatibility with pytest_collection_modifyitems for marking
+
+### Verification
+
+**Before Fix:**
+```
+pytest --collect-only -q
+ERROR tests/test_gist_integration.py
+1 error during collection
+```
+
+**After Fix:**
+```
+pytest --collect-only -q
+67 tests collected in 0.19s
+
+pytest -q
+67 passed in 2.40s
+```
+
+**Integration tests still work with flag:**
+```
+pytest --integration tests/test_gist_integration.py
+(requires --integration flag to collect and run)
+```
+
+### Test Results
+
+✅ All 67 tests pass without --integration flag
+✅ Test collection no longer fails
+✅ Integration tests properly gated behind --integration flag
+
+---
+
+## Phase 3: Align CLI with Docs - IN PROGRESS
+
+### Issues to Address
+
+1. **CLI patch command missing --gist-mode parameter**
+   - Current: `patch --family <family> [--dry-run]`
+   - Required: `patch --family <family> [--dry-run] [--gist-mode <mode>]`
+   - Modes needed: preserve, inline-on-change, inline-always
+   - Default: inline-on-change
+
+2. **Cache location inconsistency**
+   - Current: CLI uses `data/gist_cache` (line 70)
+   - Target: Should use `cache/gists/` for consistency
+
+### Next Steps
+
+- Read patching_service.py to understand current gist_mode implementation
+- Update CLI to expose --gist-mode parameter
+- Update CLI to use cache/gists/ consistently
+- Run python src/cli.py --help and verify output
+- Update docs/api-reference.md to match actual CLI
+
+
+---
+
+## Phase 3: Align CLI with Docs - COMPLETED
+
+**Commit:** (pending)
+
+### Changes Implemented
+
+#### 1. CLI Gist Mode Parameter Exposed
+
+**Updated src/cli.py:**
+
+- Line 362: Added `gist_mode` parameter to `patch()` method with default 'inline-on-change'
+- Line 369: Log gist_mode to user for transparency
+- Line 386: Pass gist_mode to PatchingService.patch_verified_snippets()
+- Lines 392-393: Display gists_unchanged and gists_inlined in results output
+- Lines 446-451: Add --gist-mode argument to patch subparser with three choices:
+  - `preserve`: Always keep gist shortcode (never inline)
+  - `inline-on-change`: Replace shortcode if code changed (default)
+  - `inline-always`: Always replace shortcode with inline fence
+- Line 476: Pass args.gist_mode to cli.patch()
+
+**Verified with --help:**
+```
+python src/cli.py patch --help
+
+usage: cli.py patch [-h] --family FAMILY [--dry-run]
+                    [--gist-mode {preserve,inline-on-change,inline-always}]
+
+options:
+  --family FAMILY       Product family (e.g., zip)
+  --dry-run             Dry run mode (don't modify files)
+  --gist-mode {preserve,inline-on-change,inline-always}
+                        How to handle gist snippets: preserve (keep
+                        shortcode), inline-on-change (replace if changed),
+                        inline-always (always replace)
+```
+
+#### 2. Cache Location Unified
+
+**Updated src/cli.py:**
+
+- Line 70: Changed from `self.script_dir / "data" / "gist_cache"` to `self.script_dir / "cache" / "gists"`
+- Canonical cache location is now: `cache/gists/`
+- Consistent with architecture docs and .gitignore
+
+### Verification
+
+**CLI Help Output:**
+✅ Main help shows all commands correctly
+✅ Patch help shows --gist-mode with three choices
+✅ Default is inline-on-change as specified
+
+**Test Suite:**
+✅ All 67 tests pass (pytest -q)
+✅ No regressions introduced
+
+### What's Aligned
+
+1. ✅ CLI patch command exposes --gist-mode parameter
+2. ✅ Three modes match PatchingService implementation
+3. ✅ Default mode is inline-on-change
+4. ✅ Cache location unified to cache/gists/
+5. ✅ CLI help output matches implementation
+
+### Next Steps for Docs
+
+- Update docs/api-reference.md with exact CLI help output
+- Document cache location in docs/configuration.md and docs/architecture.md
+- Add examples of using --gist-mode in docs/operations.md
+
+**Note:** PHASE 5 updated from "optional" to **MANDATORY** gist publishing per user requirement.
+
