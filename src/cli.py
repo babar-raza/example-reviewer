@@ -378,8 +378,29 @@ class CLI:
         with open(family_config_path, 'r', encoding='utf-8') as f:
             family_config = json.load(f)
 
-        # Create patching service
-        patcher = PatchingService(self.db, self.repo_root)
+        # Check if upload modes require env vars
+        gist_publisher = None
+        if gist_mode in ['upload-on-change', 'upload-always']:
+            import os
+            # Read env vars
+            gist_owner = os.environ.get('GIST_PUBLISH_OWNER')
+            gist_token = os.environ.get('GIST_PUBLISH_TOKEN')
+            gist_public = os.environ.get('GIST_PUBLISH_PUBLIC', 'true').lower() == 'true'
+
+            if not gist_owner or not gist_token:
+                print("[!] Error: upload gist modes require GIST_PUBLISH_OWNER and GIST_PUBLISH_TOKEN env vars")
+                return 1
+
+            # Log (redact token)
+            token_redacted = "..." + gist_token[-4:] if len(gist_token) >= 4 else "***"
+            print(f"[i] Gist publishing enabled: owner={gist_owner}, token={token_redacted}, public={gist_public}")
+
+            # Create publisher
+            from gist_publisher import GistPublisher
+            gist_publisher = GistPublisher(gist_owner, gist_token, self.db, gist_public)
+
+        # Create patching service WITH gist_publisher
+        patcher = PatchingService(self.db, self.repo_root, gist_publisher)
 
         try:
             # Patch all verified snippets
@@ -445,9 +466,11 @@ def main():
     patch_parser.add_argument('--dry-run', action='store_true', help='Dry run mode (don\'t modify files)')
     patch_parser.add_argument(
         '--gist-mode',
-        choices=['preserve', 'inline-on-change', 'inline-always'],
+        choices=['preserve', 'inline-on-change', 'inline-always', 'upload-on-change', 'upload-always'],
         default='inline-on-change',
-        help='How to handle gist snippets: preserve (keep shortcode), inline-on-change (replace if changed), inline-always (always replace)'
+        help='How to handle gist snippets: preserve (keep shortcode), inline-on-change (replace if changed), '
+             'inline-always (always replace), upload-on-change (publish new gist if changed), '
+             'upload-always (always publish new gist)'
     )
 
     # Parse args

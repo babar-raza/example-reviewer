@@ -32,6 +32,10 @@ The Example Reviewer uses the GitHub Gist API to fetch code examples from public
 
 For reading **public gists**, you need **NO special scopes**.
 
+For **publishing gists** (Phase 5 upload modes), you need the `gist` scope.
+
+#### Read-Only Operations (Discovery)
+
 **Classic Personal Access Token**:
 - No scopes required (public read is default)
 - Can create a token with zero scopes selected
@@ -41,6 +45,18 @@ For reading **public gists**, you need **NO special scopes**.
 - No permissions required for reading public gists
 - More secure than classic tokens
 - Can be scoped to specific repositories if needed
+
+#### Write Operations (Gist Publishing - Phase 5)
+
+**Classic Personal Access Token**:
+- Required scope: `gist` (Create gists)
+- Allows creating, updating, and deleting gists
+- Used via `GIST_PUBLISH_TOKEN` environment variable
+
+**Fine-Grained Personal Access Token**:
+- Gists permission: Read and write
+- More granular control than classic tokens
+- Recommended for production deployments
 
 **Reference**: [GitHub Documentation - Scopes for OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps)
 
@@ -76,13 +92,26 @@ For reading **public gists**, you need **NO special scopes**.
 ```bash
 # Linux/Mac
 export GITHUB_TOKEN="ghp_your_token_here"
+export GIST_PUBLISH_OWNER="mycompany"
+export GIST_PUBLISH_TOKEN="ghp_your_publish_token_here"
+export GIST_PUBLISH_PUBLIC="true"  # Optional: defaults to true
 
 # Windows Command Prompt
 set GITHUB_TOKEN=ghp_your_token_here
+set GIST_PUBLISH_OWNER=mycompany
+set GIST_PUBLISH_TOKEN=ghp_your_publish_token_here
 
 # Windows PowerShell
 $env:GITHUB_TOKEN="ghp_your_token_here"
+$env:GIST_PUBLISH_OWNER="mycompany"
+$env:GIST_PUBLISH_TOKEN="ghp_your_publish_token_here"
 ```
+
+**Important**:
+- `GITHUB_TOKEN` is for **reading** public gists (optional, increases rate limit)
+- `GIST_PUBLISH_TOKEN` is for **publishing** new gists (required for upload modes)
+- These should be **different tokens** with different scopes for security
+- `GIST_PUBLISH_TOKEN` requires `gist` scope; `GITHUB_TOKEN` needs no scopes
 
 **Persistent Storage** (for development):
 
@@ -91,7 +120,37 @@ Create a `.env` file in the repository root (already in .gitignore):
 ```bash
 # .env
 GITHUB_TOKEN=ghp_your_token_here
+GIST_PUBLISH_OWNER=mycompany
+GIST_PUBLISH_TOKEN=ghp_your_publish_token_here
+GIST_PUBLISH_PUBLIC=true
 ```
+
+### Token Logging Security (Phase 5)
+
+**CRITICAL**: The system **NEVER logs full tokens** to prevent accidental exposure.
+
+**Token Redaction Policy**:
+- Full tokens are **never** written to logs or console output
+- Only last 4 characters shown for verification (e.g., `...x7a9`)
+- Applies to both `GITHUB_TOKEN` and `GIST_PUBLISH_TOKEN`
+
+**Example Safe Logging**:
+```
+[i] Gist publishing enabled: owner=mycompany, token=...x7a9, public=true
+[i] Publishing gist for snippet 123: filename=test.cs, owner=mycompany, token=...a1b2
+```
+
+**Implementation**:
+```python
+# Token redaction in GistPublisher
+token_redacted = "..." + self.token[-4:] if len(self.token) >= 4 else "***"
+logger.info(f"Using token: {token_redacted}")
+```
+
+**What to check**:
+- Search logs for token patterns: `grep -E "ghp_[a-zA-Z0-9]{36}" logs/*.log` (should return nothing)
+- Verify only last 4 chars appear: `grep "token=" logs/*.log`
+- Check console output during CLI operations
 
 Load with python-dotenv:
 ```python
