@@ -1,0 +1,29 @@
+{
+  "family": "zip",
+  "display_name": "Aspose.ZIP for .NET",
+  "content_pattern": "**/zip/**/*.md",
+  "nuget_config": {
+    "primary_package": {
+      "name": "Aspose.Zip",
+      "version_strategy": "latest_stable"
+    },
+    "additional_packages": [],
+    "target_frameworks": ["net8.0"]
+  },
+  "code_defaults": {
+    "default_usings": [
+      "Aspose.Zip",
+      "Aspose.Zip.Saving",
+      "Aspose.Zip.SevenZip",
+      "Aspose.Zip.Bzip2",
+      "Aspose.Zip.Gzip"
+    ]
+  },
+  "patterns": [],
+  "non_existent_apis": [
+    "SaveAsync",
+    "CreateEntryAsync",
+    "ExtractAsync",
+    "OpenAsync"
+  ]
+}
