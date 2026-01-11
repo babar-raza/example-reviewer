@@ -1,7 +1,7 @@
 {
   "family": "zip",
   "display_name": "Aspose.ZIP for .NET",
-  "content_pattern": "**/zip/**/*.md",
+  "content_pattern": "**/zip/*/index.md",
   "nuget_config": {
     "primary_package": {
       "name": "Aspose.Zip",
