@@ -449,6 +449,7 @@ namespace ValidationNamespace
 
             result = subprocess.run(
                 cmd,
+                cwd=str(validator_exe.parent),
                 capture_output=True,
                 text=True,
                 timeout=30
