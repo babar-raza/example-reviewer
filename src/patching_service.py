@@ -4,6 +4,8 @@ Updates original markdown files with verified code snippets.
 """
 
 import re
+import hashlib
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
@@ -48,13 +50,14 @@ class PatchingService:
         self.db = db
         self.content_root = content_root
 
-    def patch_verified_snippets(self, family: str, dry_run: bool = False) -> Dict:
+    def patch_verified_snippets(self, family: str, dry_run: bool = False, gist_mode: str = 'inline-on-change') -> Dict:
         """
         Patch all verified snippets for a family.
 
         Args:
             family: Product family to patch
             dry_run: If True, don't actually write files
+            gist_mode: How to handle gists ('preserve', 'inline-on-change', 'inline-always')
 
         Returns:
             Dictionary with patch results
@@ -67,12 +70,36 @@ class PatchingService:
             'files_modified': 0,
             'patches_applied': 0,
             'errors': 0,
+            'gists_unchanged': 0,
+            'gists_inlined': 0,
             'patches': [],
             'modified_files': set()
         }
 
         for snippet, page in snippets_with_pages:
             try:
+                # Handle gist snippets differently
+                if snippet.snippet_type == 'gist':
+                    patch_result = self._patch_gist_snippet(
+                        snippet, page, dry_run, gist_mode
+                    )
+
+                    results['patches'].append(patch_result)
+
+                    if patch_result.success:
+                        if 'unchanged' in patch_result.message.lower():
+                            results['gists_unchanged'] += 1
+                        elif 'inlined' in patch_result.message.lower():
+                            results['gists_inlined'] += 1
+                            results['patches_applied'] += 1
+                            results['modified_files'].add(patch_result.file_path)
+                    else:
+                        results['errors'] += 1
+
+                    continue  # Skip normal fence patching for gists
+
+                # Normal fence snippet patching
+                # Get verified version
                 # Get verified version
                 verified_version = self.db.get_latest_snippet_version(snippet.snippet_id, 'current')
                 if not verified_version:
@@ -780,6 +807,180 @@ class PatchingService:
         # often have inline code examples like `new Archive()` in prose, which would
         # trigger false positives.
         return {'success': True, 'error': ''}
+
+    def _patch_gist_snippet(self, snippet: Snippet, page, dry_run: bool, gist_mode: str) -> PatchResult:
+        """
+        Patch a gist snippet in its source file.
+
+        Gist patching strategy:
+        1. Compare original gist code with verified code
+        2. If unchanged: leave gist shortcode as-is (no modification)
+        3. If changed: replace gist shortcode with inline ```csharp fence
+
+        Args:
+            snippet: Snippet metadata (type must be 'gist')
+            page: Page metadata with file_path
+            dry_run: If True, don't write file
+            gist_mode: 'preserve', 'inline-on-change', or 'inline-always'
+
+        Returns:
+            PatchResult with success status
+        """
+        file_path = self.content_root / page.relative_path
+
+        if not file_path.exists():
+            return PatchResult(
+                snippet.snippet_id, page.relative_path,
+                False, f"File not found: {file_path}", "", ""
+            )
+
+        # Get original and verified versions
+        original_version = self.db.get_latest_snippet_version(snippet.snippet_id, 'original')
+        verified_version = self.db.get_latest_snippet_version(snippet.snippet_id, 'current')
+
+        if not verified_version:
+            verified_version = self.db.get_latest_snippet_version(snippet.snippet_id, 'fixed')
+        if not verified_version:
+            verified_version = original_version  # Fallback if original compiled
+
+        if not original_version or not verified_version:
+            return PatchResult(
+                snippet.snippet_id, page.relative_path,
+                False, "Missing original or verified version", "", ""
+            )
+
+        # Compare hashes to determine if code changed
+        original_hash = hashlib.sha256(original_version.code_content.encode('utf-8')).hexdigest()
+        verified_hash = hashlib.sha256(verified_version.code_content.encode('utf-8')).hexdigest()
+
+        code_unchanged = (original_hash == verified_hash)
+
+        # Gist mode logic
+        if gist_mode == 'preserve':
+            # Never replace gists, always keep shortcode
+            return PatchResult(
+                snippet.snippet_id, page.relative_path,
+                True, "Gist preserved (mode=preserve)", original_hash, verified_hash
+            )
+
+        if gist_mode == 'inline-on-change' and code_unchanged:
+            # Code didn't change, keep gist shortcode
+            return PatchResult(
+                snippet.snippet_id, page.relative_path,
+                True, "Gist verified; unchanged; no patch needed", original_hash, verified_hash
+            )
+
+        # If we reach here: either mode=inline-always OR (mode=inline-on-change AND code changed)
+        # Replace gist shortcode with inline fence
+
+        # Read file
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception as e:
+            return PatchResult(
+                snippet.snippet_id, page.relative_path,
+                False, f"Failed to read file: {e}", "", ""
+            )
+
+        # Find gist shortcode in file
+        shortcode_start, shortcode_end = self._find_gist_shortcode(content, snippet)
+
+        if shortcode_start is None:
+            return PatchResult(
+                snippet.snippet_id, page.relative_path,
+                False, "Could not locate gist shortcode in file", "", ""
+            )
+
+        # Detect line ending style
+        line_ending = '\r\n' if '\r\n' in content else '\n'
+
+        # Build replacement: inline fence with explicit csharp marker
+        replacement = f"```csharp{line_ending}{verified_version.code_content}{line_ending}```"
+
+        # Replace shortcode with inline fence
+        modified_content = (
+            content[:shortcode_start] +
+            replacement +
+            content[shortcode_end:]
+        )
+
+        # Write modified content
+        if not dry_run:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(modified_content)
+            except Exception as e:
+                return PatchResult(
+                    snippet.snippet_id, page.relative_path,
+                    False, f"Failed to write file: {e}", "", ""
+                )
+
+        message = "Gist inlined: shortcode replaced with verified code fence"
+        if code_unchanged:
+            message = "Gist inlined: unchanged code (mode=inline-always)"
+
+        return PatchResult(
+            snippet.snippet_id, page.relative_path,
+            True, message, original_hash, verified_hash
+        )
+
+    def _find_gist_shortcode(self, file_content: str, snippet: Snippet) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Locate gist shortcode in file content.
+
+        Strategy:
+        1. Try to extract shortcode from snippet locator notes
+        2. Use regex to find exact match
+        3. Fallback: regex pattern using gist_id from locator
+
+        Args:
+            file_content: Full markdown file content
+            snippet: Snippet metadata
+
+        Returns:
+            Tuple of (start_pos, end_pos) or (None, None) if not found
+        """
+        import json
+
+        locator = json.loads(snippet.locator_json)
+
+        # Strategy 1: Use stored shortcode from locator notes
+        notes = locator.get('notes')
+        if notes:
+            try:
+                notes_data = json.loads(notes)
+                gist_shortcode = notes_data.get('gist_shortcode')
+
+                if gist_shortcode:
+                    # Search for exact shortcode match
+                    pos = file_content.find(gist_shortcode)
+                    if pos >= 0:
+                        return (pos, pos + len(gist_shortcode))
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # Strategy 2: Regex fallback using gist_id and filename
+        gist_id = locator.get('gist_id')
+        gist_file = locator.get('gist_file')
+
+        if not gist_id:
+            return (None, None)
+
+        # Build regex pattern
+        if gist_file:
+            # Pattern with filename
+            pattern = r'{{<\s*gist\s+["\']?[\w-]+["\']?\s+["\']?' + re.escape(gist_id) + r'["\']?\s+["\']?' + re.escape(gist_file) + r'["\']?\s*>}}'
+        else:
+            # Pattern without filename
+            pattern = r'{{<\s*gist\s+["\']?[\w-]+["\']?\s+["\']?' + re.escape(gist_id) + r'["\']?\s*>}}'
+
+        match = re.search(pattern, file_content)
+
+        if match:
+            return (match.start(), match.end())
+
+        return (None, None)
 
     def _compute_hash(self, code: str) -> str:
         """Compute content hash for code."""

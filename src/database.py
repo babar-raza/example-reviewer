@@ -576,3 +576,113 @@ class Database:
 
         row = cursor.fetchone()
         return dict(row) if row else {}
+
+    # =========================================================================
+    # GIST OPERATIONS
+    # =========================================================================
+
+    def upsert_gist(self, gist_id: str, owner: str, description: Optional[str],
+                   updated_at: Optional[str], last_status: str,
+                   last_error: Optional[str] = None, etag: Optional[str] = None):
+        """
+        Insert or update gist metadata.
+
+        Args:
+            gist_id: GitHub gist ID
+            owner: Gist owner username
+            description: Gist description
+            updated_at: Last updated timestamp from GitHub
+            last_status: Fetch status (success, not_found, rate_limited, error)
+            last_error: Error message if fetch failed
+            etag: ETag from GitHub API response
+        """
+        self.connect()
+
+        self._conn.execute(
+            """
+            INSERT INTO gists (gist_id, owner, description, updated_at, etag, last_status, last_error)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(gist_id) DO UPDATE SET
+                owner = excluded.owner,
+                description = excluded.description,
+                updated_at = excluded.updated_at,
+                etag = excluded.etag,
+                last_fetched_at = datetime('now'),
+                last_status = excluded.last_status,
+                last_error = excluded.last_error
+            """,
+            (gist_id, owner, description, updated_at, etag, last_status, last_error)
+        )
+        self._conn.commit()
+
+    def upsert_gist_file(self, gist_id: str, filename: str, raw_url: str,
+                        language: Optional[str], content: str, content_hash: str,
+                        file_size: Optional[int] = None):
+        """
+        Insert or update gist file content.
+
+        Args:
+            gist_id: GitHub gist ID
+            filename: Filename within gist
+            raw_url: Raw content URL from GitHub
+            language: Programming language detected by GitHub
+            content: File content
+            content_hash: SHA256 hash of content
+            file_size: File size in bytes
+        """
+        self.connect()
+
+        self._conn.execute(
+            """
+            INSERT INTO gist_files (gist_id, filename, raw_url, language, content, content_hash, file_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(gist_id, filename) DO UPDATE SET
+                raw_url = excluded.raw_url,
+                language = excluded.language,
+                content = excluded.content,
+                content_hash = excluded.content_hash,
+                file_size = excluded.file_size,
+                fetched_at = datetime('now')
+            """,
+            (gist_id, filename, raw_url, language, content, content_hash, file_size)
+        )
+        self._conn.commit()
+
+    def get_gist_file(self, gist_id: str, filename: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve gist file content from database.
+
+        Args:
+            gist_id: GitHub gist ID
+            filename: Optional filename (if None, returns first C# file found)
+
+        Returns:
+            Dictionary with file data or None if not found
+        """
+        self.connect()
+
+        if filename:
+            cursor = self._conn.execute(
+                """
+                SELECT gist_id, filename, raw_url, language, content, content_hash, file_size, fetched_at
+                FROM gist_files
+                WHERE gist_id = ? AND filename = ?
+                """,
+                (gist_id, filename)
+            )
+        else:
+            # Get first C# file
+            cursor = self._conn.execute(
+                """
+                SELECT gist_id, filename, raw_url, language, content, content_hash, file_size, fetched_at
+                FROM gist_files
+                WHERE gist_id = ?
+                  AND (LOWER(filename) LIKE '%.cs' OR LOWER(filename) LIKE '%.csx')
+                ORDER BY filename
+                LIMIT 1
+                """,
+                (gist_id,)
+            )
+
+        row = cursor.fetchone()
+        return dict(row) if row else None
