@@ -3,11 +3,14 @@ Workspace Manager for Example Review System.
 Manages .NET workspaces for compiling code snippets.
 """
 
+import hashlib
 import json
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
+
+from config_utils import normalize_family_config
 
 
 class WorkspaceManager:
@@ -21,13 +24,17 @@ class WorkspaceManager:
 
         Args:
             workspaces_root: Root directory for workspaces
-            family_config: Family configuration dictionary
+            family_config: Family configuration dictionary (will be normalized)
         """
         self.workspaces_root = workspaces_root
-        self.family_config = family_config
-        self.family = family_config.get('family', '')
+        # Normalize config to ensure canonical format
+        self.family_config = normalize_family_config(family_config)
+        self.family = self.family_config.get('family', '')
         self.workspace_dir = workspaces_root / self.family
         self.validator_dir = self.workspace_dir / "validator"
+        self.nuget_packages_dir = self.workspace_dir / "nuget-packages"
+        self.build_cache_dir = self.workspace_dir / "build-cache"
+        self.build_stamp_path = self.build_cache_dir / ".build-stamp"
 
     def setup_workspace(self) -> bool:
         """
@@ -37,9 +44,11 @@ class WorkspaceManager:
             True if successful, False otherwise
         """
         try:
-            # Create workspace directory
+            # Create workspace directories
             self.workspace_dir.mkdir(parents=True, exist_ok=True)
             self.validator_dir.mkdir(parents=True, exist_ok=True)
+            self.nuget_packages_dir.mkdir(parents=True, exist_ok=True)
+            self.build_cache_dir.mkdir(parents=True, exist_ok=True)
 
             # Create .NET project if it doesn't exist
             csproj_path = self.validator_dir / "Validator.csproj"
@@ -60,8 +69,28 @@ class WorkspaceManager:
         nuget_config = self.family_config.get('nuget_config', {})
         primary_package = nuget_config.get('primary_package', {})
         package_name = primary_package.get('name', 'Aspose.Zip')
-        package_version = primary_package.get('version', '*')
+
+        # Determine package version from config
+        version_strategy = primary_package.get('version_strategy', 'latest_stable')
+        if version_strategy == 'pinned':
+            package_version = primary_package.get('pinned_version', '*')
+        else:
+            package_version = primary_package.get('version', '*')
+
         target_framework = nuget_config.get('target_frameworks', ['net8.0'])[0]
+
+        # Get additional packages
+        additional_packages = nuget_config.get('additional_packages', [])
+
+        # Build package references
+        package_refs = f'    <PackageReference Include="{package_name}" Version="{package_version}" />\n'
+        for pkg in additional_packages:
+            pkg_name = pkg.get('name', '')
+            pkg_version = pkg.get('version', '*')
+            if pkg_name:
+                package_refs += f'    <PackageReference Include="{pkg_name}" Version="{pkg_version}" />\n'
+
+        package_refs += '    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />'
 
         csproj_content = f"""<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -72,8 +101,7 @@ class WorkspaceManager:
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="{package_name}" Version="{package_version}" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
+{package_refs}
   </ItemGroup>
 </Project>
 """
@@ -82,7 +110,7 @@ class WorkspaceManager:
         with open(csproj_path, 'w', encoding='utf-8') as f:
             f.write(csproj_content)
 
-        # Create Program.cs
+        # Create Program.cs with dynamic assembly scanning
         program_content = """using System;
 using System.IO;
 using System.Linq;
@@ -133,12 +161,29 @@ class Program
         references.Add(MetadataReference.CreateFromFile(Assembly.Load("System.Collections").Location));
         references.Add(MetadataReference.CreateFromFile(Assembly.Load("netstandard").Location));
 
-        // Add Aspose.Zip reference
-        try
+        // Scan NuGet packages directory for DLL assemblies
+        var nugetPackagesDir = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "..", "..", "..", "..", "nuget-packages"
+        );
+
+        if (Directory.Exists(nugetPackagesDir))
         {
-            references.Add(MetadataReference.CreateFromFile(Assembly.Load("Aspose.Zip").Location));
+            var dllFiles = Directory.GetFiles(nugetPackagesDir, "*.dll", SearchOption.AllDirectories)
+                .Where(f => f.Contains("\\\\lib\\\\") || f.Contains("/lib/"));
+
+            foreach (var dllPath in dllFiles)
+            {
+                try
+                {
+                    references.Add(MetadataReference.CreateFromFile(dllPath));
+                }
+                catch
+                {
+                    // Skip invalid DLLs
+                }
+            }
         }
-        catch { }
 
         // Detect if code has a Main method to determine output kind
         var hasMainMethod = code.Contains("static void Main") ||
@@ -192,8 +237,7 @@ class Program
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
-using Aspose.Zip;
-using Aspose.Zip.Saving;
+__DEFAULT_USINGS__
 
 {code}";
             }
@@ -238,8 +282,7 @@ using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using Aspose.Zip;
-using Aspose.Zip.Saving;
+__DEFAULT_USINGS__
 {additionalUsingsStr}
 
 namespace ValidationNamespace
@@ -257,15 +300,25 @@ namespace ValidationNamespace
 }
 """
 
+        # Inject default usings from config
+        default_usings = self.family_config.get('code_defaults', {}).get('default_usings', [])
+        if default_usings:
+            using_statements = '\n'.join(f'using {using};' for using in default_usings)
+        else:
+            using_statements = ''
+
+        program_content = program_content.replace('__DEFAULT_USINGS__', using_statements)
+
         program_path = self.validator_dir / "Program.cs"
         with open(program_path, 'w', encoding='utf-8') as f:
             f.write(program_content)
 
     def _restore_packages(self):
-        """Restore NuGet packages."""
+        """Restore NuGet packages with per-family isolation."""
         try:
+            # Use per-family NuGet packages directory
             result = subprocess.run(
-                ["dotnet", "restore"],
+                ["dotnet", "restore", "--packages", str(self.nuget_packages_dir)],
                 cwd=str(self.validator_dir),
                 capture_output=True,
                 text=True,
@@ -281,6 +334,76 @@ namespace ValidationNamespace
         except Exception as e:
             print(f"[!] Failed to restore packages: {e}")
             return False
+
+    def _compute_build_stamp(self) -> str:
+        """
+        Compute build stamp hash from csproj and Program.cs content.
+
+        The build stamp is used to determine if the validator needs to be rebuilt.
+        It is computed by hashing the content of both the csproj file and Program.cs.
+
+        Returns:
+            SHA256 hash of the build inputs
+        """
+        csproj_path = self.validator_dir / "Validator.csproj"
+        program_path = self.validator_dir / "Program.cs"
+
+        hasher = hashlib.sha256()
+
+        # Hash csproj content
+        if csproj_path.exists():
+            with open(csproj_path, 'rb') as f:
+                hasher.update(f.read())
+
+        # Hash Program.cs content
+        if program_path.exists():
+            with open(program_path, 'rb') as f:
+                hasher.update(f.read())
+
+        return hasher.hexdigest()
+
+    def _needs_rebuild(self) -> bool:
+        """
+        Check if validator needs to be rebuilt.
+
+        Rebuild is needed if:
+        1. Validator exe doesn't exist, OR
+        2. Build stamp doesn't exist, OR
+        3. Build stamp hash doesn't match current inputs
+
+        Returns:
+            True if rebuild is needed, False otherwise
+        """
+        # Check if validator exe exists
+        validator_exe = self.validator_dir / "bin" / "Release" / "net8.0" / "Validator.exe"
+        validator_dll = self.validator_dir / "bin" / "Release" / "net8.0" / "Validator.dll"
+
+        if not validator_exe.exists() and not validator_dll.exists():
+            return True
+
+        # Check if build stamp exists
+        if not self.build_stamp_path.exists():
+            return True
+
+        # Read current build stamp
+        try:
+            with open(self.build_stamp_path, 'r') as f:
+                stored_hash = f.read().strip()
+        except:
+            return True
+
+        # Compare with current inputs
+        current_hash = self._compute_build_stamp()
+        return stored_hash != current_hash
+
+    def _save_build_stamp(self):
+        """Save current build stamp to file."""
+        try:
+            current_hash = self._compute_build_stamp()
+            with open(self.build_stamp_path, 'w') as f:
+                f.write(current_hash)
+        except Exception as e:
+            print(f"[!] Failed to save build stamp: {e}")
 
     def validate_code(self, code: str) -> Tuple[bool, str, int]:
         """
@@ -298,17 +421,21 @@ namespace ValidationNamespace
             code_file = f.name
 
         try:
-            # Build the validator first
-            build_result = subprocess.run(
-                ["dotnet", "build", "-c", "Release"],
-                cwd=str(self.validator_dir),
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
+            # Only rebuild validator if necessary (based on build stamp)
+            if self._needs_rebuild():
+                build_result = subprocess.run(
+                    ["dotnet", "build", "-c", "Release"],
+                    cwd=str(self.validator_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
 
-            if build_result.returncode != 0:
-                return False, f"Validator build failed: {build_result.stderr}", 1
+                if build_result.returncode != 0:
+                    return False, f"Validator build failed: {build_result.stderr}", 1
+
+                # Save build stamp after successful build
+                self._save_build_stamp()
 
             # Run validator
             validator_exe = self.validator_dir / "bin" / "Release" / "net8.0" / "Validator.exe"

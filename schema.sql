@@ -368,3 +368,37 @@ VALUES (1, 'Initial schema - core tables, views, triggers');
 
 INSERT OR IGNORE INTO schema_version (version, description)
 VALUES (2, 'Gist support - gists and gist_files tables');
+
+-- ============================================================================
+-- GIST PUBLISHING SUPPORT (Phase 5)
+-- ============================================================================
+
+-- Gist Publications: Track published gists when code changes
+CREATE TABLE IF NOT EXISTS gist_publications (
+    publication_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snippet_id INTEGER NOT NULL,
+    old_gist_id TEXT,
+    old_gist_owner TEXT,
+    old_gist_filename TEXT,
+    new_gist_id TEXT NOT NULL,
+    new_gist_owner TEXT NOT NULL,
+    new_gist_filename TEXT NOT NULL,
+    new_gist_url TEXT NOT NULL,
+    new_gist_raw_url TEXT NOT NULL,
+    published_at TEXT NOT NULL DEFAULT (datetime('now')),
+    status TEXT NOT NULL CHECK(status IN ('success', 'failed', 'pending')),
+    error_message TEXT,
+    code_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (snippet_id) REFERENCES snippets(snippet_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_publications_snippet ON gist_publications(snippet_id);
+CREATE INDEX IF NOT EXISTS idx_publications_old_gist ON gist_publications(old_gist_id);
+CREATE INDEX IF NOT EXISTS idx_publications_new_gist ON gist_publications(new_gist_id);
+CREATE INDEX IF NOT EXISTS idx_publications_status ON gist_publications(status);
+
+-- Schema version update
+INSERT OR IGNORE INTO schema_version (version, description)
+VALUES (3, 'Gist publishing support - gist_publications table');
+

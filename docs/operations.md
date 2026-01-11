@@ -8,10 +8,11 @@ This guide covers day-to-day operations, monitoring, and maintenance for the Exa
 
 1. [Cache Management](#cache-management)
 2. [Database Management](#database-management)
-3. [Monitoring & Health Checks](#monitoring--health-checks)
-4. [Troubleshooting](#troubleshooting)
-5. [Backup & Recovery](#backup--recovery)
-6. [Performance Optimization](#performance-optimization)
+3. [Environment Variables](#environment-variables)
+4. [Monitoring & Health Checks](#monitoring--health-checks)
+5. [Troubleshooting](#troubleshooting)
+6. [Backup & Recovery](#backup--recovery)
+7. [Performance Optimization](#performance-optimization)
 
 ---
 
@@ -514,6 +515,134 @@ if fragmentation > 10:
     print("Consider running VACUUM")
 
 conn.close()
+```
+
+---
+
+## Environment Variables
+
+### Core Variables
+
+**GITHUB_TOKEN** (Optional for discovery):
+- Purpose: Increase GitHub API rate limit from 60 to 5,000 requests/hour
+- Scope: No scopes required for reading public gists
+- Usage: `export GITHUB_TOKEN="ghp_your_token_here"`
+
+### Gist Publishing Variables (Phase 5)
+
+**GIST_PUBLISH_OWNER** (Required for upload modes):
+- Purpose: GitHub username for publishing new gists
+- Example: `export GIST_PUBLISH_OWNER="mycompany"`
+
+**GIST_PUBLISH_TOKEN** (Required for upload modes):
+- Purpose: GitHub PAT with `gist` scope for creating gists
+- Scope: `gist` (Create gists)
+- Example: `export GIST_PUBLISH_TOKEN="ghp_your_publish_token_here"`
+- **Security**: Token is never logged (only last 4 chars shown)
+
+**GIST_PUBLISH_PUBLIC** (Optional):
+- Purpose: Control whether published gists are public or private
+- Default: `true` (public gists)
+- Example: `export GIST_PUBLISH_PUBLIC="false"` for private gists
+
+### Setting Variables
+
+**Linux/Mac**:
+```bash
+# Temporary (current session)
+export GITHUB_TOKEN="ghp_your_token_here"
+export GIST_PUBLISH_OWNER="mycompany"
+export GIST_PUBLISH_TOKEN="ghp_your_publish_token_here"
+export GIST_PUBLISH_PUBLIC="true"
+
+# Persistent (add to ~/.bashrc or ~/.zshrc)
+echo 'export GIST_PUBLISH_OWNER="mycompany"' >> ~/.bashrc
+echo 'export GIST_PUBLISH_TOKEN="ghp_your_token_here"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**Windows Command Prompt**:
+```cmd
+set GITHUB_TOKEN=ghp_your_token_here
+set GIST_PUBLISH_OWNER=mycompany
+set GIST_PUBLISH_TOKEN=ghp_your_publish_token_here
+set GIST_PUBLISH_PUBLIC=true
+```
+
+**Windows PowerShell**:
+```powershell
+$env:GITHUB_TOKEN="ghp_your_token_here"
+$env:GIST_PUBLISH_OWNER="mycompany"
+$env:GIST_PUBLISH_TOKEN="ghp_your_publish_token_here"
+$env:GIST_PUBLISH_PUBLIC="true"
+```
+
+### Using .env File (Recommended for Development)
+
+Create `.env` file in repository root:
+```bash
+# .env (already in .gitignore)
+GITHUB_TOKEN=ghp_your_read_token_here
+GIST_PUBLISH_OWNER=mycompany
+GIST_PUBLISH_TOKEN=ghp_your_publish_token_here
+GIST_PUBLISH_PUBLIC=true
+```
+
+Load with python-dotenv:
+```python
+from dotenv import load_dotenv
+load_dotenv()
+```
+
+### Verifying Variables
+
+**Check if variables are set**:
+```bash
+# Linux/Mac/PowerShell
+echo $GITHUB_TOKEN
+echo $GIST_PUBLISH_OWNER
+echo $GIST_PUBLISH_TOKEN
+
+# Windows Command Prompt
+echo %GITHUB_TOKEN%
+echo %GIST_PUBLISH_OWNER%
+echo %GIST_PUBLISH_TOKEN%
+```
+
+**Test publishing capability** (dry-run):
+```bash
+python src/cli.py patch --family zip --gist-mode upload-on-change --dry-run
+# Should show: [i] Gist publishing enabled: owner=mycompany, token=...x7a9
+```
+
+### CI/CD Integration
+
+**GitHub Actions**:
+```yaml
+name: Example Reviewer with Gist Publishing
+on: [push]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Patch and publish gists
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIST_PUBLISH_OWNER: ${{ secrets.GIST_PUBLISH_OWNER }}
+          GIST_PUBLISH_TOKEN: ${{ secrets.GIST_PUBLISH_TOKEN }}
+          GIST_PUBLISH_PUBLIC: "true"
+        run: |
+          python src/cli.py patch --family zip --gist-mode upload-on-change
+```
+
+**GitLab CI**:
+```yaml
+variables:
+  GITHUB_TOKEN: $CI_GITHUB_TOKEN
+  GIST_PUBLISH_OWNER: $CI_GIST_OWNER
+  GIST_PUBLISH_TOKEN: $CI_GIST_TOKEN
+  GIST_PUBLISH_PUBLIC: "true"
 ```
 
 ---

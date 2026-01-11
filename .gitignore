@@ -3,15 +3,22 @@
 venv/
 *.pyc
 __pycache__/
+.pytest_cache/
 
 # Runtime directories
 artifacts/
 cache/
 data/
 logs/
-reports/
 workspaces/
 validation-results/
+
+# Reports - keep engineering logs but ignore run artifacts
+reports/*
+!reports/SONNET_*.md
+!reports/CODEX_*.md
+!reports/STATUS.md
+!reports/TASK_BACKLOG.md
 
 # Build artifacts
 test-examples/bin/

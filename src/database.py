@@ -711,3 +711,115 @@ class Database:
 
         row = cursor.fetchone()
         return dict(row) if row else None
+
+    # =========================================================================
+    # GIST PUBLICATION OPERATIONS (Phase 5)
+    # =========================================================================
+
+    def create_gist_publication(self, snippet_id: int, old_gist_id: str, old_owner: str,
+                               old_filename: str, new_gist_id: str, new_owner: str,
+                               new_filename: str, new_url: str, new_raw_url: str,
+                               code_hash: str, status: str, error_message: str = None) -> int:
+        """
+        Insert gist publication record.
+
+        Args:
+            snippet_id: Snippet ID
+            old_gist_id: Original gist ID (empty string if none)
+            old_owner: Original gist owner (empty string if none)
+            old_filename: Original filename
+            new_gist_id: New published gist ID
+            new_owner: New gist owner
+            new_filename: New filename
+            new_url: New gist HTML URL
+            new_raw_url: New gist raw URL
+            code_hash: SHA256 hash of published code
+            status: Publication status ('success', 'failed', 'pending')
+            error_message: Error message if failed (optional)
+
+        Returns:
+            publication_id
+        """
+        self.connect()
+
+        cursor = self._conn.execute(
+            """
+            INSERT INTO gist_publications
+            (snippet_id, old_gist_id, old_gist_owner, old_gist_filename,
+             new_gist_id, new_gist_owner, new_gist_filename,
+             new_gist_url, new_gist_raw_url, code_hash, status, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (snippet_id, old_gist_id, old_owner, old_filename,
+             new_gist_id, new_owner, new_filename,
+             new_url, new_raw_url, code_hash, status, error_message)
+        )
+        return cursor.lastrowid
+
+    def get_gist_publication(self, snippet_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get latest publication for a snippet.
+
+        Args:
+            snippet_id: Snippet ID
+
+        Returns:
+            Dictionary with publication data or None if not found
+        """
+        self.connect()
+
+        cursor = self._conn.execute(
+            """
+            SELECT publication_id, snippet_id, old_gist_id, old_gist_owner, old_gist_filename,
+                   new_gist_id, new_gist_owner, new_gist_filename,
+                   new_gist_url, new_gist_raw_url, published_at, status, error_message,
+                   code_hash, created_at
+            FROM gist_publications
+            WHERE snippet_id = ?
+            ORDER BY published_at DESC
+            LIMIT 1
+            """,
+            (snippet_id,)
+        )
+
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_all_publications(self, status: str = None) -> List[Dict[str, Any]]:
+        """
+        Get all publications, optionally filtered by status.
+
+        Args:
+            status: Optional status filter ('success', 'failed', 'pending')
+
+        Returns:
+            List of publication dictionaries
+        """
+        self.connect()
+
+        if status:
+            cursor = self._conn.execute(
+                """
+                SELECT publication_id, snippet_id, old_gist_id, old_gist_owner, old_gist_filename,
+                       new_gist_id, new_gist_owner, new_gist_filename,
+                       new_gist_url, new_gist_raw_url, published_at, status, error_message,
+                       code_hash, created_at
+                FROM gist_publications
+                WHERE status = ?
+                ORDER BY published_at DESC
+                """,
+                (status,)
+            )
+        else:
+            cursor = self._conn.execute(
+                """
+                SELECT publication_id, snippet_id, old_gist_id, old_gist_owner, old_gist_filename,
+                       new_gist_id, new_gist_owner, new_gist_filename,
+                       new_gist_url, new_gist_raw_url, published_at, status, error_message,
+                       code_hash, created_at
+                FROM gist_publications
+                ORDER BY published_at DESC
+                """
+            )
+
+        return [dict(row) for row in cursor.fetchall()]

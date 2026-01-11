@@ -39,16 +39,18 @@ class PatchingService:
     4. Track all changes for rollback if needed
     """
 
-    def __init__(self, db: Database, content_root: Path):
+    def __init__(self, db: Database, content_root: Path, gist_publisher=None):
         """
         Initialize patching service.
 
         Args:
             db: Database instance
             content_root: Root directory for content files
+            gist_publisher: Optional GistPublisher instance for upload modes
         """
         self.db = db
         self.content_root = content_root
+        self.gist_publisher = gist_publisher
 
     def patch_verified_snippets(self, family: str, dry_run: bool = False, gist_mode: str = 'inline-on-change') -> Dict:
         """
@@ -813,15 +815,17 @@ class PatchingService:
         Patch a gist snippet in its source file.
 
         Gist patching strategy:
-        1. Compare original gist code with verified code
-        2. If unchanged: leave gist shortcode as-is (no modification)
-        3. If changed: replace gist shortcode with inline ```csharp fence
+        - preserve: Keep shortcode unchanged
+        - inline-on-change: Replace shortcode with inline fence if code changed
+        - inline-always: Always replace with inline fence
+        - upload-on-change: Publish new gist if code changed, update shortcode
+        - upload-always: Always publish new gist, update shortcode
 
         Args:
             snippet: Snippet metadata (type must be 'gist')
             page: Page metadata with file_path
             dry_run: If True, don't write file
-            gist_mode: 'preserve', 'inline-on-change', or 'inline-always'
+            gist_mode: 'preserve', 'inline-on-change', 'inline-always', 'upload-on-change', 'upload-always'
 
         Returns:
             PatchResult with success status
@@ -863,6 +867,106 @@ class PatchingService:
                 True, "Gist preserved (mode=preserve)", original_hash, verified_hash
             )
 
+        # Handle upload modes (upload-on-change, upload-always)
+        if gist_mode in ['upload-on-change', 'upload-always']:
+            # Check if GistPublisher is available
+            if not self.gist_publisher:
+                return PatchResult(
+                    snippet.snippet_id, page.relative_path,
+                    False, "Upload gist mode requires GistPublisher (env vars not set)", "", ""
+                )
+
+            # upload-on-change: only upload if code changed
+            if gist_mode == 'upload-on-change' and code_unchanged:
+                return PatchResult(
+                    snippet.snippet_id, page.relative_path,
+                    True, "Gist verified; unchanged; no upload needed", original_hash, verified_hash
+                )
+
+            # If we reach here: need to upload (either always or code changed)
+            # Extract old gist info from locator
+            locator = json.loads(snippet.locator_json)
+            old_gist_id = locator.get('gist_id', '')
+            old_gist_owner = locator.get('gist_owner', '')
+            old_gist_filename = locator.get('gist_file', 'snippet.cs')
+
+            # Determine filename for new gist
+            new_filename = old_gist_filename if old_gist_filename else 'snippet.cs'
+
+            # Generate description
+            description = f"Fixed code snippet from {page.relative_path}"
+
+            # Publish gist (skip if dry_run)
+            if dry_run:
+                return PatchResult(
+                    snippet.snippet_id, page.relative_path,
+                    True, f"[DRY RUN] Would publish new gist: {new_filename}", original_hash, verified_hash
+                )
+
+            # Publish the gist
+            publish_result = self.gist_publisher.publish_gist(
+                snippet_id=snippet.snippet_id,
+                code_content=verified_version.code_content,
+                filename=new_filename,
+                description=description,
+                old_gist_id=old_gist_id,
+                old_owner=old_gist_owner
+            )
+
+            if not publish_result['success']:
+                return PatchResult(
+                    snippet.snippet_id, page.relative_path,
+                    False, f"Failed to publish gist: {publish_result['error']}", "", ""
+                )
+
+            # Read file to update shortcode
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except Exception as e:
+                return PatchResult(
+                    snippet.snippet_id, page.relative_path,
+                    False, f"Failed to read file: {e}", "", ""
+                )
+
+            # Find old gist shortcode
+            shortcode_start, shortcode_end = self._find_gist_shortcode(content, snippet)
+
+            if shortcode_start is None:
+                return PatchResult(
+                    snippet.snippet_id, page.relative_path,
+                    False, "Could not locate gist shortcode in file", "", ""
+                )
+
+            # Build new shortcode with new gist info
+            new_gist_id = publish_result['gist_id']
+            new_owner = self.gist_publisher.owner
+            new_shortcode = f'{{{{< gist "{new_owner}" "{new_gist_id}" "{new_filename}" >}}}}'
+
+            # Replace shortcode
+            modified_content = (
+                content[:shortcode_start] +
+                new_shortcode +
+                content[shortcode_end:]
+            )
+
+            # Write modified content
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(modified_content)
+            except Exception as e:
+                return PatchResult(
+                    snippet.snippet_id, page.relative_path,
+                    False, f"Failed to write file: {e}", "", ""
+                )
+
+            message = f"Gist published: new gist {new_gist_id}, shortcode updated"
+            return PatchResult(
+                snippet.snippet_id, page.relative_path,
+                True, message, original_hash, verified_hash
+            )
+
+        # Handle inline modes (inline-on-change, inline-always)
         if gist_mode == 'inline-on-change' and code_unchanged:
             # Code didn't change, keep gist shortcode
             return PatchResult(

@@ -119,6 +119,66 @@ After Validation (always inlined):
 python src/cli.py patch --family zip --gist-mode inline-always
 ```
 
+#### 4. `upload-on-change` (Phase 5)
+Publish NEW gist under configured account **only if code changed**.
+
+```markdown
+Original:
+    {{< gist "aspose" "abc123" "Example.cs" >}}
+
+After Validation (code unchanged):
+    {{< gist "aspose" "abc123" "Example.cs" >}}
+    (No modification - shortcode preserved)
+
+After Validation (code fixed):
+    {{< gist "mycompany" "new_gist_789" "Example.cs" >}}
+    (New gist published, shortcode updated)
+```
+
+**Requirements:**
+- Environment variables: `GIST_PUBLISH_OWNER`, `GIST_PUBLISH_TOKEN`
+- GitHub PAT with `gist` scope
+- Optional: `GIST_PUBLISH_PUBLIC=true/false` (default: true)
+
+**Use Case:**
+- Maintaining gist references when original owner's account unavailable
+- Publishing fixed code under your organization's account
+- Preserving gist format while ensuring code is correct
+
+**CLI:**
+```bash
+export GIST_PUBLISH_OWNER="mycompany"
+export GIST_PUBLISH_TOKEN="ghp_your_token_here"
+python src/cli.py patch --family zip --gist-mode upload-on-change
+```
+
+#### 5. `upload-always` (Phase 5)
+Always publish NEW gist (even if code unchanged).
+
+```markdown
+Original:
+    {{< gist "aspose" "abc123" "Example.cs" >}}
+
+After Validation (always uploaded):
+    {{< gist "mycompany" "new_gist_456" "Example.cs" >}}
+    (New gist published, shortcode updated)
+```
+
+**Requirements:**
+- Same as `upload-on-change`
+
+**Use Case:**
+- Migrating all gists to your organization's account
+- Creating copies under your control
+- Ensuring all gists owned by single account
+
+**CLI:**
+```bash
+export GIST_PUBLISH_OWNER="mycompany"
+export GIST_PUBLISH_TOKEN="ghp_your_token_here"
+python src/cli.py patch --family zip --gist-mode upload-always
+```
+
 ---
 
 ## Gist Replacement Rules
