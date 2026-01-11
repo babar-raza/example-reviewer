@@ -142,8 +142,9 @@ class GistService:
                     etag = cached_data.get('etag')
 
                     # If we have the specific file cached, try to use it
-                    if filename and filename in cached_data.get('files', {}):
-                        file_data = cached_data['files'][filename]
+                    gist_data = cached_data.get('data', {})
+                    if filename and filename in gist_data.get('files', {}):
+                        file_data = gist_data['files'][filename]
                         # Verify cache is still valid (less than 1 hour old)
                         cached_time = cached_data.get('cached_at')
                         if cached_time:
@@ -174,8 +175,10 @@ class GistService:
             if response.status_code == 304 and cache_file.exists():
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     cached_data = json.load(f)
+                    cached_etag = cached_data.get('etag')
                     return self._process_gist_data(
-                        cached_data, gist_id, owner, filename, from_cache=True
+                        cached_data['data'], gist_id, owner, filename,
+                        from_cache=True, etag=cached_etag
                     )
 
             # Handle rate limiting
@@ -221,11 +224,12 @@ class GistService:
 
             # Parse response
             gist_data = response.json()
+            response_etag = response.headers.get('ETag')
 
             # Cache response
             cache_data = {
                 'gist_id': gist_id,
-                'etag': response.headers.get('ETag'),
+                'etag': response_etag,
                 'cached_at': datetime.utcnow().isoformat(),
                 'data': gist_data
             }
@@ -234,7 +238,8 @@ class GistService:
                 json.dump(cache_data, f, indent=2)
 
             # Process gist data
-            return self._process_gist_data(gist_data, gist_id, owner, filename)
+            return self._process_gist_data(gist_data, gist_id, owner, filename,
+                                          from_cache=False, etag=response_etag)
 
         except requests.exceptions.Timeout:
             error_msg = 'GitHub API request timed out'
@@ -257,7 +262,8 @@ class GistService:
 
     def _process_gist_data(self, gist_data: Dict, gist_id: str, owner: str,
                           requested_filename: Optional[str] = None,
-                          from_cache: bool = False) -> GistFetchResult:
+                          from_cache: bool = False,
+                          etag: Optional[str] = None) -> GistFetchResult:
         """
         Process gist data and select appropriate file.
 
@@ -267,6 +273,7 @@ class GistService:
             owner: Gist owner
             requested_filename: Specific file requested (optional)
             from_cache: Whether data is from cache
+            etag: ETag from HTTP response or cache
 
         Returns:
             GistFetchResult with selected file content
@@ -276,7 +283,6 @@ class GistService:
         files = gist_data.get('files', {})
 
         # Persist gist metadata
-        etag = gist_data.get('etag') if from_cache else None
         self.db.upsert_gist(gist_id, owner, description, updated_at, 'success', None, etag)
 
         # If specific filename requested, use it

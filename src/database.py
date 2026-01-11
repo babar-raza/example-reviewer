@@ -648,6 +648,31 @@ class Database:
         )
         self._conn.commit()
 
+    def get_gist(self, gist_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve gist metadata from database.
+
+        Args:
+            gist_id: GitHub gist ID
+
+        Returns:
+            Dictionary with gist metadata or None if not found
+        """
+        self.connect()
+
+        cursor = self._conn.execute(
+            """
+            SELECT gist_id, owner, description, is_public, updated_at, etag,
+                   last_fetched_at, last_status, last_error, created_at
+            FROM gists
+            WHERE gist_id = ?
+            """,
+            (gist_id,)
+        )
+
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
     def get_gist_file(self, gist_id: str, filename: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Retrieve gist file content from database.
