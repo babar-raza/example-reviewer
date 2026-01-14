@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
-from config_utils import normalize_family_config
+from src.core.config_utils import normalize_family_config
 
 
 class WorkspaceManager:
@@ -322,7 +322,7 @@ namespace ValidationNamespace
                 cwd=str(self.validator_dir),
                 capture_output=True,
                 text=True,
-                timeout=120
+                timeout=300  # Increased from 120s to 300s for Azure packages
             )
 
             if result.returncode != 0:
@@ -455,7 +455,14 @@ namespace ValidationNamespace
                 timeout=30
             )
 
-            output = result.stdout + result.stderr
+            # Combine stdout and stderr with clear separation
+            output_parts = []
+            if result.stdout:
+                output_parts.append(result.stdout)
+            if result.stderr:
+                output_parts.append(f"STDERR:\n{result.stderr}")
+
+            output = '\n'.join(output_parts) if output_parts else ""
 
             # Parse output
             if "SUCCESS" in output:
@@ -474,6 +481,10 @@ namespace ValidationNamespace
 
                 return False, output, error_count
             else:
+                # No SUCCESS or ERRORS marker - likely a runtime error
+                # Ensure we capture whatever output we have
+                if not output:
+                    output = f"Validation failed with no output. Return code: {result.returncode}"
                 return False, output, 1
 
         except subprocess.TimeoutExpired:

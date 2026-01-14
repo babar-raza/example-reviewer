@@ -1,0 +1,66 @@
+{
+  "family": "pdf",
+  "display_name": "Aspose.PDF for .NET",
+  "auto_commit": false,
+  "commit_message_template": "fix(pdf): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_pattern": {
+    "blog": "**/pdf/*/index.md",
+    "docs": "**/pdf/en/**/*.md",
+    "kb": "**/pdf/en/**/*.md",
+    "products": "**/pdf/en/**/*.md",
+    "reference": "**/pdf/en/**/*.md"
+  },
+  "nuget_config": {
+    "primary_package": {
+      "name": "Aspose.PDF",
+      "version_strategy": "latest_stable"
+    },
+    "additional_packages": [
+      {"name": "System.Net.Http", "version": "4.3.4"},
+      {"name": "Newtonsoft.Json", "version": "13.0.3"},
+      {"name": "System.Data.SqlClient", "version": "4.8.6"},
+      {"name": "Azure.Storage.Blobs", "version": "12.19.1"}
+    ],
+    "target_frameworks": ["net8.0"]
+  },
+  "code_defaults": {
+    "default_usings": [
+      "Aspose.Pdf",
+      "Aspose.Pdf.Text",
+      "Aspose.Pdf.Forms",
+      "Aspose.Pdf.Annotations",
+      "Aspose.Pdf.Operators"
+    ]
+  },
+  "namespace_policy": {
+    "mode": "whitelist",
+    "allowed_namespaces": [
+      "Aspose.Pdf",
+      "Aspose.Pdf.*",
+      "System",
+      "System.*",
+      "System.Net.Http",
+      "System.Net.Http.*",
+      "System.Data",
+      "System.Data.*",
+      "Newtonsoft.Json",
+      "Newtonsoft.Json.*"
+    ],
+    "blacklist": []
+  },
+  "patterns": [],
+  "non_existent_apis": [],
+  "api_patterns": {},
+  "persistent_fix": {
+    "enabled": true,
+    "max_iterations": 10,
+    "iterations_per_model": 3,
+    "max_time_seconds": 300,
+    "enable_immediate_patching": true,
+    "enable_context_inference": true
+  },
+  "dependency_resolution": {
+    "enabled": true,
+    "confidence_threshold": 0.7
+  }
+}

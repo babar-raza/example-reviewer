@@ -1,0 +1,59 @@
+{
+  "family": "cells",
+  "display_name": "Aspose.Cells for .NET",
+  "auto_commit": false,
+  "commit_message_template": "fix(cells): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_pattern": {
+    "blog": "**/cells/*/index.md",
+    "docs": "**/cells/en/**/*.md",
+    "kb": "**/cells/en/**/*.md",
+    "products": "**/cells/en/**/*.md",
+    "reference": "**/cells/en/**/*.md"
+  },
+  "nuget_config": {
+    "primary_package": {
+      "name": "Aspose.Cells",
+      "version_strategy": "latest_stable"
+    },
+    "additional_packages": [],
+    "target_frameworks": ["net8.0"]
+  },
+  "code_defaults": {
+    "default_usings": [
+      "Aspose.Cells",
+      "Aspose.Cells.Charts",
+      "Aspose.Cells.Drawing",
+      "Aspose.Cells.Tables",
+      "Aspose.Cells.Rendering"
+    ]
+  },
+  "namespace_policy": {
+    "mode": "whitelist",
+    "allowed_namespaces": [
+      "Aspose.Cells",
+      "Aspose.Cells.*",
+      "System",
+      "System.*",
+      "System.Drawing",
+      "System.Drawing.*",
+      "System.Data",
+      "System.Data.*"
+    ],
+    "blacklist": []
+  },
+  "patterns": [],
+  "non_existent_apis": [],
+  "api_patterns": {},
+  "persistent_fix": {
+    "enabled": true,
+    "max_iterations": 10,
+    "iterations_per_model": 3,
+    "max_time_seconds": 300,
+    "enable_immediate_patching": true,
+    "enable_context_inference": true
+  },
+  "dependency_resolution": {
+    "enabled": true,
+    "confidence_threshold": 0.7
+  }
+}

@@ -14,7 +14,7 @@ from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from database import Database
+from src.core.database import Database
 
 logger = logging.getLogger(__name__)
 

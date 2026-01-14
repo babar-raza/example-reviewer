@@ -118,8 +118,84 @@ Handles GitHub Gist API integration.
 2. Extract code from snippet_versions.code_content
    (For gists: this is the FETCHED code, not shortcode)
 3. Compile in isolated workspace (workspace_manager.py)
-4. Update snippet status based on compilation result
+4. If compilation fails, attempt LLM-based fixes (persistent_fix_service.py)
+5. Update snippet status based on final result
 ```
+
+### Persistent Fix Service (`persistent_fix_service.py`)
+
+The Persistent Fix Service provides iterative LLM-based code fixing with context inference and model fallback.
+
+**Features:**
+- Up to 10 fix iterations per snippet
+- Context inference for partial code snippets
+- Model fallback after 3 consecutive failures
+- Infinite loop detection (stops if same error repeats 3 times)
+- Immediate patching on successful fix
+
+**Fix Flow:**
+```
+1. Check if code needs context wrapping (_needs_context method)
+2. If needed, infer context from nearby snippets
+3. Compile code and collect errors
+4. Send code + errors to LLM for fixing
+5. Repeat until success or max iterations
+6. Extract fixed portion if context was added
+7. Trigger immediate patching callback
+```
+
+#### Context Inference
+
+Context inference wraps partial code snippets (methods, fields without class/namespace) with minimal compilable structure.
+
+**Detection Algorithm** (`_needs_context` method):
+```python
+1. Check for namespace declaration → if present, no context needed
+2. Check for class/interface/struct/enum → if present, no context needed
+3. Check for using-only code:
+   - Strip using statements and comments
+   - If nothing remains → needs context (wrapping required)
+4. Check for methods or fields → needs context
+5. Otherwise → no context needed (code is complete)
+```
+
+**Using-Only Code Detection** (Added 2026-01-12):
+- Code containing only `using` statements with comments/whitespace
+- Detected by stripping using statements + comments, checking if empty
+- Example:
+  ```csharp
+  using Aspose.Zip;                 // Archive, ArchiveEntry
+  using Aspose.Zip.Saving;          // DeflateCompressionSettings
+  ```
+  ↓ After stripping → empty → needs context ✓
+
+**Context Wrapping Process:**
+```
+Original partial code:
+    public void DoWork() { /* code */ }
+
+After wrapping:
+    using System;
+    namespace TempNamespace {
+        class TempClass {
+            public void DoWork() { /* code */ }
+        }
+    }
+
+After compilation + extraction:
+    public void DoWork() { /* fixed code */ }
+```
+
+**Context Extraction:**
+- Query nearby snippets (same page, within ±2 ordinal positions)
+- Extract using statements, namespace, class declarations
+- Build complete compilable code
+- After successful compilation, extract only the fixed portion
+- Verify extracted code compiles standalone
+
+**Metadata Tracking:**
+- `fix_sessions.context_inferred` = TRUE when context was added
+- Stored in database for analysis and debugging
 
 ### Patching Flow (with Gist)
 ```

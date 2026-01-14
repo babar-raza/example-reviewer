@@ -69,6 +69,51 @@ class OllamaClient:
             print(f"[!] Failed to connect to Ollama: {e}")
             return None
 
+    def get_available_models(self) -> List[str]:
+        """
+        Get list of available models in priority order.
+
+        Returns models that are actually installed in Ollama,
+        ordered by preference for code fixing tasks.
+
+        Returns:
+            List of model names in priority order, empty list if unavailable
+        """
+        try:
+            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+
+            available_models = [m['name'] for m in data.get('models', [])]
+
+            # Priority list for code fixing
+            preferred = [
+                'qwen2.5-coder',
+                'deepseek-coder',
+                'codellama',
+                'llama3.1',
+                'llama3',
+                'mistral'
+            ]
+
+            # Build ordered list of available models
+            ordered = []
+            for pref in preferred:
+                for model in available_models:
+                    if pref in model.lower() and model not in ordered:
+                        ordered.append(model)
+
+            # Add any remaining models not in priority list
+            for model in available_models:
+                if model not in ordered:
+                    ordered.append(model)
+
+            return ordered
+
+        except Exception as e:
+            print(f"[!] Failed to get available models: {e}")
+            return []
+
     def generate(self, prompt: str, model: Optional[str] = None, temperature: float = 0.1) -> Optional[str]:
         """
         Generate response from Ollama.
@@ -144,8 +189,52 @@ class OllamaClient:
 
         return fixed_code
 
-    def _build_fix_prompt(self, code: str, errors: str, family_config: Dict, attempt: int) -> str:
-        """Build prompt for code fixing."""
+    def fix_code_with_model(
+        self,
+        code: str,
+        errors: str,
+        family_config: Dict,
+        model: str,
+        attempt: int = 1,
+        api_context = None
+    ) -> Optional[str]:
+        """
+        Fix code using a specific model.
+
+        This method allows explicit model selection for model fallback strategies.
+        Unlike fix_code(), this method does NOT auto-select a model.
+
+        Args:
+            code: Code to fix
+            errors: Compilation errors
+            family_config: Family configuration dictionary
+            model: Specific model name to use
+            attempt: Attempt number (1+)
+            api_context: Optional API context for enriched prompting
+
+        Returns:
+            Fixed code or None
+        """
+        if not model:
+            print("[!] No model specified for fix_code_with_model")
+            return None
+
+        # Build prompt with attempt-aware strictness and API context
+        prompt = self._build_fix_prompt(code, errors, family_config, attempt, api_context)
+
+        # Generate fix with specified model
+        response = self.generate(prompt, model=model, temperature=0.1)
+
+        if not response:
+            return None
+
+        # Parse fixed code from response
+        fixed_code = self._parse_code_from_response(response)
+
+        return fixed_code
+
+    def _build_fix_prompt(self, code: str, errors: str, family_config: Dict, attempt: int, api_context = None) -> str:
+        """Build prompt for code fixing with optional API context enrichment."""
 
         family_name = family_config.get('display_name', family_config.get('family', ''))
         nuget_package = family_config.get('nuget_config', {}).get('primary_package', {}).get('name', '')
@@ -159,13 +248,30 @@ class OllamaClient:
         # Format common usings
         usings_list = '\n   '.join(common_usings)
 
-        # Adjust prompt based on attempt
+        # Format API reference context if available
+        api_reference_section = ""
+        if api_context:
+            api_reference_section = api_context.to_prompt_text()
+
+        # Format API patterns
+        api_patterns_section = ""
+        api_patterns = family_config.get('api_patterns', {})
+        if api_patterns:
+            api_patterns_section = "\n**COMMON PATTERNS:**\n"
+            for pattern_name, pattern_info in api_patterns.items():
+                api_patterns_section += f"\n{pattern_info['description']}:\n```csharp\n{pattern_info['code']}\n```\n"
+
+        # Adjust prompt based on attempt (supports unlimited iterations)
         if attempt == 1:
             strictness = "Fix ONLY the compilation errors listed below."
         elif attempt == 2:
             strictness = "The previous fix attempt failed. Be more careful to use ONLY existing APIs. Fix ONLY the compilation errors."
+        elif attempt == 3:
+            strictness = "This is attempt 3. You MUST use ONLY the APIs that exist in the library. Do NOT hallucinate methods."
+        elif attempt <= 6:
+            strictness = f"Attempt {attempt}. Previous fixes failed compilation. Double-check API names against the NON-EXISTENT list. Use ONLY real APIs from {nuget_package}."
         else:
-            strictness = "This is the FINAL attempt. You MUST use ONLY the APIs that exist in the library. Do NOT hallucinate methods."
+            strictness = f"Attempt {attempt}/{10}. This code has failed many times. Try a COMPLETELY DIFFERENT approach. Check EVERY method call against the library documentation. Do NOT guess."
 
         prompt = f"""You are a C# code fixer for {family_name} library (NuGet: {nuget_package}).
 
@@ -178,7 +284,8 @@ class OllamaClient:
 {non_existent_list}
 
 **DO NOT use ANY of the above APIs. They will cause compilation errors.**
-
+{api_reference_section}
+{api_patterns_section}
 **Common imports for this library:**
 {usings_list}
 
@@ -189,11 +296,12 @@ class OllamaClient:
 
 **INSTRUCTIONS:**
 1. Fix ONLY the compilation errors listed above
-2. Preserve the original logic and structure
-3. Do NOT hallucinate methods from the NON-EXISTENT list
-4. Do NOT add try-catch, logging, or error handling unless required for compilation
-5. Do NOT add comments or explanations
-6. Return ONLY the fixed code inside a single ```csharp code fence
+2. Use ONLY the API signatures provided in the API REFERENCE section above
+3. Preserve the original logic and structure
+4. Do NOT hallucinate methods from the NON-EXISTENT list
+5. Do NOT add try-catch, logging, or error handling unless required for compilation
+6. Do NOT add comments or explanations
+7. Return ONLY the fixed code inside a single ```csharp code fence
 
 **FIXED CODE:**
 """

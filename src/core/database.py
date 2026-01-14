@@ -48,6 +48,7 @@ class Snippet:
     validation_attempts: int = 0
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    notes: Optional[str] = None
 
 
 @dataclass
@@ -495,35 +496,133 @@ class Database:
     def create_fix(self, snippet_id: int, fix_type: str, description: str,
                   successful: bool, issue_id: Optional[int] = None,
                   before_version_id: Optional[int] = None,
-                  after_version_id: Optional[int] = None) -> int:
+                  after_version_id: Optional[int] = None,
+                  model_used: Optional[str] = None,
+                  iteration_count: int = 1,
+                  context_inferred: bool = False) -> int:
         """Create a fix record."""
         self.connect()
         cursor = self._conn.execute(
             """
             INSERT INTO fixes_applied (snippet_id, issue_id, fix_type, description, successful,
-                                      before_version_id, after_version_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                                      before_version_id, after_version_id, model_used,
+                                      iteration_count, context_inferred)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (snippet_id, issue_id, fix_type, description, successful,
-             before_version_id, after_version_id)
+             before_version_id, after_version_id, model_used,
+             iteration_count, 1 if context_inferred else 0)
         )
         return cursor.lastrowid
 
     def create_build_attempt(self, snippet_id: int, version_id: int, run_id: int,
                            success: bool, compiler_output: Optional[str] = None,
-                           error_count: int = 0, warning_count: int = 0) -> int:
+                           error_count: int = 0, warning_count: int = 0,
+                           model_used: Optional[str] = None,
+                           fix_session_id: Optional[str] = None) -> int:
         """Create a build attempt record."""
         self.connect()
         cursor = self._conn.execute(
             """
             INSERT INTO build_attempts (snippet_id, version_id, run_id, success,
-                                       compiler_output, error_count, warning_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                                       compiler_output, error_count, warning_count,
+                                       model_used, fix_session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (snippet_id, version_id, run_id, success, compiler_output,
-             error_count, warning_count)
+             error_count, warning_count, model_used, fix_session_id)
         )
         return cursor.lastrowid
+
+    def create_fix_session(self, session_id: str, snippet_id: int, run_id: int,
+                          total_iterations: int = 0, models_tried: str = '[]',
+                          error_history: str = '[]', final_status: Optional[str] = None,
+                          context_inferred: bool = False) -> str:
+        """Create a new fix session record."""
+        self.connect()
+        self._conn.execute(
+            """
+            INSERT INTO fix_sessions (session_id, snippet_id, run_id, total_iterations,
+                                     models_tried, error_history, final_status, context_inferred)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (session_id, snippet_id, run_id, total_iterations, models_tried, error_history,
+             final_status, 1 if context_inferred else 0)
+        )
+        return session_id
+
+    def update_fix_session(self, session_id: str,
+                          total_iterations: Optional[int] = None,
+                          models_tried: Optional[str] = None,
+                          final_status: Optional[str] = None,
+                          context_inferred: Optional[bool] = None,
+                          final_version_id: Optional[int] = None,
+                          error_history: Optional[str] = None,
+                          duration_seconds: Optional[int] = None,
+                          notes: Optional[str] = None) -> None:
+        """Update a fix session with progress or completion data."""
+        self.connect()
+
+        # Build dynamic UPDATE query for only provided fields
+        updates = []
+        params = []
+
+        if total_iterations is not None:
+            updates.append("total_iterations = ?")
+            params.append(total_iterations)
+
+        if models_tried is not None:
+            updates.append("models_tried = ?")
+            params.append(models_tried)
+
+        if final_status is not None:
+            updates.append("final_status = ?")
+            params.append(final_status)
+            # Set completed_at when final status is set
+            updates.append("completed_at = datetime('now')")
+
+        if context_inferred is not None:
+            updates.append("context_inferred = ?")
+            params.append(1 if context_inferred else 0)
+
+        if final_version_id is not None:
+            updates.append("final_version_id = ?")
+            params.append(final_version_id)
+
+        if error_history is not None:
+            updates.append("error_history = ?")
+            params.append(error_history)
+
+        if duration_seconds is not None:
+            updates.append("duration_seconds = ?")
+            params.append(duration_seconds)
+
+        if notes is not None:
+            updates.append("notes = ?")
+            params.append(notes)
+
+        if not updates:
+            return  # Nothing to update
+
+        params.append(session_id)
+        query = f"UPDATE fix_sessions SET {', '.join(updates)} WHERE session_id = ?"
+        self._conn.execute(query, params)
+
+    def get_fix_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get fix session by ID."""
+        self.connect()
+        cursor = self._conn.execute(
+            """
+            SELECT session_id, snippet_id, run_id, started_at, completed_at,
+                   total_iterations, models_tried, final_status, context_inferred,
+                   final_version_id, error_history, duration_seconds, notes
+            FROM fix_sessions
+            WHERE session_id = ?
+            """,
+            (session_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
 
     # ========================================================================
     # REPORTING QUERIES
@@ -823,3 +922,124 @@ class Database:
             )
 
         return [dict(row) for row in cursor.fetchall()]
+
+    def query_api_reference(self, family: str, class_names: List[str],
+                           member_types: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        Query API reference index.
+
+        Args:
+            family: Product family
+            class_names: List of class names to query
+            member_types: Optional filter for member types
+
+        Returns:
+            List of dictionaries with API member information
+        """
+        self.connect()
+
+        placeholders = ','.join('?' * len(class_names))
+        query = f"""
+            SELECT api_id, family, namespace, class_name, member_type, member_name,
+                   signature, description, example_code, notes, assembly_version,
+                   is_static, is_readonly, return_type, parameters
+            FROM api_reference
+            WHERE family = ? AND class_name IN ({placeholders})
+        """
+
+        params = [family] + class_names
+
+        if member_types:
+            type_placeholders = ','.join('?' * len(member_types))
+            query += f" AND member_type IN ({type_placeholders})"
+            params.extend(member_types)
+
+        query += " ORDER BY class_name, member_type, member_name"
+
+        cursor = self._conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_api_index_stats(self, family: Optional[str] = None) -> Dict[str, Any]:
+        """Get statistics about API reference index."""
+        self.connect()
+
+        if family:
+            cursor = self._conn.execute(
+                """
+                SELECT
+                    COUNT(DISTINCT class_name) as class_count,
+                    COUNT(*) as member_count,
+                    COUNT(DISTINCT namespace) as namespace_count
+                FROM api_reference
+                WHERE family = ?
+                """,
+                (family,)
+            )
+        else:
+            cursor = self._conn.execute(
+                """
+                SELECT
+                    COUNT(DISTINCT family) as family_count,
+                    COUNT(DISTINCT class_name) as class_count,
+                    COUNT(*) as member_count
+                FROM api_reference
+                """
+            )
+
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return {}
+
+    def create_rollback_entry(
+        self,
+        family: str,
+        commit_sha: Optional[str],
+        backup_branch: Optional[str],
+        backup_commit: Optional[str],
+        description: str,
+        modified_files: List[str]
+    ) -> None:
+        """Create a rollback history entry."""
+        self.connect()
+        self._conn.execute(
+            """
+            INSERT INTO rollback_history
+                (family, commit_sha, backup_branch, backup_commit, description, modified_files)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                family,
+                commit_sha,
+                backup_branch,
+                backup_commit,
+                description,
+                json.dumps(modified_files)
+            )
+        )
+
+    def get_rollback_history(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return rollback history entries, most recent first."""
+        self.connect()
+        cursor = self._conn.execute(
+            """
+            SELECT id, created_at, family, commit_sha, backup_branch, backup_commit,
+                   description, modified_files
+            FROM rollback_history
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
+        entries = []
+        for row in cursor.fetchall():
+            entry = dict(row)
+            if entry.get("modified_files"):
+                entry["modified_files"] = json.loads(entry["modified_files"])
+            entries.append(entry)
+        return entries
+
+    def get_last_rollback(self) -> Optional[Dict[str, Any]]:
+        """Return the most recent rollback entry, if any."""
+        entries = self.get_rollback_history(limit=1)
+        return entries[0] if entries else None

@@ -1,6 +1,8 @@
 {
   "family": "zip",
   "display_name": "Aspose.ZIP for .NET",
+  "auto_commit": false,
+  "commit_message_template": "fix(zip): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_pattern": {
     "blog": "**/zip/*/index.md",
     "docs": "**/zip/en/**/*.md",
@@ -31,5 +33,39 @@
     "CreateEntryAsync",
     "ExtractAsync",
     "OpenAsync"
-  ]
+  ],
+  "api_patterns": {
+    "compression_basic": {
+      "description": "Create archive with compression settings",
+      "code": "var settings = new ArchiveEntrySettings(new DeflateCompressionSettings());\nusing (var archive = new Archive(settings)) {\n    archive.CreateEntry(\"file.txt\", \"source.txt\");\n    archive.Save(\"output.zip\");\n}"
+    },
+    "compression_static": {
+      "description": "Use static compression properties (NOT as default parameters!)",
+      "code": "// CORRECT: Use inside method\nCompressionSettings settings = settings ?? CompressionSettings.Deflate;\nvar entrySettings = new ArchiveEntrySettings(settings);\n\n// WRONG: Cannot use as default parameter\n// void Method(CompressionSettings s = CompressionSettings.Deflate) // ERROR!"
+    },
+    "default_parameters": {
+      "description": "How to handle optional compression settings",
+      "code": "// Option 1: No default parameter\npublic static void ZipFolder(string path) {\n    var settings = new DeflateCompressionSettings();\n    // use settings...\n}\n\n// Option 2: Use null default\npublic static void ZipFolder(string path, CompressionSettings settings = null) {\n    settings = settings ?? CompressionSettings.Deflate; // Apply default inside\n    // use settings...\n}"
+    },
+    "aspnet_minimal_api_setup": {
+      "description": "ASP.NET Core minimal API setup with required usings",
+      "code": "// Required usings for ASP.NET Core minimal API\nusing Microsoft.AspNetCore.Builder;\nusing Microsoft.AspNetCore.Http;\n\nvar builder = WebApplication.CreateBuilder(args);\nvar app = builder.Build();\n\napp.MapGet(\"/endpoint\", () => {\n    // Your code here\n    return Results.Ok(\"Success\");\n});\n\napp.Run();"
+    },
+    "aspnet_file_response": {
+      "description": "Return ZIP file from ASP.NET Core endpoint using Results.File()",
+      "code": "app.MapGet(\"/download-zip\", () => {\n    using var buffer = new MemoryStream();\n    var settings = new ArchiveEntrySettings(new DeflateCompressionSettings());\n    \n    using (var archive = new Archive(settings)) {\n        using var ms = new MemoryStream(Encoding.UTF8.GetBytes(\"data\"));\n        archive.CreateEntry(\"file.txt\", ms);\n        archive.Save(buffer);\n    }\n    \n    buffer.Position = 0;\n    return Results.File(\n        fileContents: buffer.ToArray(),\n        contentType: \"application/zip\",\n        fileDownloadName: $\"archive-{DateTime.UtcNow:yyyyMMdd}.zip\"\n    );\n});"
+    },
+    "aspnet_http_context_response": {
+      "description": "Stream ZIP directly to HttpContext response (no buffering)",
+      "code": "app.MapGet(\"/stream-zip\", async (HttpContext ctx) => {\n    ctx.Response.ContentType = \"application/zip\";\n    ctx.Response.Headers[\"Content-Disposition\"] = \"attachment; filename=\\\"archive.zip\\\"\";\n    \n    var settings = new ArchiveEntrySettings(new DeflateCompressionSettings());\n    using var archive = new Archive(settings);\n    \n    using var ms = new MemoryStream(Encoding.UTF8.GetBytes(\"data\"));\n    archive.CreateEntry(\"file.txt\", ms);\n    \n    // Use synchronous Save() - SaveAsync does not exist\n    archive.Save(ctx.Response.Body);\n    await Task.CompletedTask; // For async signature\n});"
+    }
+  },
+  "persistent_fix": {
+    "enabled": true,
+    "max_iterations": 10,
+    "iterations_per_model": 3,
+    "max_time_seconds": 300,
+    "enable_immediate_patching": true,
+    "enable_context_inference": true
+  }
 }

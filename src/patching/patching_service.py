@@ -6,11 +6,13 @@ Updates original markdown files with verified code snippets.
 import re
 import hashlib
 import json
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-from database import Database, Snippet
+from src.core.database import Database, Snippet
 
 
 @dataclass
@@ -39,7 +41,7 @@ class PatchingService:
     4. Track all changes for rollback if needed
     """
 
-    def __init__(self, db: Database, content_root: Path, gist_publisher=None):
+    def __init__(self, db: Database, content_root: Path, gist_publisher=None, telemetry_client=None):
         """
         Initialize patching service.
 
@@ -47,12 +49,22 @@ class PatchingService:
             db: Database instance
             content_root: Root directory for content files
             gist_publisher: Optional GistPublisher instance for upload modes
+            telemetry_client: Optional TelemetryClient for commit association
         """
         self.db = db
         self.content_root = content_root
         self.gist_publisher = gist_publisher
+        self.telemetry_client = telemetry_client
 
-    def patch_verified_snippets(self, family: str, dry_run: bool = False, gist_mode: str = 'inline-on-change') -> Dict:
+    def patch_verified_snippets(
+        self,
+        family: str,
+        dry_run: bool = False,
+        gist_mode: str = 'inline-on-change',
+        auto_commit: bool = False,
+        commit_message_template: Optional[str] = None,
+        create_backup: bool = False
+    ) -> Dict:
         """
         Patch all verified snippets for a family.
 
@@ -60,6 +72,9 @@ class PatchingService:
             family: Product family to patch
             dry_run: If True, don't actually write files
             gist_mode: How to handle gists ('preserve', 'inline-on-change', 'inline-always')
+            auto_commit: If True, stage and commit modified files to git
+            commit_message_template: Optional commit message template
+            create_backup: If True, create a git backup branch before patching
 
         Returns:
             Dictionary with patch results
@@ -77,6 +92,10 @@ class PatchingService:
             'patches': [],
             'modified_files': set()
         }
+
+        backup_info = None
+        if create_backup and not dry_run:
+            backup_info = self._create_backup_branch(family)
 
         for snippet, page in snippets_with_pages:
             try:
@@ -148,7 +167,81 @@ class PatchingService:
 
         results['files_modified'] = len(results['modified_files'])
 
+        commit_sha = None
+        if auto_commit and results['modified_files'] and results['errors'] == 0 and not dry_run:
+            commit_sha = self._git_commit_changes(
+                results['modified_files'],
+                results,
+                family,
+                commit_message_template
+            )
+            if commit_sha:
+                results['commit_sha'] = commit_sha
+
+        if not dry_run and (backup_info or results['modified_files'] or commit_sha):
+            self._store_rollback_entry(family, commit_sha, backup_info, results)
+
         return results
+
+    def patch_single_snippet(self, snippet_id: int, verified_code: str,
+                            dry_run: bool = False, gist_mode: str = 'inline-on-change') -> PatchResult:
+        """
+        Patch a single snippet immediately after verification.
+
+        This method is used for immediate patching when persistent fix succeeds,
+        allowing code to be updated in markdown files right after compilation success.
+
+        Args:
+            snippet_id: ID of the snippet to patch
+            verified_code: The verified code to patch into the file
+            dry_run: If True, don't actually write files
+            gist_mode: How to handle gists ('preserve', 'inline-on-change', 'inline-always')
+
+        Returns:
+            PatchResult with success status and details
+        """
+        try:
+            # Get snippet and page from database
+            snippet = self.db.get_snippet(snippet_id)
+            if not snippet:
+                return PatchResult(
+                    snippet_id, "", False,
+                    f"Snippet {snippet_id} not found in database",
+                    "", ""
+                )
+
+            page = self.db.get_page(snippet.page_id)
+            if not page:
+                return PatchResult(
+                    snippet_id, page.relative_path if page else "", False,
+                    f"Page for snippet {snippet_id} not found",
+                    "", ""
+                )
+
+            # Handle gist snippets differently
+            if snippet.snippet_type == 'gist':
+                return self._patch_gist_snippet(snippet, page, dry_run, gist_mode)
+
+            # Normal fence snippet patching
+            # Get original version for comparison
+            original_version = self.db.get_latest_snippet_version(snippet_id, 'original')
+            original_code = original_version.code_content if original_version else ""
+
+            # Patch the file
+            return self._patch_snippet_in_file(
+                snippet,
+                page,
+                original_code,
+                verified_code,
+                dry_run
+            )
+
+        except Exception as e:
+            return PatchResult(
+                snippet_id, "", False,
+                f"Error patching snippet: {str(e)}",
+                "", ""
+            )
 
     def _patch_snippet_in_file(self, snippet: Snippet, page, original_code: str,
                                verified_code: str, dry_run: bool) -> PatchResult:
@@ -1091,3 +1184,213 @@ class PatchingService:
         import hashlib
         normalized = '\n'.join(line.strip() for line in code.strip().split('\n'))
         return hashlib.md5(normalized.encode('utf-8')).hexdigest()[:8]
+
+    def _generate_commit_message(
+        self,
+        modified_files: set,
+        results: Dict,
+        family: str,
+        template: Optional[str] = None
+    ) -> str:
+        patch_count = results.get('patches_applied', 0)
+        file_count = len(modified_files)
+        error_count = results.get('errors', 0)
+        file_list = sorted(str(path) for path in modified_files)
+        snippet_ids = [
+            str(patch.snippet_id)
+            for patch in results.get('patches', [])
+            if getattr(patch, 'success', False)
+        ]
+
+        file_list_text = "\n".join(f"- {path}" for path in file_list[:10])
+        if len(file_list) > 10:
+            file_list_text = file_list_text + f"\n... and {len(file_list) - 10} more files"
+        if not file_list_text:
+            file_list_text = "- (none)"
+
+        snippet_text = ", ".join(f"#{snippet_id}" for snippet_id in snippet_ids) if snippet_ids else "none"
+
+        if template:
+            try:
+                return template.format(
+                    family=family,
+                    patch_count=patch_count,
+                    file_count=file_count,
+                    error_count=error_count,
+                    file_list=file_list_text,
+                    snippet_ids=snippet_text
+                )
+            except KeyError as exc:
+                print(f"[!] Commit template missing key: {exc}. Falling back to default format.")
+
+        subject = f"fix({family}): apply {patch_count} verified patches to {file_count} file(s)"
+        body_lines = [
+            "",
+            "Applied verified code patches.",
+            f"Patches applied: {patch_count}",
+            f"Errors: {error_count}",
+            "",
+            "Modified files:",
+            file_list_text,
+            "",
+            f"Snippets: {snippet_text}"
+        ]
+        return subject + "\n" + "\n".join(body_lines)
+
+    def _git_commit_changes(
+        self,
+        modified_files: set,
+        results: Dict,
+        family: str,
+        commit_message_template: Optional[str] = None
+    ) -> Optional[str]:
+        """Stage and commit modified files. Returns commit SHA or None."""
+        if not modified_files:
+            return None
+
+        try:
+            subprocess.run(["git", "--version"], check=True, capture_output=True)
+        except FileNotFoundError:
+            print("[!] Git not available; skipping auto-commit.")
+            return None
+        except subprocess.CalledProcessError as exc:
+            print(f"[!] Git check failed: {exc}")
+            return None
+
+        file_list = [str(path) for path in modified_files]
+
+        try:
+            subprocess.run(["git", "add"] + file_list, check=True, cwd=self.content_root)
+            message = self._generate_commit_message(modified_files, results, family, commit_message_template)
+            subprocess.run(["git", "commit", "-m", message], check=True, cwd=self.content_root)
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=self.content_root
+            )
+            commit_sha = result.stdout.strip()
+            print(f"[OK] Auto-commit created: {commit_sha}")
+            self._associate_commit_with_telemetry(commit_sha)
+            return commit_sha
+        except subprocess.CalledProcessError as exc:
+            print(f"[!] Auto-commit failed: {exc}")
+            return None
+
+    def _associate_commit_with_telemetry(self, commit_sha: str) -> None:
+        if not self.telemetry_client:
+            return
+
+        try:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%an <%ae>%n%aI", commit_sha],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=self.content_root
+            )
+            lines = result.stdout.strip().splitlines()
+            commit_author = lines[0] if len(lines) > 0 else "Unknown <unknown@example.com>"
+            commit_timestamp = lines[1] if len(lines) > 1 else datetime.now(timezone.utc).isoformat()
+
+            self.telemetry_client.associate_commit(
+                commit_hash=commit_sha,
+                commit_source="llm",
+                commit_author=commit_author,
+                commit_timestamp=commit_timestamp
+            )
+        except Exception as exc:
+            print(f"[!] Warning: Failed to associate commit with telemetry: {exc}")
+
+    def _create_backup_branch(self, family: str) -> Optional[Dict[str, str]]:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        branch_name = f"backup/{family}-{timestamp}"
+
+        try:
+            subprocess.run(["git", "branch", branch_name], check=True, cwd=self.content_root)
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=self.content_root
+            )
+            commit_sha = result.stdout.strip()
+            print(f"[OK] Created backup branch: {branch_name}")
+            return {"branch": branch_name, "commit": commit_sha}
+        except Exception as exc:
+            print(f"[!] Warning: Failed to create backup branch: {exc}")
+            return None
+
+    def _store_rollback_entry(
+        self,
+        family: str,
+        commit_sha: Optional[str],
+        backup_info: Optional[Dict[str, str]],
+        results: Dict
+    ) -> None:
+        try:
+            modified_files = sorted(str(path) for path in results.get('modified_files', []))
+            description = f"{family} patching: {results.get('patches_applied', 0)} patches"
+            self.db.create_rollback_entry(
+                family=family,
+                commit_sha=commit_sha,
+                backup_branch=backup_info.get("branch") if backup_info else None,
+                backup_commit=backup_info.get("commit") if backup_info else None,
+                description=description,
+                modified_files=modified_files
+            )
+        except Exception as exc:
+            print(f"[!] Warning: Failed to store rollback entry: {exc}")
+
+    def get_rollback_history(self, limit: int = 20) -> List[Dict]:
+        return self.db.get_rollback_history(limit=limit)
+
+    def rollback_last_operation(self) -> bool:
+        entry = self.db.get_last_rollback()
+        if not entry:
+            print("[!] No rollback history found.")
+            return False
+
+        backup_branch = entry.get("backup_branch")
+        backup_commit = entry.get("backup_commit")
+        commit_sha = entry.get("commit_sha")
+
+        target = backup_branch or backup_commit
+        try:
+            if target:
+                subprocess.run(["git", "reset", "--hard", target], check=True, cwd=self.content_root)
+            elif commit_sha:
+                subprocess.run(["git", "reset", "--hard", f"{commit_sha}^"], check=True, cwd=self.content_root)
+            else:
+                print("[!] No rollback target available.")
+                return False
+            return True
+        except Exception as exc:
+            print(f"[!] Rollback failed: {exc}")
+            return False
+
+    def rollback_file(self, file_path: str) -> bool:
+        entry = self.db.get_last_rollback()
+        if not entry:
+            print("[!] No rollback history found.")
+            return False
+
+        backup_branch = entry.get("backup_branch")
+        backup_commit = entry.get("backup_commit")
+        commit_sha = entry.get("commit_sha")
+
+        target = backup_branch or backup_commit
+        try:
+            if target:
+                subprocess.run(["git", "checkout", target, "--", file_path], check=True, cwd=self.content_root)
+            elif commit_sha:
+                subprocess.run(["git", "checkout", f"{commit_sha}^", "--", file_path], check=True, cwd=self.content_root)
+            else:
+                print("[!] No rollback target available.")
+                return False
+            return True
+        except Exception as exc:
+            print(f"[!] Rollback failed for {file_path}: {exc}")
+            return False

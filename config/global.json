@@ -1,0 +1,17 @@
+{
+  "api_reference_paths": {
+    "primary": "D:\\onedrive\\Documents\\GitHub\\aspose.net\\content\\references.aspose.net",
+    "fallback": null
+  },
+  "api_index": {
+    "auto_rebuild_on_validation": false,
+    "cache_size": 128,
+    "max_context_tokens": 2000,
+    "default_max_classes": 5
+  },
+  "path_discovery": {
+    "common_locations": [
+      "D:\\onedrive\\Documents\\GitHub\\aspose.net\\content\\references.aspose.net"
+    ]
+  }
+}

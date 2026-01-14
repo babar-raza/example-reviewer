@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from example_fixer import AsposeZipExampleFixer, ValidationResult, FixApplied
+from .example_fixer import AsposeZipExampleFixer, ValidationResult, FixApplied
 
 @dataclass
 class ExampleReviewRecord:

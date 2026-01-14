@@ -18,16 +18,29 @@ class TelemetryClient:
     Writes to NDJSON (crash-resilient) and HTTP API (if available).
     """
 
-    def __init__(self, artifacts_dir: Path, telemetry_url: Optional[str] = None):
+    def __init__(
+        self,
+        artifacts_dir: Path,
+        telemetry_url: Optional[str] = None,
+        timeout_ms: int = 2000,
+        auth_enabled: bool = False,
+        auth_token: Optional[str] = None
+    ):
         """
         Initialize telemetry client.
 
         Args:
             artifacts_dir: Directory for storing run artifacts
             telemetry_url: Optional HTTP URL for telemetry service (e.g., http://localhost:8765/ingest)
+            timeout_ms: HTTP timeout in milliseconds (unused, for compatibility)
+            auth_enabled: Whether auth is enabled (unused, for compatibility)
+            auth_token: Auth token (unused, for compatibility)
         """
         self.artifacts_dir = artifacts_dir
         self.telemetry_url = telemetry_url
+        self.timeout_ms = timeout_ms
+        self.auth_enabled = auth_enabled
+        self.auth_token = auth_token
         self.current_run_dir: Optional[Path] = None
         self.ndjson_path: Optional[Path] = None
         self.metrics: Dict[str, int] = {}

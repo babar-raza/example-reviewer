@@ -9,7 +9,7 @@ import requests
 from typing import Optional, Dict
 from datetime import datetime
 
-from database import Database
+from src.core.database import Database
 
 logger = logging.getLogger(__name__)
 

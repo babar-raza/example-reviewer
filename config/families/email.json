@@ -1,0 +1,54 @@
+{
+  "family": "email",
+  "display_name": "Aspose.Email for .NET",
+  "auto_commit": false,
+  "commit_message_template": "fix(email): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_pattern": {
+    "blog": "**/email/*/index.md",
+    "docs": "**/email/en/**/*.md",
+    "kb": "**/email/en/**/*.md",
+    "products": "**/email/en/**/*.md",
+    "reference": "**/email/en/**/*.md"
+  },
+  "nuget_config": {
+    "primary_package": {
+      "name": "Aspose.Email",
+      "version_strategy": "latest_stable"
+    },
+    "additional_packages": [],
+    "target_frameworks": ["net8.0"]
+  },
+  "code_defaults": {
+    "default_usings": [
+      "Aspose.Email",
+      "Aspose.Email.Clients",
+      "Aspose.Email.Clients.Smtp",
+      "Aspose.Email.Clients.Pop3",
+      "Aspose.Email.Clients.Imap"
+    ]
+  },
+  "namespace_policy": {
+    "mode": "whitelist",
+    "allowed_namespaces": [
+      "Aspose.Email",
+      "Aspose.Email.*",
+      "System",
+      "System.IO",
+      "System.Text",
+      "System.Collections.Generic",
+      "System.Linq"
+    ],
+    "blacklist": []
+  },
+  "patterns": [],
+  "non_existent_apis": [],
+  "api_patterns": {},
+  "persistent_fix": {
+    "enabled": true,
+    "max_iterations": 10,
+    "iterations_per_model": 3,
+    "max_time_seconds": 300,
+    "enable_immediate_patching": true,
+    "enable_context_inference": true
+  }
+}

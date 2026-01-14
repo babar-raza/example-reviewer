@@ -5,7 +5,7 @@ This is the page mentioned in the email with critical issues
 
 import re
 from pathlib import Path
-from example_fixer import AsposeZipExampleFixer
+from .example_fixer import AsposeZipExampleFixer
 
 def fix_inmemory_blog():
     """Fix the in-memory ZIP blog post"""

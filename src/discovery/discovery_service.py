@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
-from snippet_locator import create_locator, extract_heading_context, extract_preceding_text, SnippetLocator
-from database import Database
-from telemetry import TelemetryClient
-from gist_service import GistService
+from .snippet_locator import create_locator, extract_heading_context, extract_preceding_text, SnippetLocator
+from src.core.database import Database
+from src.core.telemetry import TelemetryClient
+from .gist_service import GistService
 
 
 @dataclass

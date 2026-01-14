@@ -5,21 +5,31 @@ CLI for Aspose Example Review System.
 import sys
 import argparse
 import json
+import os
+import subprocess
+from typing import Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime
+import site
+
+# Add user site-packages to path if not already present
+user_site = site.getusersitepackages()
+if user_site not in sys.path:
+    sys.path.insert(0, user_site)
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from database import Database
-from telemetry import TelemetryClient
-from discovery_service import DiscoveryService
-from pattern_registry import PatternRegistry
-from ollama_integration import OllamaClient
-from workspace_manager import WorkspaceManager
-from validation_orchestrator import ValidationOrchestrator
-from patching_service import PatchingService
-from gist_service import GistService
+from src.core import Database, TelemetryClient
+from src.discovery import DiscoveryService, GistService
+from src.validation import (
+    ValidationOrchestrator,
+    PatternRegistry,
+    WorkspaceManager,
+)
+from src.llm import OllamaClient
+from src.patching import PatchingService
+from src.api_reference import ApiIndexBuilder
 
 
 class CLI:
@@ -35,7 +45,54 @@ class CLI:
 
         # Initialize components
         self.db = Database(self.db_path)
-        self.telemetry = TelemetryClient(self.artifacts_dir)
+        self._configure_telemetry()
+
+    def _parse_int_env(self, name: str, default: int) -> int:
+        raw_value = os.getenv(name)
+        if raw_value is None:
+            return default
+        try:
+            parsed = int(raw_value)
+        except ValueError:
+            print(f"[!] Invalid {name} value: {raw_value}. Using default {default}.")
+            return default
+        if parsed < 0:
+            print(f"[!] Invalid {name} value: {raw_value}. Using default {default}.")
+            return default
+        return parsed
+
+    def _load_telemetry_settings(self, telemetry_url_override: Optional[str] = None) -> Dict[str, Any]:
+        telemetry_url_env = os.getenv('TELEMETRY_API_URL')
+        telemetry_url = telemetry_url_override or telemetry_url_env
+        telemetry_url = telemetry_url if telemetry_url else None
+
+        timeout_ms = self._parse_int_env('TELEMETRY_API_TIMEOUT_MS', 2000)
+        auth_enabled = os.getenv('TELEMETRY_API_AUTH_ENABLED', 'false').lower() == 'true'
+        auth_token = os.getenv('TELEMETRY_API_AUTH_TOKEN')
+
+        return {
+            "telemetry_url": telemetry_url,
+            "timeout_ms": timeout_ms,
+            "auth_enabled": auth_enabled,
+            "auth_token": auth_token
+        }
+
+    def _configure_telemetry(self, telemetry_url_override: Optional[str] = None) -> None:
+        settings = self._load_telemetry_settings(telemetry_url_override)
+        self.telemetry = TelemetryClient(
+            self.artifacts_dir,
+            telemetry_url=settings["telemetry_url"],
+            timeout_ms=settings["timeout_ms"],
+            auth_enabled=settings["auth_enabled"],
+            auth_token=settings["auth_token"]
+        )
+
+    def _resolve_auto_commit(self, auto_commit_flag: Optional[bool], family_config: Dict[str, Any]) -> bool:
+        if auto_commit_flag is not None:
+            return auto_commit_flag
+        if "auto_commit" in family_config:
+            return bool(family_config["auto_commit"])
+        return os.getenv("AUTO_COMMIT_ENABLED", "false").lower() == "true"
 
     def init_db(self):
         """Initialize database schema."""
@@ -55,8 +112,15 @@ class CLI:
             print(f"[!] Failed to initialize database: {e}")
             return 1
 
-    def discover(self, family: str, max_pages: int = None, content_root: str = None):
+    def discover(
+        self,
+        family: str,
+        max_pages: int = None,
+        content_root: str = None,
+        telemetry_url: Optional[str] = None
+    ):
         """Run discovery for a family."""
+        self._configure_telemetry(telemetry_url)
         print(f"[*] Starting discovery for family: {family}")
 
         # Check family config exists
@@ -218,8 +282,16 @@ class CLI:
 
         return 0
 
-    def validate(self, family: str, max_snippets: int = None, use_ollama: bool = True, content_root: str = None):
+    def validate(
+        self,
+        family: str,
+        max_snippets: int = None,
+        use_ollama: bool = True,
+        content_root: str = None,
+        telemetry_url: Optional[str] = None
+    ):
         """Run validation for a family."""
+        self._configure_telemetry(telemetry_url)
         print(f"[*] Starting validation for family: {family}")
 
         # Determine content root (for future use)
@@ -375,8 +447,18 @@ class CLI:
         except Exception as e:
             print(f"[!] Failed to generate report: {e}")
 
-    def patch(self, family: str, dry_run: bool = False, gist_mode: str = 'inline-on-change', content_root: str = None):
+    def patch(
+        self,
+        family: str,
+        dry_run: bool = False,
+        gist_mode: str = 'inline-on-change',
+        content_root: str = None,
+        auto_commit: Optional[bool] = None,
+        create_backup: bool = False,
+        telemetry_url: Optional[str] = None
+    ):
         """Patch verified snippets back into original files."""
+        self._configure_telemetry(telemetry_url)
         print(f"[*] Starting patching for family: {family}")
 
         if dry_run:
@@ -402,6 +484,13 @@ class CLI:
         with open(family_config_path, 'r', encoding='utf-8') as f:
             family_config = json.load(f)
 
+        auto_commit_enabled = self._resolve_auto_commit(auto_commit, family_config)
+        if auto_commit_enabled:
+            try:
+                subprocess.run(["git", "--version"], check=True, capture_output=True)
+            except Exception:
+                print("[!] Warning: auto-commit enabled but git is not available.")
+
         # Check if upload modes require env vars
         gist_publisher = None
         if gist_mode in ['upload-on-change', 'upload-always']:
@@ -420,15 +509,23 @@ class CLI:
             print(f"[i] Gist publishing enabled: owner={gist_owner}, token={token_redacted}, public={gist_public}")
 
             # Create publisher
-            from gist_publisher import GistPublisher
+            from src.discovery import GistPublisher
             gist_publisher = GistPublisher(gist_owner, gist_token, self.db, gist_public)
 
         # Create patching service WITH gist_publisher
-        patcher = PatchingService(self.db, repo_root, gist_publisher)
+        patcher = PatchingService(self.db, repo_root, gist_publisher, telemetry_client=self.telemetry)
 
         try:
             # Patch all verified snippets
-            results = patcher.patch_verified_snippets(family, dry_run, gist_mode)
+            commit_template = family_config.get('commit_message_template')
+            results = patcher.patch_verified_snippets(
+                family,
+                dry_run,
+                gist_mode,
+                auto_commit=auto_commit_enabled,
+                commit_message_template=commit_template,
+                create_backup=create_backup
+            )
 
             print(f"\n[OK] Patching completed")
             print(f"[i] Total snippets: {results['total_snippets']}")
@@ -437,6 +534,8 @@ class CLI:
             print(f"[i] Gists unchanged: {results['gists_unchanged']}")
             print(f"[i] Gists inlined: {results['gists_inlined']}")
             print(f"[i] Errors: {results['errors']}")
+            if results.get('commit_sha'):
+                print(f"[OK] Auto-commit created: {results['commit_sha']}")
 
             # Show details for each patch
             if results['patches']:
@@ -452,6 +551,112 @@ class CLI:
             import traceback
             traceback.print_exc()
             return 1
+
+    def rollback(
+        self,
+        list_history: bool = False,
+        last: bool = False,
+        file_path: Optional[str] = None,
+        force: bool = False,
+        content_root: Optional[str] = None
+    ) -> int:
+        """Rollback patching operations."""
+        repo_root = Path(content_root) if content_root else self.repo_root
+        patcher = PatchingService(self.db, repo_root)
+
+        if list_history:
+            history = patcher.get_rollback_history()
+            if not history:
+                print("[i] No rollback history found.")
+                return 0
+            print("[*] Rollback history:")
+            for entry in history:
+                print(f"- {entry.get('created_at')}: {entry.get('description')}")
+            return 0
+
+        if last:
+            if not force:
+                confirm = input("Are you sure you want to rollback the last operation? (y/N): ")
+                if confirm.lower() != 'y':
+                    print("[i] Rollback cancelled.")
+                    return 0
+            success = patcher.rollback_last_operation()
+            return 0 if success else 1
+
+        if file_path:
+            if not force:
+                confirm = input(f"Are you sure you want to rollback {file_path}? (y/N): ")
+                if confirm.lower() != 'y':
+                    print("[i] Rollback cancelled.")
+                    return 0
+            success = patcher.rollback_file(file_path)
+            return 0 if success else 1
+
+        print("[!] Specify --list, --last, or --file for rollback.")
+        return 1
+
+    def build_api_index(self, family: str = None, build_all: bool = False,
+                       reference_root: str = None, force_rebuild: bool = False):
+        """Build API reference index from markdown documentation."""
+        if not reference_root:
+            print("[!] Error: --reference-root is required")
+            return 1
+
+        reference_path = Path(reference_root)
+        if not reference_path.exists():
+            print(f"[!] Reference root not found: {reference_path}")
+            return 1
+
+        # Initialize telemetry for this operation
+        telemetry = self.telemetry
+
+        # Create builder
+        builder = ApiIndexBuilder(self.db, telemetry)
+
+        # Determine which families to build
+        if build_all:
+            # Get list of all families from directory
+            families = [d.name for d in reference_path.iterdir()
+                       if d.is_dir() and not d.name.startswith('.')]
+            print(f"[*] Building API index for {len(families)} families...")
+        elif family:
+            families = [family]
+            print(f"[*] Building API index for family: {family}")
+        else:
+            print("[!] Error: Either --family or --all must be specified")
+            return 1
+
+        total_stats = {'classes': 0, 'members': 0, 'errors': 0, 'skipped': 0}
+        failed_families = []
+
+        for fam in families:
+            print(f"\n[*] Processing family: {fam}")
+            try:
+                stats = builder.build_index_for_family(fam, str(reference_path), force_rebuild)
+                total_stats = {k: total_stats[k] + stats[k] for k in total_stats}
+                print(f"[OK] {stats['classes']} classes, {stats['members']} members indexed")
+                if stats['errors'] > 0:
+                    print(f"[!] {stats['errors']} parsing errors encountered")
+                if stats['skipped'] > 0:
+                    print(f"[i] {stats['skipped']} files skipped")
+            except Exception as e:
+                print(f"[!] Failed to process {fam}: {e}")
+                failed_families.append(fam)
+                total_stats['errors'] += 1
+
+        print(f"\n{'='*60}")
+        print(f"[*] API Index Build Summary")
+        print(f"{'='*60}")
+        print(f"Total families processed: {len(families)}")
+        print(f"Total classes indexed: {total_stats['classes']}")
+        print(f"Total members indexed: {total_stats['members']}")
+        print(f"Files skipped: {total_stats['skipped']}")
+        if total_stats['errors'] > 0:
+            print(f"[!] Errors encountered: {total_stats['errors']}")
+        if failed_families:
+            print(f"[!] Failed families: {', '.join(failed_families)}")
+
+        return 0 if not failed_families else 1
 
 
 def main():
@@ -471,6 +676,7 @@ def main():
     discover_parser.add_argument('--family', required=True, help='Product family (e.g., zip)')
     discover_parser.add_argument('--max-pages', type=int, help='Maximum pages to process')
     discover_parser.add_argument('--content-root', help='Content root directory (default: repository root)')
+    discover_parser.add_argument('--telemetry-url', help='HTTP telemetry endpoint (overrides TELEMETRY_API_URL)')
 
     # validate command
     validate_parser = subparsers.add_parser('validate', help='Validate code snippets')
@@ -478,6 +684,7 @@ def main():
     validate_parser.add_argument('--max-snippets', type=int, help='Maximum snippets to validate')
     validate_parser.add_argument('--no-ollama', action='store_true', help='Disable Ollama LLM fixes')
     validate_parser.add_argument('--content-root', help='Content root directory (default: repository root)')
+    validate_parser.add_argument('--telemetry-url', help='HTTP telemetry endpoint (overrides TELEMETRY_API_URL)')
 
     # db-status command
     status_parser = subparsers.add_parser('db-status', help='Show database status')
@@ -499,6 +706,30 @@ def main():
              'upload-always (always publish new gist)'
     )
     patch_parser.add_argument('--content-root', help='Content root directory (default: repository root)')
+    patch_parser.add_argument('--auto-commit', action='store_true', default=None, dest='auto_commit',
+                              help='Automatically commit patched files to git')
+    patch_parser.add_argument('--no-auto-commit', action='store_false', dest='auto_commit',
+                              help='Disable auto-commit (overrides config)')
+    patch_parser.add_argument('--create-backup', action='store_true',
+                              help='Create git backup branch before patching')
+    patch_parser.add_argument('--telemetry-url', help='HTTP telemetry endpoint (overrides TELEMETRY_API_URL)')
+
+    # rollback command
+    rollback_parser = subparsers.add_parser('rollback', help='Rollback patching operations')
+    rollback_parser.add_argument('--list', action='store_true', help='List rollback history')
+    rollback_parser.add_argument('--last', action='store_true', help='Rollback last operation')
+    rollback_parser.add_argument('--file', help='Rollback specific file')
+    rollback_parser.add_argument('--force', action='store_true', help='Skip confirmation prompt')
+    rollback_parser.add_argument('--content-root', help='Content root directory (default: repository root)')
+
+    # build-api-index command
+    api_index_parser = subparsers.add_parser('build-api-index', help='Build API reference index from markdown docs')
+    api_index_parser.add_argument('--family', help='Product family to build index for (e.g., zip)')
+    api_index_parser.add_argument('--all', action='store_true', dest='build_all', help='Build index for all families')
+    api_index_parser.add_argument('--reference-root', required=True,
+                                  help='Path to reference.aspose.net directory')
+    api_index_parser.add_argument('--force-rebuild', action='store_true',
+                                  help='Delete existing entries and rebuild')
 
     # Parse args
     args = parser.parse_args()
@@ -514,16 +745,50 @@ def main():
     if args.command == 'init-db':
         return cli.init_db()
     elif args.command == 'discover':
-        return cli.discover(args.family, args.max_pages, getattr(args, 'content_root', None))
+        return cli.discover(
+            args.family,
+            args.max_pages,
+            getattr(args, 'content_root', None),
+            getattr(args, 'telemetry_url', None)
+        )
     elif args.command == 'validate':
         use_ollama = not args.no_ollama
-        return cli.validate(args.family, args.max_snippets, use_ollama, getattr(args, 'content_root', None))
+        return cli.validate(
+            args.family,
+            args.max_snippets,
+            use_ollama,
+            getattr(args, 'content_root', None),
+            getattr(args, 'telemetry_url', None)
+        )
     elif args.command == 'db-status':
         return cli.db_status(args.family)
     elif args.command == 'check-ollama':
         return cli.check_ollama()
     elif args.command == 'patch':
-        return cli.patch(args.family, args.dry_run, args.gist_mode, getattr(args, 'content_root', None))
+        return cli.patch(
+            args.family,
+            args.dry_run,
+            args.gist_mode,
+            getattr(args, 'content_root', None),
+            getattr(args, 'auto_commit', None),
+            getattr(args, 'create_backup', False),
+            getattr(args, 'telemetry_url', None)
+        )
+    elif args.command == 'rollback':
+        return cli.rollback(
+            list_history=getattr(args, 'list', False),
+            last=getattr(args, 'last', False),
+            file_path=getattr(args, 'file', None),
+            force=getattr(args, 'force', False),
+            content_root=getattr(args, 'content_root', None)
+        )
+    elif args.command == 'build-api-index':
+        return cli.build_api_index(
+            family=getattr(args, 'family', None),
+            build_all=getattr(args, 'build_all', False),
+            reference_root=args.reference_root,
+            force_rebuild=getattr(args, 'force_rebuild', False)
+        )
     else:
         print(f"[!] Unknown command: {args.command}")
         return 1

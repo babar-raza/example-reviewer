@@ -1,0 +1,3 @@
+usage: cli.py [-h]
+              {init-db,discover,validate,db-status,check-ollama,patch,build-api-index} ...
+cli.py: error: unrecognized arguments: --blog-pattern **/zip/csharp-zip-file-in-memory-aspose-zip

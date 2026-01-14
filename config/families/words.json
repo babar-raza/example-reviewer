@@ -1,0 +1,58 @@
+{
+  "family": "words",
+  "display_name": "Aspose.Words for .NET",
+  "auto_commit": false,
+  "commit_message_template": "fix(words): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_pattern": {
+    "blog": "**/words/*/index.md",
+    "docs": "**/words/en/**/*.md",
+    "kb": "**/words/en/**/*.md",
+    "products": "**/words/en/**/*.md",
+    "reference": "**/words/en/**/*.md"
+  },
+  "nuget_config": {
+    "primary_package": {
+      "name": "Aspose.Words",
+      "version_strategy": "latest_stable"
+    },
+    "additional_packages": [],
+    "target_frameworks": ["net8.0"]
+  },
+  "code_defaults": {
+    "default_usings": [
+      "Aspose.Words",
+      "Aspose.Words.Saving",
+      "Aspose.Words.Tables",
+      "Aspose.Words.Fields",
+      "Aspose.Words.Drawing"
+    ]
+  },
+  "namespace_policy": {
+    "mode": "whitelist",
+    "allowed_namespaces": [
+      "Aspose.Words",
+      "Aspose.Words.*",
+      "System",
+      "System.IO",
+      "System.Text",
+      "System.Collections.Generic",
+      "System.Linq"
+    ],
+    "blacklist": []
+  },
+  "patterns": [],
+  "non_existent_apis": [],
+  "api_patterns": {},
+  "persistent_fix": {
+    "enabled": true,
+    "max_iterations": 10,
+    "iterations_per_model": 3,
+    "max_time_seconds": 300,
+    "enable_immediate_patching": true,
+    "enable_context_inference": true
+  },
+  "dependency_resolution": {
+    "enabled": true,
+    "confidence_threshold": 0.7
+  }
+}

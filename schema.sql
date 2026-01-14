@@ -140,6 +140,9 @@ CREATE TABLE IF NOT EXISTS fixes_applied (
     after_version_id INTEGER,
     applied_at TEXT NOT NULL DEFAULT (datetime('now')),
     successful BOOLEAN NOT NULL,
+    model_used TEXT,
+    iteration_count INTEGER DEFAULT 1,
+    context_inferred BOOLEAN DEFAULT 0,
     FOREIGN KEY (snippet_id) REFERENCES snippets(snippet_id) ON DELETE CASCADE,
     FOREIGN KEY (issue_id) REFERENCES snippet_issues(issue_id) ON DELETE SET NULL,
     FOREIGN KEY (before_version_id) REFERENCES snippet_versions(version_id),
@@ -161,6 +164,8 @@ CREATE TABLE IF NOT EXISTS build_attempts (
     error_count INTEGER DEFAULT 0,
     warning_count INTEGER DEFAULT 0,
     attempted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    model_used TEXT,
+    fix_session_id TEXT,
     FOREIGN KEY (snippet_id) REFERENCES snippets(snippet_id) ON DELETE CASCADE,
     FOREIGN KEY (version_id) REFERENCES snippet_versions(version_id) ON DELETE CASCADE,
     FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
@@ -169,6 +174,31 @@ CREATE TABLE IF NOT EXISTS build_attempts (
 CREATE INDEX IF NOT EXISTS idx_attempts_snippet ON build_attempts(snippet_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_success ON build_attempts(success);
 CREATE INDEX IF NOT EXISTS idx_attempts_run ON build_attempts(run_id);
+
+-- Fix Sessions: Detailed tracking for persistent fix iterations
+CREATE TABLE IF NOT EXISTS fix_sessions (
+    session_id TEXT PRIMARY KEY,
+    snippet_id INTEGER NOT NULL,
+    run_id INTEGER NOT NULL,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    total_iterations INTEGER DEFAULT 0,
+    models_tried TEXT,
+    final_status TEXT CHECK(final_status IN ('success', 'max_iterations', 'infinite_loop', 'no_models', 'timeout')),
+    context_inferred BOOLEAN DEFAULT 0,
+    final_version_id INTEGER,
+    error_history TEXT,
+    duration_seconds INTEGER,
+    notes TEXT,
+    FOREIGN KEY (snippet_id) REFERENCES snippets(snippet_id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE,
+    FOREIGN KEY (final_version_id) REFERENCES snippet_versions(version_id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fix_sessions_snippet ON fix_sessions(snippet_id);
+CREATE INDEX IF NOT EXISTS idx_fix_sessions_run ON fix_sessions(run_id);
+CREATE INDEX IF NOT EXISTS idx_fix_sessions_status ON fix_sessions(final_status);
+CREATE INDEX IF NOT EXISTS idx_fix_sessions_started ON fix_sessions(started_at);
 
 -- ============================================================================
 -- REPORTING VIEWS
@@ -251,6 +281,26 @@ LEFT JOIN build_attempts ba ON s.snippet_id = ba.snippet_id
 LEFT JOIN fixes_applied fa ON s.snippet_id = fa.snippet_id
 LEFT JOIN snippet_issues si ON s.snippet_id = si.snippet_id
 GROUP BY s.snippet_id;
+
+-- Fix session statistics
+CREATE VIEW IF NOT EXISTS v_fix_session_statistics AS
+SELECT
+    fs.session_id,
+    fs.snippet_id,
+    fs.run_id,
+    fs.final_status,
+    fs.total_iterations,
+    fs.models_tried,
+    fs.context_inferred,
+    fs.duration_seconds,
+    s.status as snippet_status,
+    p.relative_path,
+    p.family,
+    fs.started_at,
+    fs.completed_at
+FROM fix_sessions fs
+JOIN snippets s ON fs.snippet_id = s.snippet_id
+JOIN pages p ON s.page_id = p.page_id;
 
 -- ============================================================================
 -- TRIGGERS FOR AUTO-UPDATE
@@ -398,7 +448,28 @@ CREATE INDEX IF NOT EXISTS idx_publications_old_gist ON gist_publications(old_gi
 CREATE INDEX IF NOT EXISTS idx_publications_new_gist ON gist_publications(new_gist_id);
 CREATE INDEX IF NOT EXISTS idx_publications_status ON gist_publications(status);
 
+-- Rollback history for patching operations
+CREATE TABLE IF NOT EXISTS rollback_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    family TEXT,
+    commit_sha TEXT,
+    backup_branch TEXT,
+    backup_commit TEXT,
+    description TEXT,
+    modified_files TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_rollback_created_at ON rollback_history(created_at);
+CREATE INDEX IF NOT EXISTS idx_rollback_family ON rollback_history(family);
+
 -- Schema version update
 INSERT OR IGNORE INTO schema_version (version, description)
 VALUES (3, 'Gist publishing support - gist_publications table');
+
+INSERT OR IGNORE INTO schema_version (version, description)
+VALUES (4, 'Persistent fix support - iterative LLM fixing with model fallback');
+
+INSERT OR IGNORE INTO schema_version (version, description)
+VALUES (5, 'Rollback history support for patching operations');
 

@@ -1,0 +1,53 @@
+{
+  "family": "imaging",
+  "display_name": "Aspose.Imaging for .NET",
+  "auto_commit": false,
+  "commit_message_template": "fix(imaging): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_pattern": {
+    "blog": "**/imaging/*/index.md",
+    "docs": "**/imaging/en/**/*.md",
+    "kb": "**/imaging/en/**/*.md",
+    "products": "**/imaging/en/**/*.md",
+    "reference": "**/imaging/en/**/*.md"
+  },
+  "nuget_config": {
+    "primary_package": {
+      "name": "Aspose.Imaging",
+      "version_strategy": "latest_stable"
+    },
+    "additional_packages": [],
+    "target_frameworks": ["net8.0"]
+  },
+  "code_defaults": {
+    "default_usings": [
+      "Aspose.Imaging",
+      "Aspose.Imaging.FileFormats",
+      "Aspose.Imaging.ImageOptions",
+      "Aspose.Imaging.Sources",
+      "Aspose.Imaging.ImageFilters.FilterOptions"
+    ]
+  },
+  "namespace_policy": {
+    "mode": "whitelist",
+    "allowed_namespaces": [
+      "Aspose.Imaging",
+      "Aspose.Imaging.*",
+      "System",
+      "System.*",
+      "System.Drawing",
+      "System.Drawing.*"
+    ],
+    "blacklist": []
+  },
+  "patterns": [],
+  "non_existent_apis": [],
+  "api_patterns": {},
+  "persistent_fix": {
+    "enabled": true,
+    "max_iterations": 10,
+    "iterations_per_model": 3,
+    "max_time_seconds": 300,
+    "enable_immediate_patching": true,
+    "enable_context_inference": true
+  }
+}
