@@ -25,42 +25,70 @@ When a C# code snippet fails to compile, the system uses a local Ollama LLM (pre
 │ (workspace_manager) │
 └──────┬──────────────┘
        │
-       ├─► Success? ──► [Verified] ✅
-       │
-       ▼ Failed
-┌─────────────────────┐
-│ 2. Pattern Fixes    │
-│ (pattern_registry)  │
-└──────┬──────────────┘
-       │
-       ├─► Apply known patterns (e.g., SaveAsync → Save)
-       │
-       ▼
-┌─────────────────────┐
-│ 3. Compile Fixed    │
-└──────┬──────────────┘
-       │
-       ├─► Success? ──► [Verified via Pattern] ✅
-       │
-       ▼ Still Failed
-┌─────────────────────┐
-│ 4. Ollama Fix Loop  │
-│ (3 attempts max)    │
-└──────┬──────────────┘
-       │
-       ├─► Attempt 1: Basic fix (temp=0.1)
-       │    └─► Compile ──► Success? ──► [Verified via Ollama] ✅
-       │                      │
-       │                      ▼ Failed
-       ├─► Attempt 2: More careful (temp=0.1, stricter prompt)
-       │    └─► Compile ──► Success? ──► [Verified via Ollama] ✅
-       │                      │
-       │                      ▼ Failed
-       ├─► Attempt 3: Final attempt (temp=0.1, warnings about hallucination)
-       │    └─► Compile ──► Success? ──► [Verified via Ollama] ✅
-       │                      │
-       │                      ▼ Failed
-       └─► [Needs Manual Fix] ⚠️
+       ├─► Success? ──► Track verified candidate ──┐
+       │                                           │
+       ▼ Failed                                    │
+┌─────────────────────┐                           │
+│ 2. Pattern Fixes    │                           │
+│ (pattern_registry)  │                           │
+└──────┬──────────────┘                           │
+       │                                           │
+       ├─► Apply known patterns (SaveAsync → Save) │
+       │                                           │
+       ▼                                           │
+┌─────────────────────┐                           │
+│ 3. Compile Fixed    │                           │
+└──────┬──────────────┘                           │
+       │                                           │
+       ├─► Success? ──► Track verified candidate ──┤
+       │                                           │
+       ▼ Still Failed                              │
+┌─────────────────────┐                           │
+│ 4. Ollama Fix Loop  │                           │
+│ (10 iterations max) │                           │
+└──────┬──────────────┘                           │
+       │                                           │
+       ├─► Iterative fixes with model fallback    │
+       │    └─► Compile ──► Success? ──► Track candidate ──┤
+       │                      │                    │
+       │                      ▼ Failed             │
+       └─► [Continue to runtime validation] ──────┤
+                                                   │
+                                                   ▼
+       ┌─────────────────────────────────────────────┐
+       │ 4.5 Runtime Validation (if enabled)         │
+       │ - Execute verified candidate in subprocess  │
+       │ - Capture stdout/stderr/exceptions          │
+       │ - Store execution_results in database       │
+       └──────┬──────────────────────────────────────┘
+              │
+              ├─► Runtime Disabled? ──► Skip to Stage 5 ──┐
+              │                                          │
+              ├─► Runtime Success? ──► Continue ─────────┤
+              │                                          │
+              ▼ Runtime Failed                           │
+         ┌─────────────────┐                            │
+         │ Strict Mode?    │                            │
+         └──────┬──────────┘                            │
+                │                                        │
+                ├─► Yes: Downgrade to [Needs Fix] ⚠️    │
+                │        No patching                     │
+                │                                        │
+                └─► No (Lenient): Keep verified + warning │
+                                                         │
+                                                         ▼
+                                            ┌──────────────────────┐
+                                            │ 4.6 Patching         │
+                                            │ - Only if verified   │
+                                            │ - Apply code to MD   │
+                                            └──────────────────────┘
+                                                         │
+                                                         ▼
+                                            ┌──────────────────────┐
+                                            │ 5. Finalization      │
+                                            │ - Save versions      │
+                                            │ - Update metrics     │
+                                            └──────────────────────┘
 ```
 
 ---

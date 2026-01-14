@@ -119,7 +119,17 @@ Handles GitHub Gist API integration.
    (For gists: this is the FETCHED code, not shortcode)
 3. Compile in isolated workspace (workspace_manager.py)
 4. If compilation fails, attempt LLM-based fixes (persistent_fix_service.py)
-5. Update snippet status based on final result
+5. If compilation succeeds, track verified candidate (don't return yet)
+6. Runtime validation (Stage 4.5) - if enabled:
+   - Execute compiled code in isolated subprocess
+   - Capture stdout, stderr, exceptions, exit code
+   - Store execution_results in database
+   - Strict mode: downgrade to 'needs-fix' on failure
+   - Lenient mode: keep 'verified' with warnings
+7. Patching (Stage 4.6) - only if status is still 'verified':
+   - Apply verified code to markdown file
+   - Skip if runtime validation failed in strict mode
+8. Update snippet status and finalize
 ```
 
 ### Persistent Fix Service (`persistent_fix_service.py`)

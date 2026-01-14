@@ -184,6 +184,9 @@ class ValidationOrchestrator:
             result['stages_completed'].append('compile_original')
             result['build_attempts'] += 1
 
+            # Track verified candidate (which version successfully compiled)
+            verified_candidate = None  # Will be ('original', code, version_id) or ('fixed', code, version_id) or ('ollama', code, version_id)
+
             with self.telemetry.track_compilation(snippet_id, original_version.version_id, 1):
                 success, output, error_count = self.workspace.validate_code(original_code)
 
@@ -194,14 +197,13 @@ class ValidationOrchestrator:
 
                 if success:
                     # Original code compiles!
+                    verified_candidate = ('original', original_code, original_version.version_id)
                     result['status'] = 'verified'
                     result['message'] = 'Original code compiles successfully'
-                    self.db.update_snippet(snippet_id, status='verified')
-                    self.telemetry.increment_metric('snippets_verified')
-                    return result
+                    # Don't return yet - runtime validation may still need to run
 
-            # Stage 3: Compile with pattern fixes
-            if fixed_code != original_code:
+            # Stage 3: Compile with pattern fixes (only if not already verified)
+            if verified_candidate is None and fixed_code != original_code:
                 result['stages_completed'].append('compile_fixed')
                 result['build_attempts'] += 1
 
@@ -217,18 +219,17 @@ class ValidationOrchestrator:
 
                         if success:
                             # Pattern fixes made it compile!
+                            verified_candidate = ('fixed', fixed_code, fixed_version.version_id)
                             result['status'] = 'verified'
                             result['message'] = 'Pattern fixes resolved compilation errors'
                             result['final_code'] = fixed_code
-                            self.db.update_snippet(snippet_id, status='verified')
-                            self.telemetry.increment_metric('snippets_verified')
-                            return result
+                            # Don't return yet - runtime validation may still need to run
 
                         # Save errors for Ollama
                         result['compilation_errors'] = self.workspace.extract_errors(output)
 
-            # Stage 4: Persistent Ollama auto-fix (if enabled and available)
-            if use_ollama and self.ollama and self.ollama.is_available():
+            # Stage 4: Persistent Ollama auto-fix (if enabled and available, and not already verified)
+            if verified_candidate is None and use_ollama and self.ollama and self.ollama.is_available():
                 result['stages_completed'].append('persistent_ollama_fixes')
 
                 current_code = fixed_code if fixed_code != original_code else original_code
@@ -248,68 +249,13 @@ class ValidationOrchestrator:
                         api_reference=self.api_reference
                     )
 
-                    # Define immediate patching callback
-                    def on_fix_success(snippet_id: int, verified_code: str, version_id: int):
-                        """Immediately patch markdown file when fix succeeds."""
-                        try:
-                            # Note: Immediate patching is optional - can be disabled in config
-                            if not persistent_config.get('enable_immediate_patching', True):
-                                return
-
-                            # Import here to avoid circular dependency
-                            from src.patching.patching_service import PatchingService
-
-                            # Get snippet to determine content root
-                            snippet = self.db.get_snippet(snippet_id)
-                            if not snippet:
-                                return
-
-                            page = self.db.get_page(snippet.page_id)
-                            if not page:
-                                return
-
-                            # Determine content root from page file_path
-                            file_path = Path(page.file_path)
-                            # Assuming structure: .../content/blog.aspose.net/...
-                            content_root = file_path.parent
-                            while content_root.name != 'content' and content_root.parent != content_root:
-                                content_root = content_root.parent
-
-                            # Create patcher and patch single snippet
-                            patcher = PatchingService(db=self.db, content_root=str(content_root))
-                            patch_result = patcher.patch_single_snippet(snippet_id, verified_code)
-
-                            if not patch_result.success:
-                                # Log warning but don't fail validation
-                                self.telemetry.log_event(
-                                    'immediate_patch_warning',
-                                    'warning',
-                                    f'Failed to patch snippet {snippet_id}: {patch_result.message}',
-                                    {'snippet_id': snippet_id}
-                                )
-                        except (IOError, PermissionError) as e:
-                            # File locked or permission issue - log but don't fail
-                            self.telemetry.log_event(
-                                'immediate_patch_error',
-                                'error',
-                                f'Could not patch file for snippet {snippet_id}: {e}',
-                                {'snippet_id': snippet_id, 'error': str(e)}
-                            )
-                        except Exception as e:
-                            # Unexpected error - log but don't fail validation
-                            self.telemetry.log_event(
-                                'immediate_patch_error',
-                                'error',
-                                f'Unexpected error patching snippet {snippet_id}: {e}',
-                                {'snippet_id': snippet_id, 'error': str(e)}
-                            )
-
-                    # Run persistent fix with callback
+                    # Run persistent fix WITHOUT immediate patching callback
+                    # Patching will be deferred until after runtime validation
                     fix_result = persistent_fix_service.fix_with_persistence(
                         snippet_id=snippet_id,
                         current_code=current_code,
                         run_id=run_id,
-                        on_success_callback=on_fix_success
+                        on_success_callback=None  # Defer patching until runtime validation completes
                     )
 
                     # Update result based on fix outcome
@@ -317,15 +263,16 @@ class ValidationOrchestrator:
 
                     if fix_result.success:
                         # Persistent fix succeeded!
+                        ollama_version = self.db.get_snippet_version(fix_result.final_version_id)
+                        verified_candidate = ('ollama', fix_result.final_code, fix_result.final_version_id)
                         result['status'] = 'verified'
                         result['message'] = f'Fixed after {fix_result.iterations_used} iterations using {fix_result.final_model}'
                         result['final_code'] = fix_result.final_code
                         result['fixes_applied'] += 1
 
-                        # Already marked as verified and callback triggered in fix_with_persistence
-                        self.telemetry.increment_metric('snippets_verified')
+                        # Note: snippet already marked as verified in fix_with_persistence
                         self.telemetry.increment_metric('persistent_fix_success')
-                        return result
+                        # Don't return yet - runtime validation may still need to run
                     else:
                         # Persistent fix failed - log reason
                         result['message'] = f'Persistent fix stopped: {fix_result.stopped_reason} after {fix_result.iterations_used} iterations'
@@ -382,6 +329,7 @@ class ValidationOrchestrator:
                                 )
 
                                 if success:
+                                    verified_candidate = ('ollama', ollama_fixed, ollama_version_id)
                                     result['status'] = 'verified'
                                     result['message'] = f'Ollama fixed on attempt {attempt}'
                                     result['final_code'] = ollama_fixed
@@ -393,12 +341,137 @@ class ValidationOrchestrator:
                                         True, None, current_version.version_id, ollama_version_id
                                     )
 
-                                    self.db.update_snippet(snippet_id, status='verified')
-                                    self.telemetry.increment_metric('snippets_verified')
-                                    return result
+                                    # Don't mark as verified yet - runtime validation may still need to run
+                                    # Don't return yet - runtime validation may still need to run
+                                    break  # Exit attempt loop
 
                                 current_code = ollama_fixed
                                 current_version = self.db.get_snippet_version(ollama_version_id)
+
+            # Stage 4.5: Runtime Validation (if enabled and we have a verified candidate)
+            runtime_config = self.family_config.get('runtime_validation', {})
+            runtime_enabled = runtime_config.get('enabled', False)
+
+            if verified_candidate is not None and runtime_enabled:
+                result['stages_completed'].append('runtime_validation')
+
+                candidate_type, candidate_code, candidate_version_id = verified_candidate
+
+                # Prepare execution parameters
+                exec_params = {
+                    'timeout': runtime_config.get('timeout_seconds', 30),
+                    'required_files': runtime_config.get('required_files', []),
+                    'file_aliases': runtime_config.get('file_aliases', {}),
+                    'expected_outputs': runtime_config.get('expected_outputs', []),
+                    'env': runtime_config.get('env', {})
+                }
+
+                # Execute the code
+                self.telemetry.increment_metric('runtime_validation_attempts')
+                exec_success, exec_json, raw_output = self.workspace.execute_code(candidate_code, exec_params)
+
+                # Store execution result
+                self.db.create_execution_result(
+                    snippet_id=snippet_id,
+                    run_id=run_id,
+                    success=exec_success,
+                    exit_code=exec_json.get('ExitCode') or exec_json.get('exit_code'),
+                    duration_ms=exec_json.get('DurationMs') or exec_json.get('duration_ms'),
+                    stdout=exec_json.get('Stdout') or exec_json.get('stdout'),
+                    stderr=exec_json.get('Stderr') or exec_json.get('stderr'),
+                    exception_type=exec_json.get('ExceptionType') or exec_json.get('exception_type'),
+                    exception_message=exec_json.get('ExceptionMessage') or exec_json.get('exception_message'),
+                    stack_trace=exec_json.get('StackTrace') or exec_json.get('stack_trace')
+                )
+
+                # Apply strict/lenient mode semantics
+                runtime_mode = runtime_config.get('mode', 'strict')
+
+                if not exec_success:
+                    if runtime_mode == 'strict':
+                        # Strict mode: downgrade to needs-fix
+                        result['status'] = 'needs-fix'
+                        exception_info = exec_json.get('ExceptionType') or exec_json.get('exception_type') or 'Unknown'
+                        result['message'] = f'Runtime validation failed: {exception_info}'
+                        self.db.update_snippet(snippet_id, status='needs-fix')
+                        self.telemetry.increment_metric('runtime_validation_failed_strict')
+
+                        # Log runtime failure
+                        self.db.log_event(
+                            run_id, 'runtime_validation_failed', 'warning',
+                            f'Snippet {snippet_id} failed runtime validation in strict mode: {exception_info}'
+                        )
+                    else:
+                        # Lenient mode: keep verified but add warning
+                        result['runtime_warning'] = f"Runtime validation failed but lenient mode allows verification"
+                        result['runtime_exception'] = exec_json.get('ExceptionType') or exec_json.get('exception_type')
+                        self.telemetry.increment_metric('runtime_validation_failed_lenient')
+
+                        # Log runtime warning
+                        self.db.log_event(
+                            run_id, 'runtime_validation_warning', 'info',
+                            f'Snippet {snippet_id} failed runtime validation but passed in lenient mode'
+                        )
+                else:
+                    # Runtime validation passed
+                    self.telemetry.increment_metric('runtime_validation_success')
+                    result['runtime_validated'] = True
+
+            # Stage 4.6: Immediate Patching (if runtime passed or runtime disabled)
+            # Only patch if we have a verified candidate and either:
+            # 1. Runtime validation is disabled, OR
+            # 2. Runtime validation passed (status is still 'verified')
+            if verified_candidate is not None:
+                candidate_type, candidate_code, candidate_version_id = verified_candidate
+
+                # Check if we should trigger immediate patching
+                persistent_config = self.family_config.get('persistent_fix', {})
+                should_patch = (
+                    persistent_config.get('enable_immediate_patching', True) and
+                    result['status'] == 'verified'  # Only patch if still verified (runtime didn't downgrade)
+                )
+
+                if should_patch:
+                    # Trigger immediate patching
+                    try:
+                        from src.patching.patching_service import PatchingService
+
+                        # Get snippet to determine content root
+                        snippet = self.db.get_snippet(snippet_id)
+                        if snippet:
+                            page = self.db.get_page(snippet.page_id)
+                            if page:
+                                # Determine content root from page file_path
+                                file_path = Path(page.file_path)
+                                content_root = file_path.parent
+                                while content_root.name != 'content' and content_root.parent != content_root:
+                                    content_root = content_root.parent
+
+                                # Create patcher and patch single snippet
+                                patcher = PatchingService(db=self.db, content_root=str(content_root))
+                                patch_result = patcher.patch_single_snippet(snippet_id, candidate_code)
+
+                                if not patch_result.success:
+                                    # Log warning but don't fail validation
+                                    self.telemetry.log_event(
+                                        'immediate_patch_warning',
+                                        'warning',
+                                        f'Failed to patch snippet {snippet_id}: {patch_result.message}',
+                                        {'snippet_id': snippet_id}
+                                    )
+                    except Exception as e:
+                        # Log error but don't fail validation
+                        self.telemetry.log_event(
+                            'immediate_patch_error',
+                            'error',
+                            f'Error patching snippet {snippet_id}: {e}',
+                            {'snippet_id': snippet_id, 'error': str(e)}
+                        )
+
+                # Update snippet status if still verified
+                if result['status'] == 'verified':
+                    self.db.update_snippet(snippet_id, status='verified')
+                    self.telemetry.increment_metric('snippets_verified')
 
             # Stage 5: Finalization
             result['stages_completed'].append('finalization')
