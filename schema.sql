@@ -473,3 +473,45 @@ VALUES (4, 'Persistent fix support - iterative LLM fixing with model fallback');
 INSERT OR IGNORE INTO schema_version (version, description)
 VALUES (5, 'Rollback history support for patching operations');
 
+-- ============================================================================
+-- RUNTIME EXECUTION TRACKING (Phase 2)
+-- ============================================================================
+
+-- Execution Results: Store runtime execution results
+CREATE TABLE IF NOT EXISTS execution_results (
+    execution_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snippet_id INTEGER NOT NULL,
+    run_id INTEGER NOT NULL,
+
+    -- Execution status
+    success BOOLEAN NOT NULL,
+    exit_code INTEGER,
+    duration_ms INTEGER,
+
+    -- Output capture
+    stdout TEXT,
+    stderr TEXT,
+
+    -- Exception detection
+    exception_type TEXT,
+    exception_message TEXT,
+    stack_trace TEXT,
+
+    -- Additional metadata
+    output_files_json TEXT,
+    memory_peak_kb INTEGER,
+
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+
+    FOREIGN KEY (snippet_id) REFERENCES snippets(snippet_id) ON DELETE CASCADE,
+    FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_execution_results_snippet ON execution_results(snippet_id, run_id);
+CREATE INDEX IF NOT EXISTS idx_execution_results_success ON execution_results(success);
+CREATE INDEX IF NOT EXISTS idx_execution_results_created ON execution_results(created_at);
+
+-- Schema version update
+INSERT OR IGNORE INTO schema_version (version, description)
+VALUES (6, 'Runtime execution tracking - execution_results table');
+

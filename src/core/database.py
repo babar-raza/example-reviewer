@@ -1043,3 +1043,141 @@ class Database:
         """Return the most recent rollback entry, if any."""
         entries = self.get_rollback_history(limit=1)
         return entries[0] if entries else None
+
+    # =========================================================================
+    # RUNTIME EXECUTION OPERATIONS (Phase 2)
+    # =========================================================================
+
+    def create_execution_result(
+        self,
+        snippet_id: int,
+        run_id: int,
+        success: bool,
+        exit_code: Optional[int] = None,
+        duration_ms: Optional[int] = None,
+        stdout: Optional[str] = None,
+        stderr: Optional[str] = None,
+        exception_type: Optional[str] = None,
+        exception_message: Optional[str] = None,
+        stack_trace: Optional[str] = None,
+        output_files_json: Optional[str] = None,
+        memory_peak_kb: Optional[int] = None
+    ) -> int:
+        """
+        Create an execution result record.
+
+        Args:
+            snippet_id: Snippet ID
+            run_id: Run ID
+            success: Whether execution succeeded
+            exit_code: Process exit code
+            duration_ms: Execution duration in milliseconds
+            stdout: Standard output
+            stderr: Standard error
+            exception_type: Exception type if any
+            exception_message: Exception message if any
+            stack_trace: Stack trace if any
+            output_files_json: JSON list of output files
+            memory_peak_kb: Peak memory usage in KB
+
+        Returns:
+            execution_id
+        """
+        self.connect()
+        cursor = self._conn.execute(
+            """
+            INSERT INTO execution_results
+                (snippet_id, run_id, success, exit_code, duration_ms,
+                 stdout, stderr, exception_type, exception_message, stack_trace,
+                 output_files_json, memory_peak_kb)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (snippet_id, run_id, success, exit_code, duration_ms,
+             stdout, stderr, exception_type, exception_message, stack_trace,
+             output_files_json, memory_peak_kb)
+        )
+        return cursor.lastrowid
+
+    def get_latest_execution_result(
+        self,
+        snippet_id: int,
+        run_id: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get the latest execution result for a snippet.
+
+        Args:
+            snippet_id: Snippet ID
+            run_id: Optional run ID to filter by
+
+        Returns:
+            Dictionary with execution result or None
+        """
+        self.connect()
+
+        if run_id is not None:
+            cursor = self._conn.execute(
+                """
+                SELECT execution_id, snippet_id, run_id, success, exit_code,
+                       duration_ms, stdout, stderr, exception_type, exception_message,
+                       stack_trace, output_files_json, memory_peak_kb, created_at
+                FROM execution_results
+                WHERE snippet_id = ? AND run_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (snippet_id, run_id)
+            )
+        else:
+            cursor = self._conn.execute(
+                """
+                SELECT execution_id, snippet_id, run_id, success, exit_code,
+                       duration_ms, stdout, stderr, exception_type, exception_message,
+                       stack_trace, output_files_json, memory_peak_kb, created_at
+                FROM execution_results
+                WHERE snippet_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (snippet_id,)
+            )
+
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_execution_failures_by_family(self, family: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Get execution failures for a family with snippet/page context.
+
+        Args:
+            family: Product family
+            limit: Maximum number of results
+
+        Returns:
+            List of dictionaries with failure information
+        """
+        self.connect()
+
+        cursor = self._conn.execute(
+            """
+            SELECT
+                er.execution_id,
+                s.snippet_id,
+                s.snippet_ordinal,
+                p.relative_path,
+                p.family,
+                er.exception_type,
+                er.exception_message,
+                er.exit_code,
+                er.created_at
+            FROM execution_results er
+            JOIN snippets s ON er.snippet_id = s.snippet_id
+            JOIN pages p ON s.page_id = p.page_id
+            WHERE p.family = ? AND er.success = 0
+            ORDER BY er.created_at DESC
+            LIMIT ?
+            """,
+            (family, limit)
+        )
+
+        return [dict(row) for row in cursor.fetchall()]

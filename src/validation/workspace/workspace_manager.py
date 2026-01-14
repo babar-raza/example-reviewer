@@ -110,12 +110,14 @@ class WorkspaceManager:
         with open(csproj_path, 'w', encoding='utf-8') as f:
             f.write(csproj_content)
 
-        # Create Program.cs with dynamic assembly scanning
+        # Create Program.cs with dynamic assembly scanning and exec mode support
         program_content = """using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;
@@ -126,12 +128,32 @@ class Program
     {
         if (args.Length == 0)
         {
-            Console.WriteLine("Usage: Validator <code-file>");
+            Console.WriteLine("Usage: Validator [--mode compile|exec] [--workdir <path>] <code-file>");
             return 1;
         }
 
-        string codeFile = args[0];
-        if (!File.Exists(codeFile))
+        string mode = "compile";
+        string workdir = Directory.GetCurrentDirectory();
+        string codeFile = null;
+
+        // Parse arguments
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--mode" && i + 1 < args.Length)
+            {
+                mode = args[++i];
+            }
+            else if (args[i] == "--workdir" && i + 1 < args.Length)
+            {
+                workdir = args[++i];
+            }
+            else
+            {
+                codeFile = args[i];
+            }
+        }
+
+        if (codeFile == null || !File.Exists(codeFile))
         {
             Console.WriteLine($"File not found: {codeFile}");
             return 1;
@@ -139,8 +161,184 @@ class Program
 
         string code = File.ReadAllText(codeFile);
 
-        bool success = ValidateCode(code);
-        return success ? 0 : 1;
+        if (mode == "exec")
+        {
+            return ExecuteCode(code, workdir);
+        }
+        else
+        {
+            bool success = ValidateCode(code);
+            return success ? 0 : 1;
+        }
+    }
+
+    static int ExecuteCode(string code, string workdir)
+    {
+        var sw = Stopwatch.StartNew();
+        var result = new ExecutionResult();
+
+        try
+        {
+            // Compile the code first
+            var (success, assembly, errors) = CompileCode(code);
+
+            if (!success)
+            {
+                result.Success = false;
+                result.ExitCode = 1;
+                result.Stderr = string.Join("\\n", errors);
+                result.ExceptionType = "CompilationException";
+                result.ExceptionMessage = "Code failed to compile";
+                result.DurationMs = (int)sw.ElapsedMilliseconds;
+                Console.WriteLine(JsonSerializer.Serialize(result));
+                return 1;
+            }
+
+            // Change to working directory
+            string originalDir = Directory.GetCurrentDirectory();
+            if (Directory.Exists(workdir))
+            {
+                Directory.SetCurrentDirectory(workdir);
+            }
+
+            // Execute the compiled assembly
+            try
+            {
+                var stdout = new System.IO.StringWriter();
+                var stderr = new System.IO.StringWriter();
+                var originalOut = Console.Out;
+                var originalErr = Console.Error;
+
+                Console.SetOut(stdout);
+                Console.SetError(stderr);
+
+                // Find and invoke entry point
+                var entryPoint = assembly.EntryPoint;
+                if (entryPoint != null)
+                {
+                    try
+                    {
+                        object returnValue = entryPoint.Invoke(null, entryPoint.GetParameters().Length == 0 ? null : new object[] { new string[0] });
+                        result.Success = true;
+                        result.ExitCode = returnValue is int exitCode ? exitCode : 0;
+                    }
+                    catch (TargetInvocationException tie)
+                    {
+                        var innerEx = tie.InnerException ?? tie;
+                        result.Success = false;
+                        result.ExitCode = 1;
+                        result.ExceptionType = innerEx.GetType().FullName;
+                        result.ExceptionMessage = innerEx.Message;
+                        result.StackTrace = innerEx.StackTrace;
+                    }
+                }
+                else
+                {
+                    // No entry point - library code, consider it success
+                    result.Success = true;
+                    result.ExitCode = 0;
+                }
+
+                Console.SetOut(originalOut);
+                Console.SetError(originalErr);
+
+                result.Stdout = stdout.ToString();
+                result.Stderr = stderr.ToString();
+            }
+            finally
+            {
+                // Restore original directory
+                Directory.SetCurrentDirectory(originalDir);
+            }
+
+            result.DurationMs = (int)sw.ElapsedMilliseconds;
+            Console.WriteLine(JsonSerializer.Serialize(result));
+            return result.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            result.Success = false;
+            result.ExitCode = 1;
+            result.ExceptionType = ex.GetType().FullName;
+            result.ExceptionMessage = ex.Message;
+            result.StackTrace = ex.StackTrace;
+            result.DurationMs = (int)sw.ElapsedMilliseconds;
+            Console.WriteLine(JsonSerializer.Serialize(result));
+            return 1;
+        }
+    }
+
+    static (bool success, Assembly assembly, List<string> errors) CompileCode(string code)
+    {
+        string fullCode = WrapCode(code);
+        var syntaxTree = CSharpSyntaxTree.ParseText(fullCode);
+
+        // Get references
+        var references = new List<MetadataReference>();
+
+        // Add basic references
+        references.Add(MetadataReference.CreateFromFile(typeof(object).Assembly.Location));
+        references.Add(MetadataReference.CreateFromFile(typeof(Console).Assembly.Location));
+        references.Add(MetadataReference.CreateFromFile(typeof(File).Assembly.Location));
+        references.Add(MetadataReference.CreateFromFile(Assembly.Load("System.Runtime").Location));
+        references.Add(MetadataReference.CreateFromFile(Assembly.Load("System.Collections").Location));
+        references.Add(MetadataReference.CreateFromFile(Assembly.Load("netstandard").Location));
+
+        // Scan NuGet packages directory for DLL assemblies
+        var nugetPackagesDir = Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "..", "..", "..", "..", "nuget-packages"
+        );
+
+        if (Directory.Exists(nugetPackagesDir))
+        {
+            var dllFiles = Directory.GetFiles(nugetPackagesDir, "*.dll", SearchOption.AllDirectories)
+                .Where(f => f.Contains("\\\\lib\\\\") || f.Contains("/lib/"));
+
+            foreach (var dllPath in dllFiles)
+            {
+                try
+                {
+                    references.Add(MetadataReference.CreateFromFile(dllPath));
+                }
+                catch
+                {
+                    // Skip invalid DLLs
+                }
+            }
+        }
+
+        // Detect if code has a Main method to determine output kind
+        var hasMainMethod = code.Contains("static void Main") ||
+                           code.Contains("static int Main") ||
+                           code.Contains("static async Task Main") ||
+                           code.Contains("static async Task<int> Main");
+
+        var outputKind = hasMainMethod ? OutputKind.ConsoleApplication : OutputKind.DynamicallyLinkedLibrary;
+
+        var compilation = CSharpCompilation.Create(
+            "ExecutionAssembly",
+            syntaxTrees: new[] { syntaxTree },
+            references: references,
+            options: new CSharpCompilationOptions(outputKind)
+        );
+
+        using var ms = new MemoryStream();
+        EmitResult emitResult = compilation.Emit(ms);
+
+        if (!emitResult.Success)
+        {
+            var errors = emitResult.Diagnostics
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .Select(d => $"{d.Id}: {d.GetMessage()}")
+                .ToList();
+
+            return (false, null, errors);
+        }
+
+        ms.Seek(0, SeekOrigin.Begin);
+        var assembly = Assembly.Load(ms.ToArray());
+        return (true, assembly, new List<string>());
     }
 
     static bool ValidateCode(string code)
@@ -297,6 +495,18 @@ namespace ValidationNamespace
 }}
 ";
     }
+}
+
+class ExecutionResult
+{
+    public bool Success { get; set; }
+    public int ExitCode { get; set; }
+    public int DurationMs { get; set; }
+    public string Stdout { get; set; }
+    public string Stderr { get; set; }
+    public string ExceptionType { get; set; }
+    public string ExceptionMessage { get; set; }
+    public string StackTrace { get; set; }
 }
 """
 
@@ -519,3 +729,160 @@ namespace ValidationNamespace
                     errors.append(line)
 
         return errors
+
+    def execute_code(self, code: str, exec_params: Optional[Dict] = None) -> Tuple[bool, Dict, str]:
+        """
+        Execute code in isolated subprocess with timeout.
+
+        Args:
+            code: Code to execute
+            exec_params: Execution parameters (timeout, workdir, etc.)
+
+        Returns:
+            Tuple of (success, exec_json, raw_output)
+        """
+        import uuid
+        import os
+        import signal
+        import platform
+
+        exec_params = exec_params or {}
+        timeout = exec_params.get('timeout', 30)
+
+        # Create unique execution workspace
+        exec_id = str(uuid.uuid4())[:8]
+        exec_workdir = self.workspace_dir / "execution" / exec_id
+        exec_workdir.mkdir(parents=True, exist_ok=True)
+
+        # Create temp file for code
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.cs', delete=False, encoding='utf-8') as f:
+            f.write(code)
+            code_file = f.name
+
+        try:
+            # Ensure validator is built
+            if self._needs_rebuild():
+                build_result = subprocess.run(
+                    ["dotnet", "build", "-c", "Release"],
+                    cwd=str(self.validator_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+
+                if build_result.returncode != 0:
+                    return False, {
+                        'success': False,
+                        'exit_code': 1,
+                        'stderr': f"Validator build failed: {build_result.stderr}",
+                        'exception_type': 'BuildException',
+                        'exception_message': 'Failed to build validator'
+                    }, build_result.stderr
+
+                self._save_build_stamp()
+
+            # Run validator in exec mode
+            validator_exe = self.validator_dir / "bin" / "Release" / "net8.0" / "Validator.exe"
+            if not validator_exe.exists():
+                validator_exe = self.validator_dir / "bin" / "Release" / "net8.0" / "Validator.dll"
+
+            if validator_exe.suffix == '.dll':
+                cmd = ["dotnet", str(validator_exe), "--mode", "exec", "--workdir", str(exec_workdir), code_file]
+            else:
+                cmd = [str(validator_exe), "--mode", "exec", "--workdir", str(exec_workdir), code_file]
+
+            # Platform-specific process group handling for timeout enforcement
+            if platform.system() == 'Windows':
+                # Windows: CREATE_NEW_PROCESS_GROUP
+                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+                preexec_fn = None
+            else:
+                # Linux/Unix: new session with os.setsid
+                creationflags = 0
+                preexec_fn = os.setsid
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=str(validator_exe.parent),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    creationflags=creationflags if platform.system() == 'Windows' else 0,
+                    preexec_fn=preexec_fn if platform.system() != 'Windows' else None
+                )
+
+                # Parse JSON output from last line
+                output_lines = result.stdout.strip().split('\n')
+                raw_output = result.stdout
+
+                # Try to find JSON output (last non-empty line)
+                exec_json = None
+                for line in reversed(output_lines):
+                    line = line.strip()
+                    if line.startswith('{') and line.endswith('}'):
+                        try:
+                            exec_json = json.loads(line)
+                            break
+                        except json.JSONDecodeError:
+                            continue
+
+                if exec_json is None:
+                    # No valid JSON found, construct error result
+                    exec_json = {
+                        'success': False,
+                        'exit_code': result.returncode,
+                        'stdout': result.stdout,
+                        'stderr': result.stderr,
+                        'exception_type': 'ExecutionException',
+                        'exception_message': 'Failed to parse execution result'
+                    }
+
+                success = exec_json.get('Success', False)
+                return success, exec_json, raw_output
+
+            except subprocess.TimeoutExpired as e:
+                # Timeout - kill process tree
+                if platform.system() == 'Windows':
+                    # Windows: use taskkill /T /F
+                    try:
+                        subprocess.run(['taskkill', '/F', '/T', '/PID', str(e.pid)],
+                                     capture_output=True, timeout=5)
+                    except:
+                        pass
+                else:
+                    # Linux: kill process group
+                    try:
+                        os.killpg(os.getpgid(e.pid), signal.SIGKILL)
+                    except:
+                        pass
+
+                return False, {
+                    'success': False,
+                    'exit_code': -1,
+                    'exception_type': 'TimeoutException',
+                    'exception_message': f'Execution timed out after {timeout} seconds',
+                    'duration_ms': timeout * 1000
+                }, f"Timeout after {timeout}s"
+
+        except Exception as e:
+            return False, {
+                'success': False,
+                'exit_code': 1,
+                'exception_type': type(e).__name__,
+                'exception_message': str(e)
+            }, str(e)
+
+        finally:
+            # Clean up temp code file
+            try:
+                Path(code_file).unlink()
+            except:
+                pass
+
+            # Clean up execution workspace
+            try:
+                import shutil
+                shutil.rmtree(exec_workdir, ignore_errors=True)
+            except:
+                pass
