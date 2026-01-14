@@ -1,0 +1,606 @@
+"""
+MCP Tools for Example Reviewer Pipeline.
+Exposes pipeline functionality as MCP-compatible tools.
+"""
+
+import json
+import logging
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+from dataclasses import dataclass, asdict
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolResult:
+    """Standard result structure for MCP tools."""
+    success: bool
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {k: v for k, v in asdict(self).items() if v is not None}
+    
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), indent=2)
+
+
+class ExampleReviewerTools:
+    """
+    MCP-compatible tools for the Example Reviewer Pipeline.
+    
+    Each tool follows the MCP tool pattern:
+    - Takes structured input
+    - Returns structured output
+    - Is independently executable
+    """
+    
+    def __init__(
+        self,
+        config_dir: Optional[Path] = None,
+        db_path: Optional[Path] = None,
+        workspace_dir: Optional[Path] = None,
+    ):
+        """
+        Initialize MCP tools.
+        
+        Args:
+            config_dir: Directory containing family configs
+            db_path: Path to database
+            workspace_dir: Working directory
+        """
+        self.config_dir = config_dir or Path("config/families")
+        self.db_path = db_path or Path("data/example_reviewer.db")
+        self.workspace_dir = workspace_dir or Path("workspace")
+        
+        # Lazy initialization of orchestrator
+        self._orchestrator = None
+    
+    @property
+    def orchestrator(self):
+        """Get or create pipeline orchestrator."""
+        if self._orchestrator is None:
+            from ..pipeline.orchestrator import PipelineOrchestrator
+            self._orchestrator = PipelineOrchestrator(
+                config_dir=self.config_dir,
+                db_path=self.db_path,
+                workspace_dir=self.workspace_dir,
+            )
+        return self._orchestrator
+    
+    # =========================================================================
+    # SCAN TOOL (CLI command: scan)
+    # =========================================================================
+    
+    def scan(
+        self,
+        family: Optional[str] = None,
+        directory: Optional[str] = None,
+        max_files: Optional[int] = None,
+    ) -> ToolResult:
+        """
+        Scan for markdown files containing code examples.
+        
+        Maps to CLI command: scan
+        Maps to phase: A_discovery_extraction (partial)
+        
+        Args:
+            family: Family identifier (required if directory not provided)
+            directory: Directory path to scan (required if family not provided)
+            max_files: Maximum files to scan
+            
+        Returns:
+            ToolResult with file list
+        """
+        try:
+            if directory:
+                dir_path = Path(directory)
+                if not dir_path.exists():
+                    return ToolResult(success=False, error=f"Directory not found: {directory}")
+                
+                files = list(dir_path.rglob("*.md"))
+                if max_files:
+                    files = files[:max_files]
+                
+                return ToolResult(
+                    success=True,
+                    data={
+                        'mode': 'directory',
+                        'directory': directory,
+                        'file_count': len(files),
+                        'files': [str(f) for f in files],
+                    }
+                )
+            
+            elif family:
+                family_config = self.orchestrator.config_manager.load_family_config(family)
+                
+                from ..services.discovery_service import DiscoveryService
+                discovery = DiscoveryService(self.orchestrator.db)
+                files = discovery._find_markdown_files(family_config)
+                
+                if max_files:
+                    files = files[:max_files]
+                
+                return ToolResult(
+                    success=True,
+                    data={
+                        'mode': 'family',
+                        'family': family,
+                        'file_count': len(files),
+                        'files': files,
+                    }
+                )
+            
+            else:
+                return ToolResult(
+                    success=False,
+                    error="Either 'family' or 'directory' must be provided"
+                )
+                
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # EXTRACT TOOL (CLI command: extract)
+    # =========================================================================
+    
+    def extract(
+        self,
+        family: str,
+        max_files: Optional[int] = None,
+    ) -> ToolResult:
+        """
+        Extract code examples from markdown files.
+        
+        Maps to CLI command: extract
+        Maps to phase: A_discovery_extraction
+        
+        Args:
+            family: Family identifier
+            max_files: Maximum files to process
+            
+        Returns:
+            ToolResult with extraction statistics
+        """
+        try:
+            family_config = self.orchestrator.config_manager.load_family_config(family)
+            
+            stats = self.orchestrator.discovery_service.discover_family(
+                family, family_config, max_files
+            )
+            
+            return ToolResult(
+                success=True,
+                data={
+                    'family': family,
+                    'files_found': stats['files_found'],
+                    'files_processed': stats['files_processed'],
+                    'examples_found': stats['examples_found'],
+                    'inline_examples': stats['inline_examples'],
+                    'gist_examples': stats['gist_examples'],
+                    'errors': stats['errors'],
+                }
+            )
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # COMPILE_VERIFY TOOL (CLI command: compile_verify)
+    # =========================================================================
+    
+    def compile_verify(
+        self,
+        family: str,
+        max_examples: Optional[int] = None,
+    ) -> ToolResult:
+        """
+        Compile and verify code examples.
+        
+        Maps to CLI command: compile_verify
+        Maps to phase: B_compile_verify_fix_loop (without LLM fixes)
+        
+        Args:
+            family: Family identifier
+            max_examples: Maximum examples to verify
+            
+        Returns:
+            ToolResult with compilation statistics
+        """
+        try:
+            family_config = self.orchestrator.config_manager.load_family_config(family)
+            
+            stats = self.orchestrator._run_compilation_phase(
+                family, family_config, max_examples, skip_llm_fixes=True
+            )
+            
+            return ToolResult(success=True, data=stats)
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # COMPILE_FIX TOOL (CLI command: compile_fix)
+    # =========================================================================
+    
+    def compile_fix(
+        self,
+        family: str,
+        max_examples: Optional[int] = None,
+    ) -> ToolResult:
+        """
+        Fix compilation errors using LLM.
+        
+        Maps to CLI command: compile_fix
+        Maps to phase: B_compile_verify_fix_loop (with LLM fixes)
+        
+        Args:
+            family: Family identifier
+            max_examples: Maximum examples to fix
+            
+        Returns:
+            ToolResult with fix statistics
+        """
+        try:
+            family_config = self.orchestrator.config_manager.load_family_config(family)
+            
+            stats = self.orchestrator._run_compilation_phase(
+                family, family_config, max_examples, skip_llm_fixes=False
+            )
+            
+            return ToolResult(success=True, data=stats)
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # RUNTIME_VERIFY TOOL (CLI command: runtime_verify)
+    # =========================================================================
+    
+    def runtime_verify(
+        self,
+        family: str,
+        max_examples: Optional[int] = None,
+    ) -> ToolResult:
+        """
+        Execute examples and verify runtime behavior.
+        
+        Maps to CLI command: runtime_verify
+        Maps to phase: C_runtime_verify_fix_loop
+        
+        Args:
+            family: Family identifier
+            max_examples: Maximum examples to verify
+            
+        Returns:
+            ToolResult with runtime statistics
+        """
+        try:
+            family_config = self.orchestrator.config_manager.load_family_config(family)
+            
+            stats = self.orchestrator._run_runtime_phase(
+                family, family_config, max_examples, skip_llm_fixes=True
+            )
+            
+            return ToolResult(success=True, data=stats)
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # MD_UPDATE TOOL (CLI command: md_update)
+    # =========================================================================
+    
+    def md_update(
+        self,
+        family: str,
+        dry_run: bool = False,
+    ) -> ToolResult:
+        """
+        Update markdown files with verified code.
+        
+        Maps to CLI command: md_update
+        Maps to phase: D_markdown_update
+        
+        Args:
+            family: Family identifier
+            dry_run: If True, don't write changes
+            
+        Returns:
+            ToolResult with update statistics
+        """
+        try:
+            stats = self.orchestrator._run_markdown_update_phase(family, dry_run)
+            return ToolResult(success=True, data=stats)
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # FINAL_REVIEW TOOL (CLI command: final_review)
+    # =========================================================================
+    
+    def final_review(
+        self,
+        family: str,
+    ) -> ToolResult:
+        """
+        Run final LLM review of updated markdown.
+        
+        Maps to CLI command: final_review
+        Maps to phase: E_final_llm_review
+        
+        Args:
+            family: Family identifier
+            
+        Returns:
+            ToolResult with review statistics
+        """
+        try:
+            stats = self.orchestrator._run_final_review_phase(family)
+            return ToolResult(success=True, data=stats)
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # COMMIT TOOL (CLI command: commit)
+    # =========================================================================
+    
+    def commit(
+        self,
+        family: str,
+    ) -> ToolResult:
+        """
+        Commit changes to git.
+        
+        Maps to CLI command: commit
+        Maps to phase: F_persist_telemetry_commit
+        
+        Args:
+            family: Family identifier
+            
+        Returns:
+            ToolResult with commit information
+        """
+        try:
+            run_id = self.orchestrator.db.create_run(family, "commit")
+            stats = self.orchestrator._run_finalization_phase(family, run_id, dry_run=False)
+            return ToolResult(success=True, data=stats)
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # BACKFILL TOOL (CLI command: backfill)
+    # =========================================================================
+    
+    def backfill(
+        self,
+        family: str,
+        targets: Optional[List[str]] = None,
+    ) -> ToolResult:
+        """
+        Backfill missing context (API refs, test data, examples).
+        
+        Maps to CLI command: backfill
+        
+        Args:
+            family: Family identifier
+            targets: What to backfill (api_reference, test_data, examples)
+            
+        Returns:
+            ToolResult with backfill statistics
+        """
+        try:
+            # For now, just return config info
+            family_config = self.orchestrator.config_manager.load_family_config(family)
+            
+            return ToolResult(
+                success=True,
+                data={
+                    'family': family,
+                    'targets': targets or ['api_reference', 'test_data', 'examples'],
+                    'example_repo': {
+                        'url': family_config.example_repo.url,
+                        'ref': family_config.example_repo.ref,
+                    },
+                    'test_data': {
+                        'path': family_config.test_data.local_path,
+                        'download_if_missing': family_config.test_data.download_if_missing,
+                    },
+                    'status': 'not_implemented',
+                }
+            )
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # STATUS TOOL (utility)
+    # =========================================================================
+    
+    def status(
+        self,
+        family: Optional[str] = None,
+    ) -> ToolResult:
+        """
+        Get pipeline status.
+        
+        Args:
+            family: Family identifier (optional, returns all if not specified)
+            
+        Returns:
+            ToolResult with status information
+        """
+        try:
+            stats = self.orchestrator.get_status(family)
+            return ToolResult(success=True, data=stats)
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+    
+    # =========================================================================
+    # RUN_PIPELINE TOOL (full pipeline)
+    # =========================================================================
+    
+    def run_pipeline(
+        self,
+        family: str,
+        max_examples: Optional[int] = None,
+        skip_runtime: bool = False,
+        skip_llm_fixes: bool = False,
+        dry_run: bool = False,
+    ) -> ToolResult:
+        """
+        Run the full pipeline for a family.
+        
+        Args:
+            family: Family identifier
+            max_examples: Maximum examples to process
+            skip_runtime: Skip runtime verification
+            skip_llm_fixes: Skip LLM-based fixing
+            dry_run: Don't write changes
+            
+        Returns:
+            ToolResult with full pipeline results
+        """
+        try:
+            results = self.orchestrator.run_full_pipeline(
+                family,
+                max_examples=max_examples,
+                skip_runtime=skip_runtime,
+                skip_llm_fixes=skip_llm_fixes,
+                dry_run=dry_run,
+            )
+            
+            return ToolResult(success=results['success'], data=results)
+            
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+
+# Tool definitions for MCP server registration
+TOOL_DEFINITIONS = [
+    {
+        "name": "scan",
+        "description": "Scan for markdown files containing code examples",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "directory": {"type": "string", "description": "Directory path to scan"},
+                "max_files": {"type": "integer", "description": "Maximum files to scan"},
+            },
+        },
+    },
+    {
+        "name": "extract",
+        "description": "Extract code examples from markdown files",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "max_files": {"type": "integer", "description": "Maximum files to process"},
+            },
+            "required": ["family"],
+        },
+    },
+    {
+        "name": "compile_verify",
+        "description": "Compile and verify code examples",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "max_examples": {"type": "integer", "description": "Maximum examples to verify"},
+            },
+            "required": ["family"],
+        },
+    },
+    {
+        "name": "compile_fix",
+        "description": "Fix compilation errors using LLM",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "max_examples": {"type": "integer", "description": "Maximum examples to fix"},
+            },
+            "required": ["family"],
+        },
+    },
+    {
+        "name": "runtime_verify",
+        "description": "Execute examples and verify runtime behavior",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "max_examples": {"type": "integer", "description": "Maximum examples to verify"},
+            },
+            "required": ["family"],
+        },
+    },
+    {
+        "name": "md_update",
+        "description": "Update markdown files with verified code",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "dry_run": {"type": "boolean", "description": "Don't write changes", "default": False},
+            },
+            "required": ["family"],
+        },
+    },
+    {
+        "name": "final_review",
+        "description": "Run final LLM review of updated markdown",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+            },
+            "required": ["family"],
+        },
+    },
+    {
+        "name": "commit",
+        "description": "Commit changes to git",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+            },
+            "required": ["family"],
+        },
+    },
+    {
+        "name": "status",
+        "description": "Get pipeline status",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier (optional)"},
+            },
+        },
+    },
+    {
+        "name": "run_pipeline",
+        "description": "Run the full pipeline for a family",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "max_examples": {"type": "integer", "description": "Maximum examples to process"},
+                "skip_runtime": {"type": "boolean", "description": "Skip runtime verification", "default": False},
+                "skip_llm_fixes": {"type": "boolean", "description": "Skip LLM-based fixing", "default": False},
+                "dry_run": {"type": "boolean", "description": "Don't write changes", "default": False},
+            },
+            "required": ["family"],
+        },
+    },
+]

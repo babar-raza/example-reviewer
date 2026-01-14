@@ -1,0 +1,32 @@
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\src\cli.py:428: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "generated_at": datetime.utcnow().isoformat(),
+[*] Starting validation for family: zip
+[i] Using default content root: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer
+[i] Run ID: 72
+[i] Artifacts directory: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260114_122153_72
+[*] Setting up .NET workspace...
+[OK] Workspace ready
+[*] Checking Ollama...
+[OK] Using Ollama model: qwen2.5-coder:latest
+[i] Limiting to 5 snippets
+[i] Found 2 unverified snippets
+
+[1/2] Validating snippet 3106 from content\blog.aspose.net\zip\runtime-smoke\index.md
+  [X] Error: 'TelemetryClient' object has no attribute 'track_metric'
+
+[2/2] Validating snippet 3107 from content\blog.aspose.net\zip\runtime-smoke\index.md
+  [X] Error: 'TelemetryClient' object has no attribute 'track_metric'
+
+[OK] Validation completed
+[i] Snippets processed: 2
+[i] Verified: 0
+[i] Needs fix: 0
+[i] Errors: 2
+[*] Generating validation report...
+[OK] Report saved to: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260114_122153_72\validation_report.json
+
+=== Validation Summary ===
+Total snippets: 107
+Verified: 80
+Needs fix: 25
+Unverified: 2

@@ -1,0 +1,8 @@
+{
+  "name": "test",
+  "package_id": "Newtonsoft.Json",
+  "version": "latest_stable",
+  "target_framework": "net6.0",
+  "skip_patterns": [],
+  "ollama_enabled": false
+}

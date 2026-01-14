@@ -1,0 +1,403 @@
+### YamlMime:TableOfContent
+- name: Aspose.Zip
+  href: Aspose.Zip.md
+  items:
+  - name: Classes
+  - name: Archive
+    href: Aspose.Zip.Archive.md
+  - name: ArchiveEntry
+    href: Aspose.Zip.ArchiveEntry.md
+  - name: ArchiveEntryEncrypted
+    href: Aspose.Zip.ArchiveEntryEncrypted.md
+  - name: ArchiveEntryPlain
+    href: Aspose.Zip.ArchiveEntryPlain.md
+  - name: ArchiveFactory
+    href: Aspose.Zip.ArchiveFactory.md
+  - name: ArchiveLoadOptions
+    href: Aspose.Zip.ArchiveLoadOptions.md
+  - name: CancelEntryEventArgs
+    href: Aspose.Zip.CancelEntryEventArgs.md
+  - name: ComHelper
+    href: Aspose.Zip.ComHelper.md
+  - name: EntryEventArgs
+    href: Aspose.Zip.EntryEventArgs.md
+  - name: License
+    href: Aspose.Zip.License.md
+  - name: MeteredLicense
+    href: Aspose.Zip.MeteredLicense.md
+  - name: ProgressCancelEventArgs
+    href: Aspose.Zip.ProgressCancelEventArgs.md
+  - name: ProgressEventArgs
+    href: Aspose.Zip.ProgressEventArgs.md
+  - name: Interfaces
+  - name: IArchive
+    href: Aspose.Zip.IArchive.md
+  - name: IArchiveFileEntry
+    href: Aspose.Zip.IArchiveFileEntry.md
+- name: Aspose.Zip.ArchiveInfo
+  href: Aspose.Zip.ArchiveInfo.md
+  items:
+  - name: Classes
+  - name: ArchiveFormatDetector
+    href: Aspose.Zip.ArchiveInfo.ArchiveFormatDetector.md
+  - name: ArchiveFormatInfo
+    href: Aspose.Zip.ArchiveInfo.ArchiveFormatInfo.md
+  - name: ArchiveInstanceInfo
+    href: Aspose.Zip.ArchiveInfo.ArchiveInstanceInfo.md
+  - name: Enums
+  - name: ArchiveFormat
+    href: Aspose.Zip.ArchiveInfo.ArchiveFormat.md
+- name: Aspose.Zip.Arj
+  href: Aspose.Zip.Arj.md
+  items:
+  - name: Classes
+  - name: ArjArchive
+    href: Aspose.Zip.Arj.ArjArchive.md
+  - name: ArjEntryPlain
+    href: Aspose.Zip.Arj.ArjEntryPlain.md
+  - name: ArjLoadOptions
+    href: Aspose.Zip.Arj.ArjLoadOptions.md
+- name: Aspose.Zip.Bzip2
+  href: Aspose.Zip.Bzip2.md
+  items:
+  - name: Classes
+  - name: Bzip2Archive
+    href: Aspose.Zip.Bzip2.Bzip2Archive.md
+  - name: Bzip2LoadOptions
+    href: Aspose.Zip.Bzip2.Bzip2LoadOptions.md
+  - name: Bzip2SaveOptions
+    href: Aspose.Zip.Bzip2.Bzip2SaveOptions.md
+- name: Aspose.Zip.Cab
+  href: Aspose.Zip.Cab.md
+  items:
+  - name: Classes
+  - name: CabArchive
+    href: Aspose.Zip.Cab.CabArchive.md
+  - name: CabCompressionSettings
+    href: Aspose.Zip.Cab.CabCompressionSettings.md
+  - name: CabEntry
+    href: Aspose.Zip.Cab.CabEntry.md
+  - name: CabEntrySettings
+    href: Aspose.Zip.Cab.CabEntrySettings.md
+  - name: CabLoadOptions
+    href: Aspose.Zip.Cab.CabLoadOptions.md
+  - name: CabMsZipCompressionSettings
+    href: Aspose.Zip.Cab.CabMsZipCompressionSettings.md
+  - name: CabSaveOptions
+    href: Aspose.Zip.Cab.CabSaveOptions.md
+  - name: CabStoreCompressionSettings
+    href: Aspose.Zip.Cab.CabStoreCompressionSettings.md
+- name: Aspose.Zip.Cpio
+  href: Aspose.Zip.Cpio.md
+  items:
+  - name: Classes
+  - name: CpioArchive
+    href: Aspose.Zip.Cpio.CpioArchive.md
+  - name: CpioEntry
+    href: Aspose.Zip.Cpio.CpioEntry.md
+  - name: Enums
+  - name: CpioFormat
+    href: Aspose.Zip.Cpio.CpioFormat.md
+- name: Aspose.Zip.Crypto
+  href: Aspose.Zip.Crypto.md
+  items:
+  - name: Classes
+  - name: SevenZipCipher
+    href: Aspose.Zip.Crypto.SevenZipCipher.md
+- name: Aspose.Zip.FastLZ
+  href: Aspose.Zip.FastLZ.md
+  items:
+  - name: Classes
+  - name: FastLZStream
+    href: Aspose.Zip.FastLZ.FastLZStream.md
+- name: Aspose.Zip.Gzip
+  href: Aspose.Zip.Gzip.md
+  items:
+  - name: Classes
+  - name: GzipArchive
+    href: Aspose.Zip.Gzip.GzipArchive.md
+  - name: GzipLoadOptions
+    href: Aspose.Zip.Gzip.GzipLoadOptions.md
+- name: Aspose.Zip.Iso
+  href: Aspose.Zip.Iso.md
+  items:
+  - name: Classes
+  - name: EntryEventArgs
+    href: Aspose.Zip.Iso.EntryEventArgs.md
+  - name: EventsBag
+    href: Aspose.Zip.Iso.EventsBag.md
+  - name: IsoArchive
+    href: Aspose.Zip.Iso.IsoArchive.md
+  - name: IsoEntry
+    href: Aspose.Zip.Iso.IsoEntry.md
+  - name: IsoLoadOptions
+    href: Aspose.Zip.Iso.IsoLoadOptions.md
+  - name: IsoSaveOptions
+    href: Aspose.Zip.Iso.IsoSaveOptions.md
+- name: Aspose.Zip.LZMA
+  href: Aspose.Zip.LZMA.md
+  items:
+  - name: Classes
+  - name: LzmaArchive
+    href: Aspose.Zip.LZMA.LzmaArchive.md
+  - name: LzmaArchiveSettings
+    href: Aspose.Zip.LZMA.LzmaArchiveSettings.md
+- name: Aspose.Zip.Lha
+  href: Aspose.Zip.Lha.md
+  items:
+  - name: Classes
+  - name: LhaArchive
+    href: Aspose.Zip.Lha.LhaArchive.md
+  - name: LhaArchiveEntry
+    href: Aspose.Zip.Lha.LhaArchiveEntry.md
+  - name: LhaLoadOptions
+    href: Aspose.Zip.Lha.LhaLoadOptions.md
+- name: Aspose.Zip.Lz4
+  href: Aspose.Zip.Lz4.md
+  items:
+  - name: Classes
+  - name: Lz4Archive
+    href: Aspose.Zip.Lz4.Lz4Archive.md
+  - name: Lz4ArchiveSetting
+    href: Aspose.Zip.Lz4.Lz4ArchiveSetting.md
+  - name: Lz4LoadOptions
+    href: Aspose.Zip.Lz4.Lz4LoadOptions.md
+- name: Aspose.Zip.Lzip
+  href: Aspose.Zip.Lzip.md
+  items:
+  - name: Classes
+  - name: LzipArchive
+    href: Aspose.Zip.Lzip.LzipArchive.md
+  - name: LzipArchiveSettings
+    href: Aspose.Zip.Lzip.LzipArchiveSettings.md
+  - name: LzipLoadOptions
+    href: Aspose.Zip.Lzip.LzipLoadOptions.md
+- name: Aspose.Zip.Lzx
+  href: Aspose.Zip.Lzx.md
+  items:
+  - name: Classes
+  - name: LzxArchive
+    href: Aspose.Zip.Lzx.LzxArchive.md
+  - name: LzxArchiveEntry
+    href: Aspose.Zip.Lzx.LzxArchiveEntry.md
+  - name: LzxLoadOptions
+    href: Aspose.Zip.Lzx.LzxLoadOptions.md
+- name: Aspose.Zip.Rar
+  href: Aspose.Zip.Rar.md
+  items:
+  - name: Classes
+  - name: RarArchive
+    href: Aspose.Zip.Rar.RarArchive.md
+  - name: RarArchiveEntry
+    href: Aspose.Zip.Rar.RarArchiveEntry.md
+  - name: RarArchiveEntryEncrypted
+    href: Aspose.Zip.Rar.RarArchiveEntryEncrypted.md
+  - name: RarArchiveEntryPlain
+    href: Aspose.Zip.Rar.RarArchiveEntryPlain.md
+  - name: RarArchiveLoadOptions
+    href: Aspose.Zip.Rar.RarArchiveLoadOptions.md
+- name: Aspose.Zip.Saving
+  href: Aspose.Zip.Saving.md
+  items:
+  - name: Classes
+  - name: AesEcryptionSettings
+    href: Aspose.Zip.Saving.AesEcryptionSettings.md
+  - name: ArchiveEntrySettings
+    href: Aspose.Zip.Saving.ArchiveEntrySettings.md
+  - name: ArchiveSaveOptions
+    href: Aspose.Zip.Saving.ArchiveSaveOptions.md
+  - name: Bzip2CompressionSettings
+    href: Aspose.Zip.Saving.Bzip2CompressionSettings.md
+  - name: CompressionSettings
+    href: Aspose.Zip.Saving.CompressionSettings.md
+  - name: DeflateCompressionSettings
+    href: Aspose.Zip.Saving.DeflateCompressionSettings.md
+  - name: EncryptionSettings
+    href: Aspose.Zip.Saving.EncryptionSettings.md
+  - name: EnhancedDeflateCompressionSettings
+    href: Aspose.Zip.Saving.EnhancedDeflateCompressionSettings.md
+  - name: EventsBag
+    href: Aspose.Zip.Saving.EventsBag.md
+  - name: LzmaCompressionSettings
+    href: Aspose.Zip.Saving.LzmaCompressionSettings.md
+  - name: PPMdCompressionSettings
+    href: Aspose.Zip.Saving.PPMdCompressionSettings.md
+  - name: ParallelOptions
+    href: Aspose.Zip.Saving.ParallelOptions.md
+  - name: SelfExtractorOptions
+    href: Aspose.Zip.Saving.SelfExtractorOptions.md
+  - name: SevenZipAESEncryptionSettings
+    href: Aspose.Zip.Saving.SevenZipAESEncryptionSettings.md
+  - name: SevenZipBZip2CompressionSettings
+    href: Aspose.Zip.Saving.SevenZipBZip2CompressionSettings.md
+  - name: SevenZipCompressionSettings
+    href: Aspose.Zip.Saving.SevenZipCompressionSettings.md
+  - name: SevenZipEncryptionSettings
+    href: Aspose.Zip.Saving.SevenZipEncryptionSettings.md
+  - name: SevenZipEntrySettings
+    href: Aspose.Zip.Saving.SevenZipEntrySettings.md
+  - name: SevenZipLZMA2CompressionSettings
+    href: Aspose.Zip.Saving.SevenZipLZMA2CompressionSettings.md
+  - name: SevenZipLZMACompressionSettings
+    href: Aspose.Zip.Saving.SevenZipLZMACompressionSettings.md
+  - name: SevenZipPPMdCompressionSettings
+    href: Aspose.Zip.Saving.SevenZipPPMdCompressionSettings.md
+  - name: SevenZipStoreCompressionSettings
+    href: Aspose.Zip.Saving.SevenZipStoreCompressionSettings.md
+  - name: SplitArchiveSaveOptions
+    href: Aspose.Zip.Saving.SplitArchiveSaveOptions.md
+  - name: SplitSevenZipArchiveSaveOptions
+    href: Aspose.Zip.Saving.SplitSevenZipArchiveSaveOptions.md
+  - name: StoreCompressionSettings
+    href: Aspose.Zip.Saving.StoreCompressionSettings.md
+  - name: TraditionalEncryptionSettings
+    href: Aspose.Zip.Saving.TraditionalEncryptionSettings.md
+  - name: XzCompressionSettings
+    href: Aspose.Zip.Saving.XzCompressionSettings.md
+  - name: ZstandardCompressionSettings
+    href: Aspose.Zip.Saving.ZstandardCompressionSettings.md
+  - name: Enums
+  - name: EncryptionMethod
+    href: Aspose.Zip.Saving.EncryptionMethod.md
+  - name: ParallelCompressionMode
+    href: Aspose.Zip.Saving.ParallelCompressionMode.md
+  - name: SevenZipCompressionMethod
+    href: Aspose.Zip.Saving.SevenZipCompressionMethod.md
+  - name: ZipDataDescriptorPolicy
+    href: Aspose.Zip.Saving.ZipDataDescriptorPolicy.md
+- name: Aspose.Zip.SevenZip
+  href: Aspose.Zip.SevenZip.md
+  items:
+  - name: Classes
+  - name: SevenZipArchive
+    href: Aspose.Zip.SevenZip.SevenZipArchive.md
+  - name: SevenZipArchiveEntry
+    href: Aspose.Zip.SevenZip.SevenZipArchiveEntry.md
+  - name: SevenZipArchiveEntryEncrypted
+    href: Aspose.Zip.SevenZip.SevenZipArchiveEntryEncrypted.md
+  - name: SevenZipArchiveEntryPlain
+    href: Aspose.Zip.SevenZip.SevenZipArchiveEntryPlain.md
+  - name: SevenZipLoadOptions
+    href: Aspose.Zip.SevenZip.SevenZipLoadOptions.md
+- name: Aspose.Zip.Shar
+  href: Aspose.Zip.Shar.md
+  items:
+  - name: Classes
+  - name: SharArchive
+    href: Aspose.Zip.Shar.SharArchive.md
+  - name: SharEntry
+    href: Aspose.Zip.Shar.SharEntry.md
+- name: Aspose.Zip.Snappy
+  href: Aspose.Zip.Snappy.md
+  items:
+  - name: Classes
+  - name: SnappyArchive
+    href: Aspose.Zip.Snappy.SnappyArchive.md
+- name: Aspose.Zip.Tar
+  href: Aspose.Zip.Tar.md
+  items:
+  - name: Classes
+  - name: TarArchive
+    href: Aspose.Zip.Tar.TarArchive.md
+  - name: TarEntry
+    href: Aspose.Zip.Tar.TarEntry.md
+  - name: Enums
+  - name: TarFormat
+    href: Aspose.Zip.Tar.TarFormat.md
+- name: Aspose.Zip.Uue
+  href: Aspose.Zip.Uue.md
+  items:
+  - name: Classes
+  - name: UueArchive
+    href: Aspose.Zip.Uue.UueArchive.md
+  - name: UueSaveOptions
+    href: Aspose.Zip.Uue.UueSaveOptions.md
+- name: Aspose.Zip.Wim
+  href: Aspose.Zip.Wim.md
+  items:
+  - name: Classes
+  - name: WimArchive
+    href: Aspose.Zip.Wim.WimArchive.md
+  - name: WimDirectoryEntry
+    href: Aspose.Zip.Wim.WimDirectoryEntry.md
+  - name: WimEntry
+    href: Aspose.Zip.Wim.WimEntry.md
+  - name: WimFileEntry
+    href: Aspose.Zip.Wim.WimFileEntry.md
+  - name: WimImage
+    href: Aspose.Zip.Wim.WimImage.md
+  - name: WimLoadOptions
+    href: Aspose.Zip.Wim.WimLoadOptions.md
+- name: Aspose.Zip.Xar
+  href: Aspose.Zip.Xar.md
+  items:
+  - name: Classes
+  - name: CancelEntryEventArgs
+    href: Aspose.Zip.Xar.CancelEntryEventArgs.md
+  - name: EntryEventArgs
+    href: Aspose.Zip.Xar.EntryEventArgs.md
+  - name: EventsBag
+    href: Aspose.Zip.Xar.EventsBag.md
+  - name: XarArchive
+    href: Aspose.Zip.Xar.XarArchive.md
+  - name: XarBzip2CompressionSettings
+    href: Aspose.Zip.Xar.XarBzip2CompressionSettings.md
+  - name: XarCompressionSettings
+    href: Aspose.Zip.Xar.XarCompressionSettings.md
+  - name: XarDirectoryEntry
+    href: Aspose.Zip.Xar.XarDirectoryEntry.md
+  - name: XarEntry
+    href: Aspose.Zip.Xar.XarEntry.md
+  - name: XarFileEntry
+    href: Aspose.Zip.Xar.XarFileEntry.md
+  - name: XarLoadOptions
+    href: Aspose.Zip.Xar.XarLoadOptions.md
+  - name: XarSaveOptions
+    href: Aspose.Zip.Xar.XarSaveOptions.md
+  - name: XarStoreCompressionSettings
+    href: Aspose.Zip.Xar.XarStoreCompressionSettings.md
+  - name: XarZlibCompressionSettings
+    href: Aspose.Zip.Xar.XarZlibCompressionSettings.md
+- name: Aspose.Zip.Xz
+  href: Aspose.Zip.Xz.md
+  items:
+  - name: Classes
+  - name: XzArchive
+    href: Aspose.Zip.Xz.XzArchive.md
+- name: Aspose.Zip.Xz.Settings
+  href: Aspose.Zip.Xz.Settings.md
+  items:
+  - name: Classes
+  - name: XzArchiveSettings
+    href: Aspose.Zip.Xz.Settings.XzArchiveSettings.md
+  - name: XzBcjX86FilterSettings
+    href: Aspose.Zip.Xz.Settings.XzBcjX86FilterSettings.md
+  - name: XzFilterSettings
+    href: Aspose.Zip.Xz.Settings.XzFilterSettings.md
+  - name: XzLZMA2FilterSettings
+    href: Aspose.Zip.Xz.Settings.XzLZMA2FilterSettings.md
+  - name: XzLoadOptions
+    href: Aspose.Zip.Xz.Settings.XzLoadOptions.md
+  - name: Enums
+  - name: XzCheckType
+    href: Aspose.Zip.Xz.Settings.XzCheckType.md
+- name: Aspose.Zip.Z
+  href: Aspose.Zip.Z.md
+  items:
+  - name: Classes
+  - name: ZArchive
+    href: Aspose.Zip.Z.ZArchive.md
+  - name: ZArchiveLoadOptions
+    href: Aspose.Zip.Z.ZArchiveLoadOptions.md
+  - name: ZArchiveSaveOptions
+    href: Aspose.Zip.Z.ZArchiveSaveOptions.md
+- name: Aspose.Zip.Zstandard
+  href: Aspose.Zip.Zstandard.md
+  items:
+  - name: Classes
+  - name: ZstandardArchive
+    href: Aspose.Zip.Zstandard.ZstandardArchive.md
+  - name: ZstandardLoadOptions
+    href: Aspose.Zip.Zstandard.ZstandardLoadOptions.md
+  - name: ZstandardSaveOptions
+    href: Aspose.Zip.Zstandard.ZstandardSaveOptions.md

@@ -1,0 +1,236 @@
+"""
+CLI for Example Reviewer Pipeline.
+Provides command-line interface for all pipeline operations.
+"""
+
+import argparse
+import json
+import logging
+import sys
+from pathlib import Path
+from typing import Optional
+
+from ..mcp_tools.tools import ExampleReviewerTools, ToolResult
+
+
+def setup_logging(verbose: bool = False) -> None:
+    """Configure logging for CLI."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+
+
+def print_result(result: ToolResult, json_output: bool = False) -> None:
+    """Print tool result to stdout."""
+    if json_output:
+        print(result.to_json())
+    else:
+        if result.success:
+            print("✓ Success")
+            if result.data:
+                for key, value in result.data.items():
+                    if isinstance(value, (dict, list)):
+                        print(f"  {key}:")
+                        if isinstance(value, list):
+                            for item in value[:10]:
+                                print(f"    - {item}")
+                            if len(value) > 10:
+                                print(f"    ... and {len(value) - 10} more")
+                        else:
+                            for k, v in value.items():
+                                print(f"    {k}: {v}")
+                    else:
+                        print(f"  {key}: {value}")
+        else:
+            print(f"✗ Failed: {result.error}")
+
+
+def main() -> int:
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        description='Example Reviewer Pipeline CLI',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    
+    # Global options
+    parser.add_argument('--config-dir', type=str, default='config/families',
+                        help='Path to family config directory')
+    parser.add_argument('--db-path', type=str, default='data/example_reviewer.db',
+                        help='Path to database file')
+    parser.add_argument('--workspace-dir', type=str, default='workspace',
+                        help='Path to workspace directory')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help='Enable verbose output')
+    parser.add_argument('--json', action='store_true',
+                        help='Output results as JSON')
+    
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Scan command
+    scan_parser = subparsers.add_parser('scan', help='Scan for markdown files')
+    scan_parser.add_argument('--family', '-f', type=str, help='Family identifier')
+    scan_parser.add_argument('--directory', '-d', type=str, help='Directory to scan')
+    scan_parser.add_argument('--max-files', type=int, help='Maximum files to scan')
+    
+    # Extract command
+    extract_parser = subparsers.add_parser('extract', help='Extract code examples')
+    extract_parser.add_argument('--family', '-f', type=str, required=True,
+                                help='Family identifier')
+    extract_parser.add_argument('--max-files', type=int, help='Maximum files to process')
+    
+    # Compile verify command
+    compile_verify_parser = subparsers.add_parser('compile-verify',
+                                                   help='Compile and verify examples')
+    compile_verify_parser.add_argument('--family', '-f', type=str, required=True,
+                                        help='Family identifier')
+    compile_verify_parser.add_argument('--max-examples', type=int,
+                                        help='Maximum examples to verify')
+    
+    # Compile fix command
+    compile_fix_parser = subparsers.add_parser('compile-fix',
+                                                help='Fix compilation errors with LLM')
+    compile_fix_parser.add_argument('--family', '-f', type=str, required=True,
+                                     help='Family identifier')
+    compile_fix_parser.add_argument('--max-examples', type=int,
+                                     help='Maximum examples to fix')
+    
+    # Runtime verify command
+    runtime_verify_parser = subparsers.add_parser('runtime-verify',
+                                                   help='Execute and verify runtime')
+    runtime_verify_parser.add_argument('--family', '-f', type=str, required=True,
+                                        help='Family identifier')
+    runtime_verify_parser.add_argument('--max-examples', type=int,
+                                        help='Maximum examples to verify')
+    
+    # Markdown update command
+    md_update_parser = subparsers.add_parser('md-update',
+                                              help='Update markdown files')
+    md_update_parser.add_argument('--family', '-f', type=str, required=True,
+                                   help='Family identifier')
+    md_update_parser.add_argument('--dry-run', action='store_true',
+                                   help="Don't write changes")
+    
+    # Final review command
+    final_review_parser = subparsers.add_parser('final-review',
+                                                 help='Run final LLM review')
+    final_review_parser.add_argument('--family', '-f', type=str, required=True,
+                                      help='Family identifier')
+    
+    # Commit command
+    commit_parser = subparsers.add_parser('commit', help='Commit changes to git')
+    commit_parser.add_argument('--family', '-f', type=str, required=True,
+                               help='Family identifier')
+    
+    # Status command
+    status_parser = subparsers.add_parser('status', help='Get pipeline status')
+    status_parser.add_argument('--family', '-f', type=str, help='Family identifier')
+    
+    # Run pipeline command
+    run_parser = subparsers.add_parser('run', help='Run full pipeline')
+    run_parser.add_argument('--family', '-f', type=str, required=True,
+                            help='Family identifier')
+    run_parser.add_argument('--max-examples', type=int,
+                            help='Maximum examples to process')
+    run_parser.add_argument('--skip-runtime', action='store_true',
+                            help='Skip runtime verification')
+    run_parser.add_argument('--skip-llm', action='store_true',
+                            help='Skip LLM-based fixing')
+    run_parser.add_argument('--dry-run', action='store_true',
+                            help="Don't write changes")
+    
+    # List families command
+    list_parser = subparsers.add_parser('list-families',
+                                         help='List available families')
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        return 1
+    
+    setup_logging(args.verbose)
+    
+    # Initialize tools
+    tools = ExampleReviewerTools(
+        config_dir=Path(args.config_dir),
+        db_path=Path(args.db_path),
+        workspace_dir=Path(args.workspace_dir),
+    )
+    
+    # Execute command
+    result = None
+    
+    if args.command == 'scan':
+        result = tools.scan(
+            family=args.family,
+            directory=args.directory,
+            max_files=args.max_files,
+        )
+    
+    elif args.command == 'extract':
+        result = tools.extract(
+            family=args.family,
+            max_files=args.max_files,
+        )
+    
+    elif args.command == 'compile-verify':
+        result = tools.compile_verify(
+            family=args.family,
+            max_examples=args.max_examples,
+        )
+    
+    elif args.command == 'compile-fix':
+        result = tools.compile_fix(
+            family=args.family,
+            max_examples=args.max_examples,
+        )
+    
+    elif args.command == 'runtime-verify':
+        result = tools.runtime_verify(
+            family=args.family,
+            max_examples=args.max_examples,
+        )
+    
+    elif args.command == 'md-update':
+        result = tools.md_update(
+            family=args.family,
+            dry_run=args.dry_run,
+        )
+    
+    elif args.command == 'final-review':
+        result = tools.final_review(family=args.family)
+    
+    elif args.command == 'commit':
+        result = tools.commit(family=args.family)
+    
+    elif args.command == 'status':
+        result = tools.status(family=args.family)
+    
+    elif args.command == 'run':
+        result = tools.run_pipeline(
+            family=args.family,
+            max_examples=args.max_examples,
+            skip_runtime=args.skip_runtime,
+            skip_llm_fixes=args.skip_llm,
+            dry_run=args.dry_run,
+        )
+    
+    elif args.command == 'list-families':
+        families = tools.orchestrator.config_manager.list_families()
+        result = ToolResult(
+            success=True,
+            data={'families': families}
+        )
+    
+    if result:
+        print_result(result, args.json)
+        return 0 if result.success else 1
+    
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

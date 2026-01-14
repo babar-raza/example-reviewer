@@ -1,0 +1,44 @@
+{
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "temperature": 0.2,
+    "max_retries": 3,
+    "retry_backoff_seconds": 5,
+    "api_key_env_var": "OPENAI_API_KEY",
+    "base_url": null,
+    "timeout_seconds": 120
+  },
+  "limits": {
+    "cpu_max_percent": 90,
+    "ram_max_mb": 0,
+    "vram_max_mb": 0
+  },
+  "resource_detection": {
+    "auto_detect_vram": true,
+    "prefer_gpu_when_available": true,
+    "fallback_to_cpu": true,
+    "telemetry_log_resource_decisions": true
+  },
+  "git": {
+    "enabled": false,
+    "commit_message_template": "Verify examples: {family} ({count} files)",
+    "commit_description_template": "Updated verified examples (compile+runtime) and refreshed inline/gist embeds. RunId={run_id}",
+    "only_commit_touched_files": true
+  },
+  "gist": {
+    "enabled": true,
+    "target_account": "aspose-com-gists",
+    "auth": {
+      "method": "none",
+      "pat_env_var": "GIST_PAT"
+    }
+  },
+  "telemetry": {
+    "internal_enabled": true,
+    "local_telemetry_enabled": true,
+    "local_telemetry_path": "./local-telemetry"
+  },
+  "artifact_store_path": "./artifacts",
+  "database_path": "./data/example_reviewer.db"
+}

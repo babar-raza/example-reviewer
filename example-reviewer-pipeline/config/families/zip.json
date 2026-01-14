@@ -1,0 +1,77 @@
+{
+  "family": "zip",
+  "display_name": "Aspose.ZIP for .NET",
+  "auto_commit": false,
+  "commit_message_template": "fix(zip): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_roots": [
+    "test-data/test-content"
+  ],
+  "content_pattern": {
+    "blog": "**/blog/**/index.md",
+    "docs": "**/docs/**/*.md",
+    "kb": "**/kb/**/*.md"
+  },
+  "nuget_config": {
+    "primary_package": {
+      "name": "Aspose.Zip",
+      "version_strategy": "latest_stable"
+    },
+    "additional_packages": [],
+    "target_frameworks": ["net8.0"]
+  },
+  "code_defaults": {
+    "default_usings": [
+      "System",
+      "System.IO",
+      "System.Text",
+      "Aspose.Zip",
+      "Aspose.Zip.Saving",
+      "Aspose.Zip.SevenZip",
+      "Aspose.Zip.Rar"
+    ]
+  },
+  "patterns": [],
+  "non_existent_apis": [
+    "SaveAsync",
+    "CreateEntryAsync",
+    "ExtractAsync",
+    "OpenAsync"
+  ],
+  "api_patterns": {
+    "compression_basic": {
+      "description": "Create archive with compression settings",
+      "code": "var settings = new ArchiveEntrySettings(new DeflateCompressionSettings());\nusing (var archive = new Archive(settings)) {\n    archive.CreateEntry(\"file.txt\", \"source.txt\");\n    archive.Save(\"output.zip\");\n}"
+    },
+    "extraction_basic": {
+      "description": "Extract archive entries",
+      "code": "using (var archive = new Archive(\"input.zip\")) {\n    foreach (var entry in archive.Entries) {\n        entry.Extract(entry.Name);\n    }\n}"
+    }
+  },
+  "runtime_validation": {
+    "enabled": true,
+    "mode": "lenient",
+    "timeout_seconds": 30,
+    "required_files": ["sample.zip", "sample_dir"],
+    "file_aliases": {
+      "sample.zip": ["input.zip", "archive.zip", "example.zip", "source.zip", "ZipFileToBeExtracted.zip"],
+      "sample_dir": ["input", "data", "sourceDir", "files"],
+      "alice29.txt": ["file.txt", "source.txt", "input.txt"]
+    },
+    "expected_outputs": ["*.zip", "output/*.zip", "*.7z"],
+    "env": {}
+  },
+  "test_data": {
+    "local_path": "test-data/test-data/zip",
+    "download_if_missing": false
+  },
+  "example_repo": {
+    "url": "https://github.com/aspose-zip/Aspose.ZIP-for-.NET",
+    "examples_path": "Examples",
+    "test_data_path": "Data",
+    "ref": "main"
+  },
+  "api_reference": {
+    "sources": ["test-data/test-reference/zip"],
+    "cache_path": "./cache/api-reference/zip"
+  }
+}

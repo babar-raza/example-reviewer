@@ -1,0 +1,59 @@
+{
+  "family": "slides",
+  "display_name": "Aspose.Slides for .NET",
+  "auto_commit": false,
+  "commit_message_template": "fix(slides): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_pattern": {
+    "blog": "**/slides/*/index.md",
+    "docs": "**/slides/en/**/*.md",
+    "kb": "**/slides/en/**/*.md",
+    "products": "**/slides/en/**/*.md",
+    "reference": "**/slides/en/**/*.md"
+  },
+  "nuget_config": {
+    "primary_package": {
+      "name": "Aspose.Slides.NET",
+      "version_strategy": "latest_stable"
+    },
+    "additional_packages": [],
+    "target_frameworks": ["net8.0"]
+  },
+  "code_defaults": {
+    "default_usings": [
+      "Aspose.Slides",
+      "Aspose.Slides.Export",
+      "Aspose.Slides.Charts",
+      "Aspose.Slides.Animation",
+      "Aspose.Slides.SmartArt"
+    ]
+  },
+  "namespace_policy": {
+    "mode": "whitelist",
+    "allowed_namespaces": [
+      "Aspose.Slides",
+      "Aspose.Slides.*",
+      "System",
+      "System.*",
+      "System.Drawing",
+      "System.Drawing.*",
+      "System.Threading.Tasks",
+      "System.Collections.Concurrent"
+    ],
+    "blacklist": []
+  },
+  "patterns": [],
+  "non_existent_apis": [],
+  "api_patterns": {},
+  "persistent_fix": {
+    "enabled": true,
+    "max_iterations": 10,
+    "iterations_per_model": 3,
+    "max_time_seconds": 300,
+    "enable_immediate_patching": true,
+    "enable_context_inference": true
+  },
+  "dependency_resolution": {
+    "enabled": true,
+    "confidence_threshold": 0.7
+  }
+}

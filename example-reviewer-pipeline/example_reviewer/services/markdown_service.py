@@ -1,0 +1,307 @@
+"""
+Markdown Update Service for Example Reviewer Pipeline.
+Implements Phase D: Markdown Update (Inline/Gist).
+"""
+
+import re
+import uuid
+import difflib
+import logging
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Tuple
+
+from ..core.models import ExampleRecord, ExampleStatus, MarkdownEdit, SourceType
+from ..core.database import Database
+
+logger = logging.getLogger(__name__)
+
+
+class MarkdownUpdateService:
+    """
+    Service for updating markdown files with verified code.
+    Implements the D_markdown_update phase from the spec.
+    """
+    
+    def __init__(
+        self,
+        db: Database,
+        artifacts_dir: Optional[Path] = None,
+    ):
+        """
+        Initialize markdown update service.
+        
+        Args:
+            db: Database instance
+            artifacts_dir: Directory for storing diff artifacts
+        """
+        self.db = db
+        self.artifacts_dir = artifacts_dir or Path("artifacts/diffs")
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+    
+    def update_markdown_file(
+        self,
+        file_path: str,
+        dry_run: bool = False,
+    ) -> Tuple[bool, List[Dict[str, Any]]]:
+        """
+        Update a markdown file with verified examples.
+        
+        Args:
+            file_path: Path to markdown file
+            dry_run: If True, don't actually write changes
+            
+        Returns:
+            Tuple of (success, list of changes made)
+        """
+        # Get all verified examples for this file
+        examples = self.db.get_examples_by_file(file_path)
+        verified_examples = [
+            e for e in examples 
+            if e.status in (ExampleStatus.VERIFIED, ExampleStatus.MD_UPDATED)
+            and e.verified_code
+        ]
+        
+        if not verified_examples:
+            return True, []
+        
+        # Read original file
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+        except Exception as e:
+            logger.error(f"Failed to read {file_path}: {e}")
+            return False, []
+        
+        # Apply updates
+        updated_content = original_content
+        changes = []
+        
+        for example in verified_examples:
+            if example.source_type == SourceType.INLINE:
+                result = self._update_inline_example(
+                    updated_content, example
+                )
+            else:
+                result = self._update_gist_example(
+                    updated_content, example
+                )
+            
+            if result:
+                updated_content, change_info = result
+                changes.append(change_info)
+        
+        if not changes:
+            return True, []
+        
+        # Generate and store diff
+        diff = self._generate_diff(original_content, updated_content, file_path)
+        diff_ref = self._store_diff(file_path, diff)
+        
+        # Write updated file if not dry run
+        if not dry_run:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(updated_content)
+                
+                # Update example statuses
+                for example in verified_examples:
+                    self.db.update_example_status(example.example_id, ExampleStatus.MD_UPDATED)
+                    
+                    # Record edit
+                    edit = MarkdownEdit(
+                        edit_id=str(uuid.uuid4())[:8],
+                        file_path=file_path,
+                        example_id=example.example_id,
+                        edit_type="inline_replace" if example.source_type == SourceType.INLINE else "gist_replace",
+                        diff_ref=diff_ref,
+                    )
+                    self.db.create_markdown_edit(edit)
+                    
+            except Exception as e:
+                logger.error(f"Failed to write {file_path}: {e}")
+                return False, changes
+        
+        return True, changes
+    
+    def _update_inline_example(
+        self,
+        content: str,
+        example: ExampleRecord,
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """
+        Update an inline code block in content.
+        
+        Uses location metadata to ensure safe replacement.
+        """
+        lines = content.split('\n')
+        
+        start_line = example.location.start_line - 1  # 0-indexed
+        end_line = example.location.end_line - 1
+        
+        # Validate we're replacing the right block
+        if start_line >= len(lines) or end_line >= len(lines):
+            logger.warning(f"Location out of bounds for {example.example_id}")
+            return None
+        
+        # Find the actual fence boundaries
+        fence_start = None
+        fence_end = None
+        
+        # Look backwards from start_line for opening fence
+        for i in range(start_line, max(0, start_line - 5), -1):
+            if lines[i].startswith('```'):
+                fence_start = i
+                break
+        
+        # Look forwards from end_line for closing fence
+        for i in range(end_line, min(len(lines), end_line + 5)):
+            if lines[i].startswith('```') and i > fence_start:
+                fence_end = i
+                break
+        
+        if fence_start is None or fence_end is None:
+            logger.warning(f"Could not find fence boundaries for {example.example_id}")
+            return None
+        
+        # Extract language from opening fence
+        opening_fence = lines[fence_start]
+        lang_match = re.match(r'^```(\w*).*$', opening_fence)
+        language = lang_match.group(1) if lang_match else 'cs'
+        
+        # Build replacement
+        new_lines = [
+            f"```{language}",
+            example.verified_code,
+            "```"
+        ]
+        
+        # Replace the block
+        result_lines = (
+            lines[:fence_start] +
+            new_lines +
+            lines[fence_end + 1:]
+        )
+        
+        return '\n'.join(result_lines), {
+            'example_id': example.example_id,
+            'type': 'inline_replace',
+            'start_line': fence_start + 1,
+            'end_line': fence_end + 1,
+            'language': language,
+        }
+    
+    def _update_gist_example(
+        self,
+        content: str,
+        example: ExampleRecord,
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """
+        Update a gist reference in content.
+        
+        For gist examples, we may need to:
+        1. Keep the shortcode but update the gist ID if we uploaded new code
+        2. Replace the shortcode with inline code
+        """
+        if not example.gist:
+            return None
+        
+        # Find the gist shortcode
+        pattern = re.compile(
+            r'\{\{<\s*gist\s+' + re.escape(example.gist.owner) + 
+            r'\s+' + re.escape(example.gist.gist_id) +
+            r'(?:\s+["\']?[^"\'>\s]+["\']?)?\s*>\}\}',
+            re.IGNORECASE
+        )
+        
+        match = pattern.search(content)
+        if not match:
+            logger.warning(f"Could not find gist shortcode for {example.example_id}")
+            return None
+        
+        # For now, replace with inline code block
+        # In production, you might upload to a new gist instead
+        replacement = f"```csharp\n{example.verified_code}\n```"
+        
+        result = content[:match.start()] + replacement + content[match.end():]
+        
+        return result, {
+            'example_id': example.example_id,
+            'type': 'gist_to_inline',
+            'original_gist': f"{example.gist.owner}/{example.gist.gist_id}",
+        }
+    
+    def _generate_diff(
+        self,
+        original: str,
+        updated: str,
+        file_path: str,
+    ) -> str:
+        """Generate unified diff between original and updated content."""
+        original_lines = original.splitlines(keepends=True)
+        updated_lines = updated.splitlines(keepends=True)
+        
+        diff = difflib.unified_diff(
+            original_lines,
+            updated_lines,
+            fromfile=f"a/{file_path}",
+            tofile=f"b/{file_path}",
+        )
+        
+        return ''.join(diff)
+    
+    def _store_diff(self, file_path: str, diff: str) -> str:
+        """Store diff as artifact and return reference."""
+        # Create safe filename from path
+        safe_name = Path(file_path).name.replace('.', '_')
+        diff_id = str(uuid.uuid4())[:8]
+        diff_filename = f"{safe_name}_{diff_id}.diff"
+        
+        diff_path = self.artifacts_dir / diff_filename
+        diff_path.write_text(diff, encoding='utf-8')
+        
+        return str(diff_path)
+    
+    def update_all_files(
+        self,
+        family: str,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Update all markdown files with verified examples for a family.
+        
+        Args:
+            family: Family identifier
+            dry_run: If True, don't actually write changes
+            
+        Returns:
+            Statistics dictionary
+        """
+        stats = {
+            'files_processed': 0,
+            'files_updated': 0,
+            'examples_updated': 0,
+            'errors': 0,
+        }
+        
+        # Get all verified examples for family
+        examples = self.db.get_examples_by_family(family, ExampleStatus.VERIFIED)
+        
+        # Group by file
+        files_to_update = {}
+        for example in examples:
+            if example.file_path not in files_to_update:
+                files_to_update[example.file_path] = []
+            files_to_update[example.file_path].append(example)
+        
+        for file_path, file_examples in files_to_update.items():
+            stats['files_processed'] += 1
+            
+            success, changes = self.update_markdown_file(file_path, dry_run)
+            
+            if success and changes:
+                stats['files_updated'] += 1
+                stats['examples_updated'] += len(changes)
+            elif not success:
+                stats['errors'] += 1
+        
+        return stats
