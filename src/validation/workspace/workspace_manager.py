@@ -730,6 +730,118 @@ class ExecutionResult
 
         return errors
 
+    def _stage_required_files(self, exec_workdir: Path) -> bool:
+        """
+        Stage required files from test-data/<family>/ to execution workdir.
+        Apply file aliases by creating copies.
+
+        Args:
+            exec_workdir: Execution working directory
+
+        Returns:
+            True if staging successful, False otherwise
+        """
+        import shutil
+
+        runtime_config = self.family_config.get('runtime_validation', {})
+        required_files = runtime_config.get('required_files', [])
+        file_aliases = runtime_config.get('file_aliases', {})
+
+        if not required_files:
+            return True
+
+        # Source directory for test data
+        test_data_dir = self.workspaces_root.parent / "test-data" / self.family
+
+        if not test_data_dir.exists():
+            print(f"[!] Test data directory not found: {test_data_dir}")
+            return False
+
+        try:
+            for required_file in required_files:
+                source_path = test_data_dir / required_file
+
+                if not source_path.exists():
+                    print(f"[!] Required file not found: {source_path}")
+                    return False
+
+                # Determine if source is file or directory
+                if source_path.is_file():
+                    # Copy file to workdir
+                    dest_path = exec_workdir / required_file
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source_path, dest_path)
+
+                    # Create alias copies
+                    aliases = file_aliases.get(required_file, [])
+                    for alias in aliases:
+                        alias_path = exec_workdir / alias
+                        alias_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source_path, alias_path)
+
+                elif source_path.is_dir():
+                    # Copy directory recursively
+                    dest_path = exec_workdir / required_file
+                    if dest_path.exists():
+                        shutil.rmtree(dest_path)
+                    shutil.copytree(source_path, dest_path)
+
+                    # Create alias copies for directory
+                    aliases = file_aliases.get(required_file, [])
+                    for alias in aliases:
+                        alias_path = exec_workdir / alias
+                        if alias_path.exists():
+                            shutil.rmtree(alias_path)
+                        shutil.copytree(source_path, alias_path)
+
+            return True
+
+        except Exception as e:
+            print(f"[!] Failed to stage files: {e}")
+            return False
+
+    def _validate_expected_outputs(self, exec_workdir: Path) -> Tuple[bool, str]:
+        """
+        Validate that expected output files exist and are non-empty.
+
+        Args:
+            exec_workdir: Execution working directory
+
+        Returns:
+            Tuple of (success, message)
+        """
+        import glob
+
+        runtime_config = self.family_config.get('runtime_validation', {})
+        expected_outputs = runtime_config.get('expected_outputs', [])
+
+        if not expected_outputs:
+            return True, "No expected outputs to validate"
+
+        all_matches = []
+        for pattern in expected_outputs:
+            # Convert pattern to absolute path for glob
+            pattern_path = str(exec_workdir / pattern)
+            matches = glob.glob(pattern_path, recursive=True)
+
+            # Filter out directories, only keep files
+            file_matches = [m for m in matches if Path(m).is_file()]
+            all_matches.extend(file_matches)
+
+        if not all_matches:
+            return False, f"No output files matched expected patterns: {expected_outputs}"
+
+        # Check that all matched files are non-empty
+        empty_files = []
+        for file_path in all_matches:
+            if Path(file_path).stat().st_size == 0:
+                empty_files.append(file_path)
+
+        if empty_files:
+            return False, f"Output files are empty: {empty_files}"
+
+        return True, f"Found {len(all_matches)} valid output file(s)"
+
     def execute_code(self, code: str, exec_params: Optional[Dict] = None) -> Tuple[bool, Dict, str]:
         """
         Execute code in isolated subprocess with timeout.
@@ -753,6 +865,16 @@ class ExecutionResult
         exec_id = str(uuid.uuid4())[:8]
         exec_workdir = self.workspace_dir / "execution" / exec_id
         exec_workdir.mkdir(parents=True, exist_ok=True)
+
+        # Stage required files and apply aliases
+        if not self._stage_required_files(exec_workdir):
+            return False, {
+                'success': False,
+                'exit_code': 1,
+                'stderr': 'Failed to stage required files',
+                'exception_type': 'StagingException',
+                'exception_message': 'Required test files could not be staged'
+            }, 'Staging failed'
 
         # Create temp file for code
         with tempfile.NamedTemporaryFile(mode='w', suffix='.cs', delete=False, encoding='utf-8') as f:
@@ -839,6 +961,25 @@ class ExecutionResult
                     }
 
                 success = exec_json.get('Success', False)
+
+                # Validate expected outputs if execution succeeded
+                if success:
+                    output_valid, output_msg = self._validate_expected_outputs(exec_workdir)
+                    if not output_valid:
+                        # Execution succeeded but output validation failed
+                        exec_json['Success'] = False
+                        exec_json['OutputValidation'] = output_msg
+                        success = False
+                    else:
+                        exec_json['OutputValidation'] = output_msg
+
+                # Clean up execution workspace after validation
+                try:
+                    import shutil
+                    shutil.rmtree(exec_workdir, ignore_errors=True)
+                except:
+                    pass
+
                 return success, exec_json, raw_output
 
             except subprocess.TimeoutExpired as e:
@@ -880,9 +1021,10 @@ class ExecutionResult
             except:
                 pass
 
-            # Clean up execution workspace
+            # Clean up execution workspace (in case of exceptions before normal cleanup)
             try:
                 import shutil
-                shutil.rmtree(exec_workdir, ignore_errors=True)
+                if exec_workdir.exists():
+                    shutil.rmtree(exec_workdir, ignore_errors=True)
             except:
                 pass

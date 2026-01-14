@@ -24,6 +24,168 @@ tests/
 
 ---
 
+## Runtime Samples
+
+### Overview
+
+Runtime validation tests execute compiled C# code snippets in isolated environments to verify they run without runtime exceptions. Test samples are staged automatically from the `test-data/<family>/` directory.
+
+### Test Data Organization
+
+```
+test-data/
+├── zip/
+│   ├── manifest.json          # SHA256 hashes + file metadata
+│   ├── sample.zip             # Primary test archive
+│   ├── sample_dir/            # Sample directory for testing
+│   │   ├── readme.txt
+│   │   ├── data.txt
+│   │   └── subfolder/
+│   │       └── nested.txt
+│   └── ... (other test files)
+```
+
+### File Staging
+
+The `WorkspaceManager` automatically stages required files before code execution:
+
+**Configuration** ([config/families/zip.json](config/families/zip.json:75-80)):
+
+```json
+{
+  "runtime_validation": {
+    "required_files": ["sample.zip", "sample_dir"],
+    "file_aliases": {
+      "sample.zip": ["input.zip", "archive.zip", "example.zip"],
+      "sample_dir": ["input", "data", "sourceDir"]
+    },
+    "expected_outputs": ["*.zip", "output/*.zip", "*.7z"]
+  }
+}
+```
+
+**Staging Process:**
+
+1. Files copied from `test-data/zip/` to execution workspace
+2. Aliases created as copies (e.g., `sample.zip` → `input.zip`, `archive.zip`, etc.)
+3. Code executes in isolated workspace with staged files
+4. Output files validated against `expected_outputs` patterns
+
+### File Aliases
+
+Aliases prevent `FileNotFoundException` by providing multiple filename variants:
+
+```csharp
+// Snippet might reference any of these:
+using var archive = new Archive("input.zip");      // Works
+using var archive = new Archive("archive.zip");    // Works
+using var archive = new Archive("example.zip");    // Works
+using var archive = new Archive("sample.zip");     // Original - also works
+```
+
+All aliases point to the same source file, staged automatically before execution.
+
+### Expected Outputs
+
+Output validation ensures snippets produce valid files:
+
+- **Pattern matching**: Glob patterns like `*.zip`, `output/*.zip`
+- **File existence**: At least one file matches each pattern
+- **Non-empty check**: Matched files must have size > 0
+
+Example validation failure:
+
+```
+Output validation failed: No output files matched expected patterns: ['*.zip']
+```
+
+### Sample Manifest
+
+[test-data/zip/manifest.json](test-data/zip/manifest.json):
+
+```json
+{
+  "description": "Test data for ZIP runtime validation",
+  "files": [
+    {
+      "name": "sample.zip",
+      "type": "archive",
+      "sha256": "2c8b37de2f71dc6e451075959431eebe75636bc3ce627b54e0791bbfbc93324b",
+      "size_bytes": 636
+    },
+    {
+      "name": "sample_dir/readme.txt",
+      "type": "text",
+      "sha256": "27124218cf2d06b7590bbfe827c46e7a0e8ad08d8bf02d8d2b3e1c4a1c62156c",
+      "size_bytes": 266
+    }
+  ]
+}
+```
+
+### Adding New Test Samples
+
+To add test samples for a new family:
+
+1. Create `test-data/<family>/` directory
+2. Add sample files (keep binaries small, < 1MB recommended)
+3. Create `manifest.json` with SHA256 hashes
+4. Update `config/families/<family>.json`:
+   ```json
+   {
+     "runtime_validation": {
+       "required_files": ["sample.ext"],
+       "file_aliases": {
+         "sample.ext": ["input.ext", "test.ext"]
+       },
+       "expected_outputs": ["*.ext"]
+     }
+   }
+   ```
+
+### Execution Workflow
+
+```
+1. WorkspaceManager.execute_code() called
+2. Create isolated workspace: workspaces/<family>/execution/<uuid>/
+3. Stage required_files from test-data/<family>/
+4. Create file aliases (copies on Windows, symlinks on Unix)
+5. Compile code (if not already compiled)
+6. Execute in subprocess with timeout
+7. Capture stdout/stderr/exit code
+8. Validate expected_outputs exist and are non-empty
+9. Return ExecutionResult JSON
+10. Clean up workspace
+```
+
+### Example: ZIP Runtime Test
+
+**Snippet code:**
+
+```csharp
+using Aspose.Zip;
+using var archive = new Archive();
+archive.CreateEntry("test.txt", "input.zip");  // References alias
+archive.Save("output.zip");
+```
+
+**Staged files:**
+- `sample.zip` (original)
+- `input.zip` (alias → `sample.zip`)
+- `archive.zip` (alias → `sample.zip`)
+- `example.zip` (alias → `sample.zip`)
+- `sample_dir/` (directory with contents)
+- `input/` (alias → `sample_dir/`)
+
+**Expected outputs:**
+- `*.zip` → Validates `output.zip` exists and size > 0
+
+**Result:**
+- ✅ Execution succeeds
+- ✅ Output validation passes (`output.zip` found, 324 bytes)
+
+---
+
 ## Running Tests
 
 ### Run All Tests

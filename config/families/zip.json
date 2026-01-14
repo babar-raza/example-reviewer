@@ -72,9 +72,12 @@
     "enabled": true,
     "mode": "strict",
     "timeout_seconds": 10,
-    "required_files": [],
-    "file_aliases": {},
-    "expected_outputs": ["*.zip"],
+    "required_files": ["sample.zip", "sample_dir"],
+    "file_aliases": {
+      "sample.zip": ["input.zip", "archive.zip", "example.zip", "source.zip"],
+      "sample_dir": ["input", "data", "sourceDir", "files"]
+    },
+    "expected_outputs": ["*.zip", "output/*.zip", "*.7z"],
     "env": {}
   }
 }
