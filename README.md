@@ -14,21 +14,27 @@ This project provides automated tools to:
 ## Project Structure
 
 ```
-scripts/example-reviewer/
-├── src/
-│   ├── page_scanner.py          # Scans pages and catalogs code examples
-│   ├── example_fixer.py          # Fixes common issues in code examples
-│   ├── review_orchestrator.py   # Orchestrates systematic review
-│   └── review_inmemory_blog.py  # Specific fix for the in-memory blog post
-├── test-examples/
-│   ├── AsposeZipValidator.csproj # C# project for validation
-│   └── Program.cs                # Validator that compiles examples
-├── reports/
-│   ├── page_catalog.json         # Catalog of all pages with examples
-│   ├── pages_with_issues.json   # Pages flagged with potential issues
-│   ├── manual_review_needed.json # Examples requiring manual review
-│   └── review_report_*.json     # Timestamped review reports
-└── validation-results/           # Validation output files
+example-reviewer/
+├── src/                          # Source code (hybrid package architecture)
+│   ├── core/                     # Core functionality (database, config, telemetry)
+│   ├── discovery/                # Content discovery and snippet extraction
+│   ├── validation/               # Compilation and runtime validation
+│   ├── patching/                 # Content patching and publishing
+│   ├── api_reference/            # API reference handling
+│   ├── llm/                      # LLM integration (Ollama)
+│   ├── legacy/                   # Legacy code (deprecated)
+│   └── cli.py                    # Command-line interface
+├── content/                      # Documentation content (Aspose.NET sites)
+├── config/families/              # Family configurations (zip.json, pdf.json, etc.)
+├── data/                         # Database and artifacts
+├── workspaces/                   # .NET compilation workspaces
+├── test-data/                    # Sample files for runtime validation
+├── tests/                        # Test suite (pytest)
+├── docs/                         # User documentation
+├── specs/                        # Technical specifications
+├── reports/                      # Validation and runtime reports
+├── schema.sql                    # SQLite database schema
+└── pytest.ini                    # Test configuration
 ```
 
 ## Documentation
@@ -55,85 +61,101 @@ Comprehensive guides for using and maintaining the Example Reviewer:
 
 ### Setup
 
-1. The project structure is already in place at `scripts/example-reviewer/`
-
-2. Install Python dependencies (if any):
+1. Clone the repository and navigate to the project directory:
    ```bash
-   cd scripts/example-reviewer
-   pip install -r requirements.txt  # If you create one
+   cd example-reviewer
    ```
 
-3. Restore .NET packages:
+2. Install Python dependencies:
    ```bash
-   cd test-examples
-   dotnet restore
+   # Install production dependencies
+   python -m pip install -r requirements.txt
+
+   # Install development/testing dependencies (optional)
+   python -m pip install -r requirements-dev.txt
+   ```
+
+3. Initialize the database:
+   ```bash
+   python -m src.cli init-db
+   ```
+
+4. Test the installation:
+   ```bash
+   # Run tests
+   pytest -q
+
+   # Run runtime validation tests (requires .NET SDK)
+   pytest -m runtime
    ```
 
 ## Usage
 
-### 1. Scan All Pages
+### 1. Discover Code Snippets
 
-Find all Aspose.ZIP pages and catalog their code examples:
+Scan content and extract code snippets into the database:
 
 ```bash
-cd scripts/example-reviewer
-python src/page_scanner.py
+# Discover snippets for a specific family
+python -m src.cli discover --family zip
+
+# Discover with page limit for testing
+python -m src.cli discover --family zip --max-pages 5
 ```
 
 **Output:**
-- `reports/page_catalog.json` - Full catalog of all pages and examples
-- `reports/pages_with_issues.json` - Pages with detected issues
+- Database records in `data/examples.db`
+- Console summary of pages and snippets found
 
-**Statistics from latest scan:**
-- Total pages: 368
-- Pages with examples: 172
-- Total examples: 1,401
-- Pages with potential issues: 1
+### 2. Validate Code Snippets
 
-### 2. Review and Fix Examples
-
-Systematically review all examples:
+Compile and optionally execute snippets to verify correctness:
 
 ```bash
-cd scripts/example-reviewer
-python src/review_orchestrator.py
-```
+# Validate snippets (compilation only)
+python -m src.cli validate --family zip
 
-**Options in the script:**
-- `max_pages=None` - Review all pages, or set a number for testing
-- `update_files=False` - Set to `True` to actually update the files
+# Validate with runtime execution (strict mode)
+python -m src.cli validate --family zip --max-snippets 10
 
-**Output:**
-- `reports/review_report_TIMESTAMP.json` - Comprehensive review results
-- `reports/manual_review_needed.json` - Examples needing manual attention
-
-### 3. Fix Specific Issues
-
-Fix the in-memory ZIP blog post (mentioned in the email):
-
-```bash
-cd scripts/example-reviewer
-python src/review_inmemory_blog.py
+# Validate specific snippet by ID
+python -m src.cli validate --family zip --snippet-ids 123,456
 ```
 
 **Output:**
-- `content/.../index.md.fixed` - Fixed version of the file
-- Console output showing all detected issues
+- Database records updated with validation status
+- Compilation errors logged
+- Runtime execution results (if enabled)
 
-### 4. Validate Individual Examples
+### 3. Patch Validated Snippets
 
-Test a specific code snippet:
+Apply verified fixes back to documentation:
 
 ```bash
-cd scripts/example-reviewer/test-examples
-dotnet run -- validate-file path/to/code.cs
+# Patch snippets for a family
+python -m src.cli patch --family zip
+
+# Dry-run mode (preview changes without applying)
+python -m src.cli patch --family zip --dry-run
 ```
 
-Check API availability:
+**Output:**
+- Modified content files with verified code
+- Git branch with changes (if auto-commit enabled)
+
+### 4. Query Database
+
+Inspect discovered snippets and validation results:
 
 ```bash
-dotnet run -- check-api SaveAsync
-dotnet run -- check-api DeflateCompressionSettings
+# Count snippets by status
+sqlite3 data/examples.db "SELECT status, COUNT(*) FROM snippets GROUP BY status"
+
+# View runtime failures
+sqlite3 data/examples.db "SELECT * FROM execution_results WHERE success = 0"
+
+# Get validation statistics
+python -m src.cli stats --family zip
 ```
 
 ## Common Issues Detected and Fixed

@@ -2,7 +2,9 @@
 
 ## Overview
 
-The Example Reviewer uses SQLite for persistence with SQLAlchemy ORM. The schema is designed for tracking the complete lifecycle of code snippets from discovery through validation to patching.
+The Example Reviewer uses SQLite for persistence with WAL mode enabled for crash resilience. The schema is designed for tracking the complete lifecycle of code snippets from discovery through validation to patching and runtime execution.
+
+**Note:** The system uses raw SQLite connections via the `sqlite3` module (not SQLAlchemy ORM). Database operations are performed using parameterized queries and managed through the `src/core/database.py` module.
 
 ## Entity-Relationship Diagram
 
@@ -95,29 +97,37 @@ VALUES (
 
 Represents individual code snippets extracted from pages.
 
-| Column         | Type      | Constraints           | Description                          |
-|----------------|-----------|-----------------------|--------------------------------------|
-| snippet_id     | INTEGER   | PRIMARY KEY AUTOINCR  | Unique snippet identifier            |
-| page_id        | INTEGER   | FOREIGN KEY NOT NULL  | Reference to pages.page_id           |
-| original_code  | TEXT      | NOT NULL              | Code as found in markdown            |
-| verified_code  | TEXT      | NULL                  | Fixed/verified code (if available)   |
-| locator_json   | TEXT      | NOT NULL              | JSON locator metadata                |
-| status         | TEXT      | NOT NULL              | verified \| needs_fix \| error       |
-| created_at     | TIMESTAMP | NOT NULL              | Snippet creation time                |
-| updated_at     | TIMESTAMP | NOT NULL              | Last modification time               |
+| Column             | Type      | Constraints           | Description                          |
+|--------------------|-----------|-----------------------|--------------------------------------|
+| snippet_id         | INTEGER   | PRIMARY KEY AUTOINCR  | Unique snippet identifier            |
+| page_id            | INTEGER   | FOREIGN KEY NOT NULL  | Reference to pages.page_id           |
+| snippet_ordinal    | INTEGER   | NOT NULL              | Position within page (1-indexed)     |
+| locator_json       | TEXT      | NOT NULL              | JSON locator metadata                |
+| snippet_type       | TEXT      | NOT NULL              | 'fence' or 'gist'                    |
+| language           | TEXT      | NULL                  | Code language (e.g., 'csharp')       |
+| status             | TEXT      | NOT NULL              | unverified \| verified \| needs-fix \| skipped |
+| first_seen_at      | TEXT      | NOT NULL              | First discovery time                 |
+| last_validated_at  | TEXT      | NULL                  | Last validation time                 |
+| validation_attempts| INTEGER   | DEFAULT 0             | Number of validation attempts        |
+| created_at         | TEXT      | NOT NULL              | Snippet creation time                |
+| updated_at         | TEXT      | NOT NULL              | Last modification time               |
 
 **Indexes**:
-- `idx_snippets_page_id` on `page_id`
+- `idx_snippets_page` on `page_id`
 - `idx_snippets_status` on `status`
+- `idx_snippets_type` on `snippet_type`
 
 **Foreign Keys**:
 - `page_id` REFERENCES `pages(page_id)` ON DELETE CASCADE
 
+**Unique Constraints**:
+- UNIQUE(`page_id`, `snippet_ordinal`) - One snippet per position per page
+
 **Status Values**:
-- `discovered`: Newly found, not yet validated
-- `verified`: Compiles successfully
-- `needs_fix`: Compilation failed but fixable
-- `error`: Compilation failed, cannot fix
+- `unverified`: Newly found, not yet validated
+- `verified`: Compiles and (optionally) executes successfully
+- `needs-fix`: Compilation or runtime validation failed
+- `skipped`: Excluded from validation
 
 **Example Row**:
 ```sql
@@ -204,6 +214,79 @@ VALUES (
   NULL,
   '2026-01-09 16:05:00',
   1.234
+);
+```
+
+### execution_results
+
+**Added in Schema Version 6 (2026-01-14)**
+
+Stores runtime execution results for snippets that undergo runtime validation (Stage 4.5).
+
+| Column            | Type      | Constraints           | Description                          |
+|-------------------|-----------|-----------------------|--------------------------------------|
+| execution_id      | INTEGER   | PRIMARY KEY AUTOINCR  | Unique execution identifier          |
+| snippet_id        | INTEGER   | FOREIGN KEY NOT NULL  | Reference to snippets.snippet_id     |
+| run_id            | INTEGER   | FOREIGN KEY NOT NULL  | Reference to runs.run_id             |
+| success           | BOOLEAN   | NOT NULL              | True if execution succeeded          |
+| exit_code         | INTEGER   | NULL                  | Process exit code                    |
+| duration_ms       | INTEGER   | NULL                  | Execution time in milliseconds       |
+| stdout            | TEXT      | NULL                  | Standard output from execution       |
+| stderr            | TEXT      | NULL                  | Standard error from execution        |
+| exception_type    | TEXT      | NULL                  | Exception type if thrown             |
+| exception_message | TEXT      | NULL                  | Exception message                    |
+| stack_trace       | TEXT      | NULL                  | Full stack trace if available        |
+| output_files_json | TEXT      | NULL                  | JSON list of created output files    |
+| memory_peak_kb    | INTEGER   | NULL                  | Peak memory usage in KB              |
+| created_at        | TEXT      | NOT NULL              | Execution timestamp                  |
+
+**Indexes**:
+- `idx_execution_results_snippet` on (`snippet_id`, `run_id`)
+- `idx_execution_results_success` on `success`
+- `idx_execution_results_created` on `created_at`
+
+**Foreign Keys**:
+- `snippet_id` REFERENCES `snippets(snippet_id)` ON DELETE CASCADE
+- `run_id` REFERENCES `runs(run_id)` ON DELETE CASCADE
+
+**Example Row** (successful execution):
+```sql
+INSERT INTO execution_results (
+    snippet_id, run_id, success, exit_code, duration_ms,
+    stdout, stderr, exception_type, exception_message, created_at
+)
+VALUES (
+    42,
+    5,
+    1,
+    0,
+    1234,
+    'Archive created successfully. Size: 324 bytes',
+    '',
+    NULL,
+    NULL,
+    '2026-01-14 10:30:00'
+);
+```
+
+**Example Row** (runtime failure):
+```sql
+INSERT INTO execution_results (
+    snippet_id, run_id, success, exit_code, duration_ms,
+    stdout, stderr, exception_type, exception_message, stack_trace, created_at
+)
+VALUES (
+    43,
+    5,
+    0,
+    1,
+    156,
+    'Starting execution...',
+    '',
+    'System.ObjectDisposedException',
+    'Cannot access a disposed object.\nObject name: ''MemoryStream''.',
+    'at System.IO.MemoryStream.Read(...)\nat Aspose.Zip.Archive..ctor(...)',
+    '2026-01-14 10:31:00'
 );
 ```
 
@@ -304,33 +387,42 @@ WHERE s.status = 'verified'
 
 ### Schema Creation
 
-The schema is automatically created on first run using SQLAlchemy's `create_all()` method based on the ORM models in `database.py`.
+The schema is created using the `schema.sql` file in the repository root. On first initialization, run:
 
-**Initial Migration** (executed automatically):
+```bash
+python -m src.cli init-db
+```
+
+This executes the SQL script via:
 ```python
-from database import Base, engine
-Base.metadata.create_all(engine)
+from src.core.database import Database
+
+db = Database("data/examples.db")
+db.connect()
+
+with open("schema.sql", 'r') as f:
+    db._conn.executescript(f.read())
+db._conn.commit()
 ```
 
 ### Schema Updates
 
 For schema changes after initial deployment:
 
-1. **Add Column** (e.g., add `fix_attempts` to snippets):
+1. **Update schema.sql** with new table/column definitions
+2. **Add migration SQL** to the bottom of `schema.sql`:
 ```sql
+-- Schema version 7: Add fix_attempts column
 ALTER TABLE snippets ADD COLUMN fix_attempts INTEGER DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_snippets_fix_attempts ON snippets(fix_attempts);
+
+INSERT OR IGNORE INTO schema_version (version, description)
+VALUES (7, 'Add fix_attempts tracking');
 ```
 
-2. **Add Index**:
-```sql
-CREATE INDEX idx_snippets_fix_attempts ON snippets(fix_attempts);
-```
-
-3. **Update ORM Model** in `database.py`:
-```python
-class Snippet(Base):
-    # ... existing columns ...
-    fix_attempts = Column(Integer, default=0)
+3. **Re-run initialization** on existing databases (ALTER TABLE is safe):
+```bash
+python -m src.cli init-db
 ```
 
 ### Data Migration Example
@@ -338,26 +430,38 @@ class Snippet(Base):
 Populate missing locator_json for old snippets:
 
 ```python
-from database import Database, Snippet
-from snippet_locator import SnippetLocator
+from src.core.database import Database
+from src.discovery.snippet_locator import SnippetLocator
 import json
 
-db = Database("data/snippets.db")
-with db.get_session() as session:
-    snippets = session.query(Snippet).filter(
-        Snippet.locator_json == None
-    ).all()
+db = Database("data/examples.db")
+db.connect()
 
-    for snippet in snippets:
-        locator = SnippetLocator.create_locator(
-            snippet.original_code,
-            snippet.page.relative_path,
-            heading_context=[],
-            snippet_ordinal=1
-        )
-        snippet.locator_json = json.dumps(locator)
+cursor = db._conn.cursor()
+cursor.execute("SELECT snippet_id, page_id FROM snippets WHERE locator_json IS NULL")
+snippets_to_fix = cursor.fetchall()
 
-    session.commit()
+for snippet_id, page_id in snippets_to_fix:
+    # Get page info
+    cursor.execute("SELECT relative_path FROM pages WHERE page_id = ?", (page_id,))
+    relative_path = cursor.fetchone()[0]
+
+    # Create locator
+    locator = SnippetLocator.create_locator(
+        snippet_code="",  # Would need to fetch actual code
+        file_path=relative_path,
+        heading_context=[],
+        snippet_ordinal=1
+    )
+
+    # Update snippet
+    cursor.execute(
+        "UPDATE snippets SET locator_json = ? WHERE snippet_id = ?",
+        (json.dumps(locator), snippet_id)
+    )
+
+db._conn.commit()
+db.close()
 ```
 
 ## Backup and Restore
@@ -481,9 +585,16 @@ with db.get_session() as session:
 
 ### SQL Injection Prevention
 
-- All queries use SQLAlchemy ORM (parameterized)
-- No raw SQL with user input
-- Prepared statements for custom queries
+- All queries use parameterized statements via `sqlite3`
+- No string concatenation in SQL
+- User input is always passed as query parameters:
+  ```python
+  # SAFE
+  cursor.execute("SELECT * FROM snippets WHERE snippet_id = ?", (snippet_id,))
+
+  # UNSAFE - Never do this
+  cursor.execute(f"SELECT * FROM snippets WHERE snippet_id = {snippet_id}")
+  ```
 
 ### Data Sanitization
 
@@ -499,31 +610,34 @@ with db.get_session() as session:
 
 ## Database Configuration
 
-### Connection String
+### Connection Setup
 
 ```python
-# Default
-DATABASE_URL = "sqlite:///data/snippets.db"
+from src.core.database import Database
 
-# With timeout and WAL mode
-DATABASE_URL = "sqlite:///data/snippets.db?timeout=30&journal_mode=WAL"
+# Initialize database connection
+db = Database("data/examples.db")
+db.connect()
+
+# Connection is established with:
+# - WAL mode enabled (PRAGMA journal_mode=WAL)
+# - Foreign keys enabled (PRAGMA foreign_keys=ON)
+# - Row factory set to sqlite3.Row for dict-like access
 ```
 
-### SQLAlchemy Engine Options
+### Connection Parameters
+
+The Database class manages connections with the following defaults:
 
 ```python
-from sqlalchemy import create_engine
+import sqlite3
 
-engine = create_engine(
-    DATABASE_URL,
-    echo=False,              # Don't log SQL
-    pool_pre_ping=True,      # Verify connections
-    pool_recycle=3600,       # Recycle connections hourly
-    connect_args={
-        "check_same_thread": False,  # Allow multi-threading
-        "timeout": 30                 # 30 second lock timeout
-    }
+self._conn = sqlite3.connect(
+    str(self.db_path),
+    timeout=30.0,           # 30 second lock timeout
+    check_same_thread=False # Allow multi-threading
 )
+self._conn.row_factory = sqlite3.Row  # Dict-like row access
 ```
 
 ## Monitoring

@@ -4,22 +4,69 @@
 
 This guide covers testing strategies, writing tests, and running the test suite for the Example Reviewer system.
 
+## Quick Start
+
+### Installing Dependencies
+
+```bash
+# Install production dependencies
+python -m pip install -r requirements.txt
+
+# Install development/testing dependencies
+python -m pip install -r requirements-dev.txt
+```
+
+**Key testing dependencies:**
+- `pytest>=7.4.0` - Test framework
+- `pytest-asyncio>=0.21.0` - Async test support
+- `pytest-mock>=3.12.0` - Mocking utilities
+- `pytest-timeout>=2.1.0` - Test timeout enforcement
+
+### Running Tests
+
+```bash
+# Run all tests (excluding integration tests by default)
+pytest
+
+# Run with quiet output
+pytest -q
+
+# Run all tests including integration tests
+pytest --integration
+
+# Run only runtime validation tests
+pytest -m runtime
+
+# Run specific test file
+pytest tests/test_runtime_validation.py
+
+# Run with verbose output
+pytest -v
+
+# Run specific test function
+pytest tests/test_runtime_validation.py::test_cli_init_db_creates_tables
+```
+
+**Test Markers:**
+- `integration` - Tests requiring GitHub API or external services (skipped by default)
+- `runtime` - Runtime validation tests that execute compiled C# code
+- `slow` - Tests taking longer than 5 seconds
+
+**Configuration:**
+Test configuration is managed in `pytest.ini` at the repository root. See that file for additional markers and settings.
+
 ## Test Structure
 
 ```
 tests/
-├── conftest.py                 # Shared fixtures
-├── test_database.py           # Database ORM tests
-├── test_discovery_service.py  # Discovery tests
-├── test_page_scanner.py       # Markdown parsing tests
-├── test_snippet_locator.py    # Locator creation tests
-├── test_validation_orchestrator.py  # Validation tests
-├── test_workspace_manager.py  # Workspace tests
-├── test_pattern_registry.py   # Pattern matching tests
-├── test_patching_service.py   # Patching tests
-└── integration/               # Integration tests
-    ├── test_full_pipeline.py
-    └── test_database_integration.py
+├── conftest.py                    # Shared fixtures and pytest configuration
+├── test_cli_paths.py             # CLI path resolution tests
+├── test_gist_*.py                # Gist-related tests
+├── test_runtime_validation.py    # Runtime validation tests
+├── test_telemetry.py             # Telemetry system tests
+├── test_config_normalization.py  # Configuration tests
+├── test_context_inference.py     # Context inference tests
+└── fixtures/                      # Test fixtures and sample data
 ```
 
 ---
