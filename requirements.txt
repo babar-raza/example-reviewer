@@ -1,5 +1,12 @@
 # Core dependencies
-# Python >= 3.8 required
+# Python >= 3.10 required
+
+# Pydantic for data validation
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# OpenAI for LLM integration
+openai>=1.0.0
 
 # HTTP
 requests>=2.31.0
