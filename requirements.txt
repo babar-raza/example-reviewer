@@ -1,9 +1,6 @@
 # Core dependencies
 # Python >= 3.8 required
 
-# Database
-sqlalchemy>=2.0.0
-
 # HTTP
 requests>=2.31.0
 
