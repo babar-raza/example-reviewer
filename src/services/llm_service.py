@@ -288,6 +288,7 @@ using (var archive = new Archive(settings))
         section_heading: Optional[str] = None,
         description_context: Optional[str] = None,
         topic: Optional[str] = None,
+        original_code: Optional[str] = None,
     ) -> LLMResponse:
         """
         Fix code using LLM with enhanced context.
@@ -304,6 +305,7 @@ using (var archive = new Archive(settings))
             section_heading: Markdown heading above the code block
             description_context: Paragraphs before the code block
             topic: Topic inferred from file path
+            original_code: Original code before any fixes (for anchoring)
 
         Returns:
             LLMResponse with fixed code
@@ -311,12 +313,14 @@ using (var archive = new Archive(settings))
         if context_type == "runtime":
             return self._fix_runtime_code(
                 code, error_logs, api_context, similar_examples, test_data_info,
-                family_config, scaffolding_hints, section_heading, description_context, topic
+                family_config, scaffolding_hints, section_heading, description_context, topic,
+                original_code
             )
         else:
             return self._fix_compile_code(
                 code, error_logs, api_context, similar_examples, family_config,
-                scaffolding_hints, section_heading, description_context, topic
+                scaffolding_hints, section_heading, description_context, topic,
+                original_code
             )
     
     def _get_api_patterns(self, family_config: Optional[Dict[str, Any]]) -> str:
@@ -359,6 +363,7 @@ using (var archive = new Archive(settings))
         section_heading: Optional[str] = None,
         description_context: Optional[str] = None,
         topic: Optional[str] = None,
+        original_code: Optional[str] = None,
     ) -> LLMResponse:
         """Fix compilation errors with enhanced context and minimal-change rules."""
 
@@ -406,9 +411,23 @@ If you cannot fix the code without major changes, return the original code uncha
             if description_context:
                 prompt_parts.append(f"Description: {description_context[:500]}")
 
+        # Add original code section if provided and different from current code
+        if original_code and original_code.strip() != code.strip():
+            prompt_parts.extend([
+                "",
+                "## Original Code (teaching intent reference):",
+                "```csharp",
+                original_code,
+                "```",
+                "",
+                "**CRITICAL**: The original code demonstrates a specific concept/feature.",
+                "Your fix MUST preserve this teaching intent.",
+                "Do NOT add features, error handling, or complexity beyond what's needed to make it compile/run.",
+            ])
+
         prompt_parts.extend([
             "",
-            "## Original Code:",
+            "## Current Code (to be fixed):",
             "```csharp",
             code,
             "```",
@@ -417,6 +436,36 @@ If you cannot fix the code without major changes, return the original code uncha
             "```",
             error_logs,
             "```",
+        ])
+
+        # Add Fix Instructions
+        prompt_parts.extend([
+            "",
+            "## Fix Instructions:",
+            "1. **Minimal Changes**: Make ONLY the changes needed to fix the errors",
+            "2. **Preserve Intent**: The fixed code must demonstrate the SAME concept as the original",
+            "3. **No Scope Creep**: Do NOT add error handling, validation, or features not in the original",
+            "4. **Teaching Clarity**: A reader should understand the same lesson from your fix",
+        ])
+
+        # Add BAD fixes examples
+        prompt_parts.extend([
+            "",
+            "## Examples of BAD fixes (scope creep):",
+            "❌ Adding try-catch blocks when original had none",
+            "❌ Adding File.Exists() checks when original assumed file exists",
+            "❌ Adding complex error messages when original used simple code",
+            "❌ Restructuring code into methods when original was inline",
+        ])
+
+        # Add GOOD fixes examples
+        prompt_parts.extend([
+            "",
+            "## Examples of GOOD fixes (minimal):",
+            "✅ Adding missing using statement",
+            "✅ Fixing typo in variable name",
+            "✅ Correcting API method signature",
+            "✅ Adding namespace qualification",
         ])
 
         # Add scaffolding hints if available
@@ -493,6 +542,7 @@ If you cannot fix the code without major changes, return the original code uncha
         section_heading: Optional[str] = None,
         description_context: Optional[str] = None,
         topic: Optional[str] = None,
+        original_code: Optional[str] = None,
     ) -> LLMResponse:
         """Fix runtime errors with enhanced context and minimal-change rules."""
 
@@ -541,9 +591,23 @@ If you cannot fix the code without major changes, return the original code uncha
             if description_context:
                 prompt_parts.append(f"Description: {description_context[:500]}")
 
+        # Add original code section if provided and different from current code
+        if original_code and original_code.strip() != code.strip():
+            prompt_parts.extend([
+                "",
+                "## Original Code (teaching intent reference):",
+                "```csharp",
+                original_code,
+                "```",
+                "",
+                "**CRITICAL**: The original code demonstrates a specific concept/feature.",
+                "Your fix MUST preserve this teaching intent.",
+                "Do NOT add features, error handling, or complexity beyond what's needed to make it compile/run.",
+            ])
+
         prompt_parts.extend([
             "",
-            "## Code:",
+            "## Current Code (to be fixed):",
             "```csharp",
             code,
             "```",
@@ -552,6 +616,36 @@ If you cannot fix the code without major changes, return the original code uncha
             "```",
             error_logs,
             "```",
+        ])
+
+        # Add Fix Instructions
+        prompt_parts.extend([
+            "",
+            "## Fix Instructions:",
+            "1. **Minimal Changes**: Make ONLY the changes needed to fix the errors",
+            "2. **Preserve Intent**: The fixed code must demonstrate the SAME concept as the original",
+            "3. **No Scope Creep**: Do NOT add error handling, validation, or features not in the original",
+            "4. **Teaching Clarity**: A reader should understand the same lesson from your fix",
+        ])
+
+        # Add BAD fixes examples
+        prompt_parts.extend([
+            "",
+            "## Examples of BAD fixes (scope creep):",
+            "❌ Adding try-catch blocks when original had none",
+            "❌ Adding File.Exists() checks when original assumed file exists",
+            "❌ Adding complex error messages when original used simple code",
+            "❌ Restructuring code into methods when original was inline",
+        ])
+
+        # Add GOOD fixes examples
+        prompt_parts.extend([
+            "",
+            "## Examples of GOOD fixes (minimal):",
+            "✅ Adding missing using statement",
+            "✅ Fixing typo in variable name",
+            "✅ Correcting API method signature",
+            "✅ Adding namespace qualification",
         ])
 
         if test_data_info:

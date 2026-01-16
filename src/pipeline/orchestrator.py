@@ -949,6 +949,7 @@ class PipelineOrchestrator:
                                 section_heading=example.section_heading,
                                 description_context=example.description_context,
                                 topic=example.topic,
+                                original_code=example.original_code,
                             )
                         else:
                             # True runtime error - use runtime fix prompts
@@ -968,6 +969,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                 section_heading=example.section_heading,
                                 description_context=example.description_context,
                                 topic=example.topic,
+                                original_code=example.original_code,
                             )
                         
                         if not llm_response.success or not llm_response.content:

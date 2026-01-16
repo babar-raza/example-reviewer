@@ -1,0 +1,30 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.2, pytest-9.0.2, pluggy-1.6.0 -- C:\Python313\python.exe
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+metadata: {'Python': '3.13.2', 'Platform': 'Windows-11-10.0.26220-SP0', 'Packages': {'pytest': '9.0.2', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.11.0', 'Faker': '40.1.0', 'langsmith': '0.4.37', 'locust': '2.43.0', 'asyncio': '1.2.0', 'base-url': '2.1.0', 'benchmark': '5.2.3', 'cov': '7.0.0', 'html': '4.1.1', 'httpx': '0.36.0', 'metadata': '3.1.1', 'mock': '3.15.1', 'playwright': '0.7.2', 'timeout': '2.4.0', 'xdist': '3.8.0'}, 'Base URL': ''}
+rootdir: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer
+configfile: pytest.ini
+plugins: anyio-4.11.0, Faker-40.1.0, langsmith-0.4.37, locust-2.43.0, asyncio-1.2.0, base-url-2.1.0, benchmark-5.2.3, cov-7.0.0, html-4.1.1, httpx-0.36.0, metadata-3.1.1, mock-3.15.1, playwright-0.7.2, timeout-2.4.0, xdist-3.8.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 17 items
+
+tests/test_anchored_prompts.py::TestPromptStructure::test_fix_code_accepts_original_code_parameter PASSED [  5%]
+tests/test_anchored_prompts.py::TestPromptStructure::test_fix_prompt_includes_original_code_section_when_different PASSED [ 11%]
+tests/test_anchored_prompts.py::TestPromptStructure::test_fix_prompt_includes_minimal_change_instruction PASSED [ 17%]
+tests/test_anchored_prompts.py::TestPromptStructure::test_fix_prompt_includes_intent_preservation_emphasis PASSED [ 23%]
+tests/test_anchored_prompts.py::TestPromptStructure::test_fix_prompt_includes_scope_creep_examples PASSED [ 29%]
+tests/test_anchored_prompts.py::TestPromptStructure::test_fix_prompt_includes_good_fix_examples PASSED [ 35%]
+tests/test_anchored_prompts.py::TestConditionalLogic::test_original_code_not_included_if_identical PASSED [ 41%]
+tests/test_anchored_prompts.py::TestConditionalLogic::test_original_code_not_included_if_none PASSED [ 47%]
+tests/test_anchored_prompts.py::TestConditionalLogic::test_original_code_included_if_different PASSED [ 52%]
+tests/test_anchored_prompts.py::TestBackwardCompatibility::test_backward_compatibility_without_original_code PASSED [ 58%]
+tests/test_anchored_prompts.py::TestRuntimePrompts::test_runtime_prompts_include_original_code PASSED [ 64%]
+tests/test_anchored_prompts.py::TestRuntimePrompts::test_runtime_prompts_include_minimal_change_instructions PASSED [ 70%]
+tests/test_anchored_prompts.py::TestPromptValidation::test_prompt_structure_valid PASSED [ 76%]
+tests/test_anchored_prompts.py::TestPromptValidation::test_csharp_code_blocks_properly_formatted PASSED [ 82%]
+tests/test_anchored_prompts.py::TestEdgeCases::test_empty_original_code PASSED [ 88%]
+tests/test_anchored_prompts.py::TestEdgeCases::test_very_long_original_code PASSED [ 94%]
+tests/test_anchored_prompts.py::TestEdgeCases::test_whitespace_only_difference PASSED [100%]
+
+============================= 17 passed in 38.96s =============================
