@@ -87,6 +87,16 @@
     ],
     "validatable_languages": ["cs", "csharp", "c#", "C#"],
     "normalize_to_canonical": true,
-    "regex_timeout_seconds": 5.0
+    "regex_timeout_seconds": 5.0,
+    "context_extraction": {
+      "enabled": true,
+      "max_paragraphs": 3,
+      "include_file_header": true
+    },
+    "gist_extraction": {
+      "enabled": true,
+      "allowed_owners": ["aspose-com-gists", "aspose-zip"],
+      "blocked_owners": []
+    }
   }
 }

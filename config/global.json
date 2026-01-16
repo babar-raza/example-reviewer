@@ -104,7 +104,28 @@
       "\\bvoid\\b",
       "\\busing\\b",
       "\\bnamespace\\b"
-    ]
+    ],
+    "context_extraction": {
+      "enabled": true,
+      "max_paragraphs": 2,
+      "max_heading_distance": 50,
+      "include_file_header": false,
+      "context_window_lines": 20,
+      "min_context_length": 10
+    },
+    "gist_extraction": {
+      "enabled": true,
+      "shortcode_patterns": [
+        "\\{\\{<\\s*gist\\s+([^\\s]+)\\s+([^\\s]+)(?:\\s+[\"']?([^\"'>\\s]+)[\"']?)?\\s*>\\}\\}",
+        "\\[gist:([^/]+)/([^/]+)(?:/([^\\]]+))?\\]"
+      ],
+      "script_patterns": [
+        "<script\\s+src=[\"']https://gist\\.github\\.com/([^/]+)/([^.]+)\\.js(?:\\?file=([^\"']+))?[\"']",
+        "<script\\s+src=[\"']https://gitlab\\.com/([^/]+)/-/snippets/([^/]+)\\.js[\"']"
+      ],
+      "allowed_owners": [],
+      "blocked_owners": []
+    }
   },
   "final_review": {
     "enabled": true,

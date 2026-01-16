@@ -70,7 +70,8 @@ class DiscoveryService:
         self.filter_stats = {
             'total_checked': 0,
             'filtered_out': 0,
-            'reasons': {}
+            'reasons': {},
+            'filtered_gists': 0,
         }
 
         # Get effective discovery patterns (family overrides global)
@@ -78,6 +79,10 @@ class DiscoveryService:
 
         # Compile fence patterns with safety checks
         self.compiled_fence_patterns = self._compile_fence_patterns()
+
+        # CD-03: Compile gist patterns with safety checks
+        self.compiled_gist_shortcode_patterns = self._compile_gist_shortcode_patterns()
+        self.compiled_gist_script_patterns = self._compile_gist_script_patterns()
 
     def _get_effective_discovery_patterns(self) -> DiscoveryPatternsConfig:
         """Get effective discovery patterns (family overrides global)."""
@@ -97,6 +102,34 @@ class DiscoveryService:
             except re.error as e:
                 logger.error(f"Failed to compile fence pattern '{pattern}': {e}")
         return compiled or [FENCE_PATTERN]  # Fallback to default if all fail
+
+    def _compile_gist_shortcode_patterns(self) -> List[Any]:
+        """Compile gist shortcode patterns with error handling."""
+        if not self.discovery_patterns.gist_extraction.enabled:
+            return []
+
+        compiled = self.discovery_patterns.gist_extraction.compile_shortcode_patterns()
+
+        # Fallback to hardcoded pattern if all fail
+        if not compiled:
+            logger.warning("All gist shortcode patterns failed to compile, using fallback")
+            compiled = [GIST_SHORTCODE_PATTERN]
+
+        return compiled
+
+    def _compile_gist_script_patterns(self) -> List[Any]:
+        """Compile gist script tag patterns with error handling."""
+        if not self.discovery_patterns.gist_extraction.enabled:
+            return []
+
+        compiled = self.discovery_patterns.gist_extraction.compile_script_patterns()
+
+        # Fallback to hardcoded pattern if all fail
+        if not compiled:
+            logger.warning("All gist script patterns failed to compile, using fallback")
+            compiled = [GIST_SCRIPT_PATTERN]
+
+        return compiled
 
     def normalize_language(self, language_tag: str) -> str:
         """Normalize language tag to canonical form."""
@@ -185,42 +218,42 @@ class DiscoveryService:
         """Get filter statistics."""
         return self.filter_stats.copy()
 
-    def _find_section_heading(self, lines: List[str], code_start: int) -> str:
+    def _extract_context(self, lines: List[str], code_start: int) -> Tuple[str, str]:
         """
-        Find the nearest markdown heading above the code block.
+        Extract context (heading and description) around code snippet with configurable settings.
 
         Args:
             lines: All lines of the markdown file
             code_start: Line index where the code block starts
 
         Returns:
-            The heading text (without # markers) or empty string
+            Tuple of (section_heading, description_context)
         """
-        for i in range(code_start - 1, -1, -1):
-            line = lines[i].strip()
+        config = self.discovery_patterns.context_extraction
+
+        # If context extraction is disabled, return empty strings
+        if not config.enabled:
+            return "", ""
+
+        # Calculate the context window boundaries
+        context_window_start = max(0, code_start - config.context_window_lines)
+        context_window = lines[context_window_start:code_start]
+
+        # Extract section heading within max_heading_distance
+        section_heading = ""
+        lines_to_check = min(len(context_window), config.max_heading_distance)
+        for i in range(lines_to_check):
+            line = context_window[-(i + 1)].strip()
             if line.startswith('#'):
-                # Extract heading text (remove # markers)
-                return line.lstrip('#').strip()
-        return ""
+                section_heading = line.lstrip('#').strip()
+                break
 
-    def _extract_description_context(self, lines: List[str], code_start: int, max_paragraphs: int = 2) -> str:
-        """
-        Extract paragraph text immediately before the code block.
-
-        Args:
-            lines: All lines of the markdown file
-            code_start: Line index where the code block starts
-            max_paragraphs: Maximum number of paragraphs to capture
-
-        Returns:
-            Combined paragraph text or empty string
-        """
+        # Extract paragraphs
         paragraphs = []
         current_paragraph = []
 
-        # Walk backwards from code block
-        for i in range(code_start - 1, -1, -1):
-            line = lines[i].strip()
+        for i in range(len(context_window) - 1, -1, -1):
+            line = context_window[i].strip()
 
             # Stop at headings or other code blocks
             if line.startswith('#') or line.startswith('```'):
@@ -231,16 +264,37 @@ class DiscoveryService:
                 if current_paragraph:
                     paragraphs.insert(0, ' '.join(reversed(current_paragraph)))
                     current_paragraph = []
-                    if len(paragraphs) >= max_paragraphs:
+                    if len(paragraphs) >= config.max_paragraphs:
                         break
             else:
                 current_paragraph.append(line)
 
         # Don't forget the last paragraph if not empty
-        if current_paragraph and len(paragraphs) < max_paragraphs:
+        if current_paragraph and len(paragraphs) < config.max_paragraphs:
             paragraphs.insert(0, ' '.join(reversed(current_paragraph)))
 
-        return '\n\n'.join(paragraphs)
+        description_context = '\n\n'.join(paragraphs)
+
+        # Include file header if configured
+        if config.include_file_header:
+            file_header = ""
+            for line in lines[:10]:  # Check first 10 lines
+                if line.strip().startswith('# '):
+                    file_header = line.strip().lstrip('#').strip()
+                    break
+
+            if file_header and file_header != section_heading:
+                # Prepend file header to description context
+                if description_context:
+                    description_context = f"File: {file_header}\n\n{description_context}"
+                else:
+                    description_context = f"File: {file_header}"
+
+        # Filter by minimum context length
+        if len(description_context) < config.min_context_length:
+            description_context = ""
+
+        return section_heading, description_context
 
     def _extract_topic_from_path(self, file_path: str) -> str:
         """
@@ -296,12 +350,17 @@ class DiscoveryService:
             'errors': 0,
             'snippets_filtered_out': 0,
             'filter_reasons': {},
+            'filtered_gists': 0,
         }
 
         # Update family config for this discovery run (enables family-specific overrides)
         self.family_config = family_config
         self.discovery_patterns = self._get_effective_discovery_patterns()
         self.compiled_fence_patterns = self._compile_fence_patterns()
+
+        # CD-03: Recompile gist patterns for family-specific overrides
+        self.compiled_gist_shortcode_patterns = self._compile_gist_shortcode_patterns()
+        self.compiled_gist_script_patterns = self._compile_gist_script_patterns()
 
         # Get files to process
         files = self._find_markdown_files(family_config)
@@ -335,8 +394,9 @@ class DiscoveryService:
         filter_stats = self.get_filter_stats()
         stats['snippets_filtered_out'] = filter_stats['filtered_out']
         stats['filter_reasons'] = filter_stats['reasons']
+        stats['filtered_gists'] = filter_stats['filtered_gists']
 
-        logger.info(f"Discovery complete: {stats['examples_found']} examples found, {stats['snippets_filtered_out']} filtered out")
+        logger.info(f"Discovery complete: {stats['examples_found']} examples found, {stats['snippets_filtered_out']} snippets filtered out, {stats['filtered_gists']} gists filtered out")
 
         return stats
 
@@ -439,8 +499,7 @@ class DiscoveryService:
                     # Extract content context for LLM relevance preservation
                     # code_start_line is 1-indexed, but we need 0-indexed for array access
                     fence_start_idx = code_start_line - 1  # Index of the ``` line
-                    section_heading = self._find_section_heading(lines, fence_start_idx)
-                    description_context = self._extract_description_context(lines, fence_start_idx)
+                    section_heading, description_context = self._extract_context(lines, fence_start_idx)
 
                     example = ExampleRecord(
                         family=family,
@@ -477,52 +536,115 @@ class DiscoveryService:
     ) -> List[ExampleRecord]:
         """Extract gist shortcode references with content context."""
         examples = []
+
+        # CD-03: Check if gist extraction is enabled
+        if not self.discovery_patterns.gist_extraction.enabled:
+            return examples
+
         lines = content.split('\n')
 
         # Extract topic once for the file
         topic = self._extract_topic_from_path(file_path)
 
-        # Hugo shortcode pattern: {{< gist owner id "filename" >}}
+        # CD-03: Use configurable shortcode patterns
         for i, line in enumerate(lines):
-            for match in GIST_SHORTCODE_PATTERN.finditer(line):
-                owner = match.group(1)
-                gist_id = match.group(2)
-                filename = match.group(3) or ""
+            # Try all configured shortcode patterns
+            for pattern in self.compiled_gist_shortcode_patterns:
+                for match in pattern.finditer(line):
+                    owner = match.group(1)
+                    gist_id = match.group(2)
+                    filename = match.group(3) if match.lastindex >= 3 else ""
+                    filename = filename or ""
 
-                # Generate example ID from gist reference
-                ref_str = f"{owner}/{gist_id}/{filename}"
-                example_id = hashlib.sha256(
-                    f"{file_path}:{ref_str}".encode()
-                ).hexdigest()[:16]
+                    # CD-03: Apply owner filtering
+                    should_include, filter_reason = self.discovery_patterns.gist_extraction.should_include_owner(owner)
+                    if not should_include:
+                        logger.debug(f"Filtered out gist {owner}/{gist_id} at {file_path}:{i+1} - {filter_reason}")
+                        self.filter_stats['filtered_gists'] += 1
+                        continue
 
-                # Extract content context
-                section_heading = self._find_section_heading(lines, i)
-                description_context = self._extract_description_context(lines, i)
+                    # Generate example ID from gist reference
+                    ref_str = f"{owner}/{gist_id}/{filename}"
+                    example_id = hashlib.sha256(
+                        f"{file_path}:{ref_str}".encode()
+                    ).hexdigest()[:16]
 
-                example = ExampleRecord(
-                    example_id=example_id,
-                    family=family,
-                    file_path=file_path,
-                    source_type=SourceType.GIST,
-                    language='csharp',  # Assume C# for now
-                    location=Location(
-                        block_index=-1,  # Not applicable for gists
-                        start_line=i + 1,
-                        end_line=i + 1,
-                    ),
-                    gist=GistInfo(
-                        owner=owner,
-                        gist_id=gist_id,
-                        filename=filename,
-                    ),
-                    original_code="",  # Will be fetched later
-                    status=ExampleStatus.DISCOVERED,
-                    # Content context fields
-                    section_heading=section_heading or None,
-                    description_context=description_context or None,
-                    topic=topic or None,
-                )
-                examples.append(example)
+                    # Extract content context
+                    section_heading, description_context = self._extract_context(lines, i)
+
+                    example = ExampleRecord(
+                        example_id=example_id,
+                        family=family,
+                        file_path=file_path,
+                        source_type=SourceType.GIST,
+                        language='csharp',  # Assume C# for now
+                        location=Location(
+                            block_index=-1,  # Not applicable for gists
+                            start_line=i + 1,
+                            end_line=i + 1,
+                        ),
+                        gist=GistInfo(
+                            owner=owner,
+                            gist_id=gist_id,
+                            filename=filename,
+                        ),
+                        original_code="",  # Will be fetched later
+                        status=ExampleStatus.DISCOVERED,
+                        # Content context fields
+                        section_heading=section_heading or None,
+                        description_context=description_context or None,
+                        topic=topic or None,
+                    )
+                    examples.append(example)
+
+            # CD-03: Try all configured script tag patterns
+            for pattern in self.compiled_gist_script_patterns:
+                for match in pattern.finditer(line):
+                    owner = match.group(1)
+                    gist_id = match.group(2)
+                    filename = match.group(3) if match.lastindex >= 3 else ""
+                    filename = filename or ""
+
+                    # CD-03: Apply owner filtering
+                    should_include, filter_reason = self.discovery_patterns.gist_extraction.should_include_owner(owner)
+                    if not should_include:
+                        logger.debug(f"Filtered out gist script {owner}/{gist_id} at {file_path}:{i+1} - {filter_reason}")
+                        self.filter_stats['filtered_gists'] += 1
+                        continue
+
+                    # Generate example ID from gist reference
+                    ref_str = f"{owner}/{gist_id}/{filename}"
+                    example_id = hashlib.sha256(
+                        f"{file_path}:{ref_str}".encode()
+                    ).hexdigest()[:16]
+
+                    # Extract content context
+                    section_heading, description_context = self._extract_context(lines, i)
+
+                    example = ExampleRecord(
+                        example_id=example_id,
+                        family=family,
+                        file_path=file_path,
+                        source_type=SourceType.GIST,
+                        language='csharp',  # Assume C# for now
+                        location=Location(
+                            block_index=-1,  # Not applicable for gists
+                            start_line=i + 1,
+                            end_line=i + 1,
+                        ),
+                        gist=GistInfo(
+                            owner=owner,
+                            gist_id=gist_id,
+                            filename=filename,
+                        ),
+                        original_code="",  # Will be fetched later
+                        status=ExampleStatus.DISCOVERED,
+                        # Content context fields
+                        section_heading=section_heading or None,
+                        description_context=description_context or None,
+                        topic=topic or None,
+                    )
+                    examples.append(example)
 
         return examples
     

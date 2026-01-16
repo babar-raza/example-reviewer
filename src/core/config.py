@@ -6,7 +6,7 @@ Uses Pydantic for validation and supports multi-family configurations.
 import os
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
@@ -104,6 +104,113 @@ class BackfillConfig(BaseModel):
     retry_on_failure: bool = Field(default=True)
 
 
+class ContextExtractionConfig(BaseModel):
+    """Configuration for context extraction around code snippets."""
+    enabled: bool = Field(
+        default=True,
+        description="Enable/disable context extraction"
+    )
+    max_paragraphs: int = Field(
+        default=2,
+        ge=0,
+        description="Maximum paragraphs of context before code"
+    )
+    max_heading_distance: int = Field(
+        default=50,
+        ge=1,
+        description="Max lines to look back for headings"
+    )
+    include_file_header: bool = Field(
+        default=False,
+        description="Include file-level header (first heading)"
+    )
+    context_window_lines: int = Field(
+        default=20,
+        ge=1,
+        description="Lines of context to capture before code"
+    )
+    min_context_length: int = Field(
+        default=10,
+        ge=0,
+        description="Minimum characters for context (filter too-short)"
+    )
+
+
+class GistPatternsConfig(BaseModel):
+    """Configuration for gist detection patterns."""
+    enabled: bool = Field(
+        default=True,
+        description="Enable/disable gist extraction"
+    )
+    shortcode_patterns: List[str] = Field(
+        default_factory=lambda: [
+            r'\{\{<\s*gist\s+([^\s]+)\s+([^\s]+)(?:\s+["\']?([^"\'>\s]+)["\']?)?\s*>\}\}',
+        ],
+        description="Regex patterns for gist shortcodes"
+    )
+    script_patterns: List[str] = Field(
+        default_factory=lambda: [
+            r'<script\s+src=["\']https://gist\.github\.com/([^/]+)/([^.]+)\.js(?:\?file=([^"\']+))?["\']',
+        ],
+        description="Regex patterns for gist script tags"
+    )
+    allowed_owners: List[str] = Field(
+        default_factory=list,
+        description="Whitelist of gist owners (empty = all allowed)"
+    )
+    blocked_owners: List[str] = Field(
+        default_factory=list,
+        description="Blacklist of gist owners"
+    )
+
+    def compile_shortcode_patterns(self) -> List[Any]:
+        """Compile shortcode patterns with error handling."""
+        import re
+        import logging
+        logger = logging.getLogger(__name__)
+
+        patterns = []
+        for pattern_str in self.shortcode_patterns:
+            try:
+                patterns.append(re.compile(pattern_str, re.IGNORECASE))
+            except re.error as e:
+                logger.warning(f"Failed to compile gist shortcode pattern '{pattern_str}': {e}")
+        return patterns
+
+    def compile_script_patterns(self) -> List[Any]:
+        """Compile script tag patterns with error handling."""
+        import re
+        import logging
+        logger = logging.getLogger(__name__)
+
+        patterns = []
+        for pattern_str in self.script_patterns:
+            try:
+                patterns.append(re.compile(pattern_str, re.IGNORECASE))
+            except re.error as e:
+                logger.warning(f"Failed to compile gist script pattern '{pattern_str}': {e}")
+        return patterns
+
+    def should_include_owner(self, owner: str) -> Tuple[bool, Optional[str]]:
+        """Check if gist owner should be included.
+
+        Args:
+            owner: Gist owner username
+
+        Returns:
+            Tuple of (should_include: bool, reason: Optional[str])
+        """
+        # Check blocked first
+        if owner in self.blocked_owners:
+            return False, f"blocked_owner:{owner}"
+
+        # Check allowed (empty = all allowed)
+        if self.allowed_owners and owner not in self.allowed_owners:
+            return False, "not_in_allowed_owners"
+
+        return True, None
+
+
 class DiscoveryPatternsConfig(BaseModel):
     """Discovery pattern configuration for code extraction."""
     fence_patterns: List[str] = Field(
@@ -161,6 +268,18 @@ class DiscoveryPatternsConfig(BaseModel):
             r"\bnamespace\b"
         ],
         description="Patterns indicating actual C# code (at least one must match)"
+    )
+
+    # CD-04: Context extraction configuration
+    context_extraction: ContextExtractionConfig = Field(
+        default_factory=ContextExtractionConfig,
+        description="Context extraction settings for code snippets"
+    )
+
+    # CD-03: Gist pattern detection configuration
+    gist_extraction: GistPatternsConfig = Field(
+        default_factory=GistPatternsConfig,
+        description="Gist pattern detection and filtering settings"
     )
 
 
