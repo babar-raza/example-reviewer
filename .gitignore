@@ -19,6 +19,7 @@ reports/*
 !reports/CODEX_*.md
 !reports/STATUS.md
 !reports/TASK_BACKLOG.md
+!reports/agents/
 
 # Build artifacts
 test-examples/bin/

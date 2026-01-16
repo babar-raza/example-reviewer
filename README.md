@@ -77,7 +77,11 @@ Comprehensive guides for using and maintaining the Example Reviewer:
 
 3. Initialize the database:
    ```bash
-   python -m src.cli init-db
+   # New way (recommended)
+   python -m cli init-db
+
+   # Old way (still works)
+   python -m src.cli.main init-db
    ```
 
 4. Test the installation:
@@ -91,16 +95,28 @@ Comprehensive guides for using and maintaining the Example Reviewer:
 
 ## Usage
 
+The CLI can be invoked in two ways:
+
+```bash
+# New way (recommended) - cleaner invocation
+python -m cli [command] [options]
+
+# Old way (still works) - backward compatible
+python -m src.cli.main [command] [options]
+```
+
+All examples below use the new invocation pattern.
+
 ### 1. Discover Code Snippets
 
 Scan content and extract code snippets into the database:
 
 ```bash
 # Discover snippets for a specific family
-python -m src.cli discover --family zip
+python -m cli discover --family zip
 
 # Discover with page limit for testing
-python -m src.cli discover --family zip --max-pages 5
+python -m cli discover --family zip --max-pages 5
 ```
 
 **Output:**
@@ -113,13 +129,13 @@ Compile and optionally execute snippets to verify correctness:
 
 ```bash
 # Validate snippets (compilation only)
-python -m src.cli validate --family zip
+python -m cli validate --family zip
 
 # Validate with runtime execution (strict mode)
-python -m src.cli validate --family zip --max-snippets 10
+python -m cli validate --family zip --max-snippets 10
 
 # Validate specific snippet by ID
-python -m src.cli validate --family zip --snippet-ids 123,456
+python -m cli validate --family zip --snippet-ids 123,456
 ```
 
 **Output:**
@@ -133,10 +149,10 @@ Apply verified fixes back to documentation:
 
 ```bash
 # Patch snippets for a family
-python -m src.cli patch --family zip
+python -m cli patch --family zip
 
 # Dry-run mode (preview changes without applying)
-python -m src.cli patch --family zip --dry-run
+python -m cli patch --family zip --dry-run
 ```
 
 **Output:**
@@ -155,7 +171,7 @@ sqlite3 data/examples.db "SELECT status, COUNT(*) FROM snippets GROUP BY status"
 sqlite3 data/examples.db "SELECT * FROM execution_results WHERE success = 0"
 
 # Get validation statistics
-python -m src.cli stats --family zip
+python -m cli stats --family zip
 ```
 
 ## Common Issues Detected and Fixed

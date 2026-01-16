@@ -51,3 +51,78 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "integration" in item.keywords:
             item.add_marker(skip_integration)
+
+
+# ============================================================================
+# CLI Test Fixtures
+# ============================================================================
+
+
+import json
+import tempfile
+
+
+@pytest.fixture
+def temp_workspace():
+    """
+    Create temporary workspace for CLI tests.
+
+    Provides isolated temporary directory with minimal config structure
+    for testing CLI commands without polluting the main workspace.
+
+    Yields:
+        Path: Temporary workspace directory path
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir)
+
+        # Create minimal directory structure
+        (workspace / 'config').mkdir()
+        (workspace / 'config' / 'families').mkdir()
+        (workspace / 'data').mkdir()
+        (workspace / 'workspace').mkdir()
+
+        # Create minimal global config
+        global_config = {
+            'llm_provider': 'openai',
+            'default_model': 'gpt-4',
+            'retry_attempts': 3,
+            'timeout': 300
+        }
+        (workspace / 'config' / 'global.json').write_text(
+            json.dumps(global_config, indent=2)
+        )
+
+        # Create minimal family config for testing
+        family_config = {
+            'family_id': 'test_family',
+            'product_name': 'Test Product',
+            'language': 'csharp',
+            'runtime': 'dotnet',
+            'content_paths': []
+        }
+        (workspace / 'config' / 'families' / 'test_family.json').write_text(
+            json.dumps(family_config, indent=2)
+        )
+
+        yield workspace
+        # Cleanup handled by TemporaryDirectory context manager
+
+
+@pytest.fixture
+def cli_env(temp_workspace):
+    """
+    Environment variables for CLI testing.
+
+    Args:
+        temp_workspace: Temporary workspace fixture
+
+    Returns:
+        dict: Environment variables for subprocess calls
+    """
+    import os
+    env = os.environ.copy()
+    env['EXAMPLE_REVIEWER_CONFIG'] = str(temp_workspace / 'config')
+    env['EXAMPLE_REVIEWER_DB'] = str(temp_workspace / 'data' / 'test.db')
+    env['EXAMPLE_REVIEWER_WORKSPACE'] = str(temp_workspace / 'workspace')
+    return env
