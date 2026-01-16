@@ -100,6 +100,181 @@ def clean_vector_db(args) -> ToolResult:
         )
 
 
+def visualize_drift(args) -> ToolResult:
+    """
+    Visualize drift distribution for a family.
+
+    NEW (ID-06): CLI command to show drift metrics and distribution.
+    """
+    from ..core.database import Database
+    from ..core.telemetry import export_drift_metrics
+
+    try:
+        # Initialize database
+        db = Database(Path(args.db_path))
+
+        # Get drift metrics
+        metrics = export_drift_metrics(db, args.family)
+
+        if args.format == 'json':
+            # JSON output
+            return ToolResult(
+                success=True,
+                data=metrics
+            )
+        else:
+            # ASCII output
+            output = _render_drift_visualization(metrics)
+            print(output)
+
+            return ToolResult(
+                success=True,
+                data=metrics
+            )
+
+    except Exception as e:
+        return ToolResult(
+            success=False,
+            error=f"Failed to visualize drift: {str(e)}"
+        )
+
+
+def show_drift_trends(args) -> ToolResult:
+    """
+    Show drift trends over recent runs.
+
+    NEW (ID-06): CLI command to analyze drift evolution.
+    """
+    from ..core.database import Database
+    from ..core.telemetry import get_drift_trends
+
+    try:
+        # Initialize database
+        db = Database(Path(args.db_path))
+
+        # Get trends
+        trends = get_drift_trends(db, args.family, args.last_n_runs)
+
+        # Render output
+        output = _render_drift_trends(trends, args.last_n_runs)
+        print(output)
+
+        return ToolResult(
+            success=True,
+            data=trends
+        )
+
+    except Exception as e:
+        return ToolResult(
+            success=False,
+            error=f"Failed to get drift trends: {str(e)}"
+        )
+
+
+def _render_drift_visualization(metrics: dict) -> str:
+    """
+    Render ASCII visualization of drift distribution.
+
+    Args:
+        metrics: Drift metrics dictionary
+
+    Returns:
+        ASCII art string
+    """
+    lines = []
+    lines.append(f"Drift Distribution (family: {metrics['family']})")
+    lines.append("=" * len(lines[0]))
+    lines.append("")
+
+    # Render histogram
+    distribution = metrics.get('drift_distribution', {})
+    if distribution:
+        # Find max count for scaling
+        max_count = max(distribution.values()) if distribution.values() else 1
+        bar_width = 50
+
+        for label in ['0.0-0.1', '0.1-0.2', '0.2-0.3', '0.3-0.4',
+                      '0.4-0.5', '0.5-0.6', '0.6-0.7', '0.7+']:
+            count = distribution.get(label, 0)
+            if max_count > 0:
+                bar_len = int((count / max_count) * bar_width)
+            else:
+                bar_len = 0
+            bar = '█' * bar_len
+            lines.append(f"{label:10} {bar} ({count})")
+
+    lines.append("")
+
+    # Render summary statistics
+    lines.append(f"Avg drift: {metrics.get('avg_drift', 0.0):.2f}")
+    lines.append(f"Median drift: {metrics.get('median_drift', 0.0):.2f}")
+    lines.append(f"P95 drift: {metrics.get('p95_drift', 0.0):.2f}")
+    lines.append(f"Max drift: {metrics.get('max_drift', 0.0):.2f}")
+    lines.append(f"Total examples: {metrics.get('count', 0)}")
+
+    return '\n'.join(lines)
+
+
+def _render_drift_trends(trends: dict, n_runs: int) -> str:
+    """
+    Render ASCII visualization of drift trends.
+
+    Args:
+        trends: Drift trends dictionary
+        n_runs: Number of runs requested
+
+    Returns:
+        ASCII art string
+    """
+    lines = []
+    lines.append(f"Drift Trends (family: {trends['family']}, last {n_runs} runs)")
+    lines.append("=" * len(lines[0]))
+    lines.append("")
+
+    runs = trends.get('runs', [])
+    if not runs:
+        lines.append("No runs found with drift data.")
+        return '\n'.join(lines)
+
+    # Render run-by-run data
+    for i, run in enumerate(runs):
+        run_num = i + 1
+        date = run.get('date', 'unknown')
+        avg_drift = run.get('avg_drift', 0.0)
+        max_drift = run.get('max_drift', 0.0)
+
+        # Determine trend arrow
+        arrow = ''
+        if i > 0:
+            prev_avg = runs[i - 1].get('avg_drift', 0.0)
+            if avg_drift < prev_avg:
+                arrow = '  ↓'
+            elif avg_drift > prev_avg:
+                arrow = '  ↑'
+            else:
+                arrow = '  →'
+
+        lines.append(f"Run {run_num} ({date}): Avg {avg_drift:.2f}, Max {max_drift:.2f}{arrow}")
+
+    lines.append("")
+
+    # Render overall trend
+    overall = trends.get('overall_trend', {})
+    direction = overall.get('direction', 'stable')
+    percentage = overall.get('percentage', 0.0)
+
+    if direction == 'down':
+        trend_text = f"{abs(percentage):.0f}% reduction in avg drift"
+    elif direction == 'up':
+        trend_text = f"{abs(percentage):.0f}% increase in avg drift"
+    else:
+        trend_text = "stable (no significant change)"
+
+    lines.append(f"Overall trend: {trend_text}")
+
+    return '\n'.join(lines)
+
+
 def main() -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -223,6 +398,23 @@ def main() -> int:
     clean_vector_db_parser.add_argument('--max-drift', type=float, default=0.3,
                                          help='Maximum drift score to keep (default: 0.3)')
 
+    # Visualize drift command (ID-06)
+    visualize_drift_parser = subparsers.add_parser('visualize-drift',
+                                                     help='Visualize drift distribution for a family')
+    visualize_drift_parser.add_argument('--family', '-f', type=str, required=True,
+                                         help='Family identifier')
+    visualize_drift_parser.add_argument('--format', type=str, default='ascii',
+                                         choices=['ascii', 'json'],
+                                         help='Output format (default: ascii)')
+
+    # Drift trends command (ID-06)
+    drift_trends_parser = subparsers.add_parser('drift-trends',
+                                                  help='Show drift trends over recent runs')
+    drift_trends_parser.add_argument('--family', '-f', type=str, required=True,
+                                      help='Family identifier')
+    drift_trends_parser.add_argument('--last-n-runs', type=int, default=10,
+                                      help='Number of recent runs to analyze (default: 10)')
+
     args = parser.parse_args()
     
     if not args.command:
@@ -318,6 +510,12 @@ def main() -> int:
 
     elif args.command == 'clean-vector-db':
         result = clean_vector_db(args)
+
+    elif args.command == 'visualize-drift':
+        result = visualize_drift(args)
+
+    elif args.command == 'drift-trends':
+        result = show_drift_trends(args)
 
     if result:
         print_result(result, args.json)
