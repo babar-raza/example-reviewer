@@ -512,7 +512,8 @@ class PipelineOrchestrator:
                                     'verified': False,  # Not runtime verified yet
                                     'compilable': True,
                                     'file_path': example.file_path,
-                                }
+                                },
+                                drift_score=None  # ID-05: No drift (compiled first try)
                             )
                         except Exception as e:
                             logger.debug(f"Failed to add compilable example to vector DB: {e}")
@@ -711,6 +712,11 @@ class PipelineOrchestrator:
                         # Store LLM-fixed compilable example in vector DB
                         if self.vector_db_service.is_available():
                             try:
+                                # Use final drift score (ID-05: Pass drift to vector DB)
+                                drift_to_store = None
+                                if self._drift_detector and global_config.drift.enabled:
+                                    drift_to_store = final_drift  # From lines 701-710
+
                                 self.vector_db_service.add_example(
                                     example_id=example.example_id,
                                     code=fixed_code,
@@ -721,7 +727,8 @@ class PipelineOrchestrator:
                                         'compilable': True,
                                         'file_path': example.file_path,
                                         'fix_attempt': attempt + 1,
-                                    }
+                                    },
+                                    drift_score=drift_to_store  # ID-05: Pass drift score
                                 )
                             except Exception as e:
                                 logger.debug(f"Failed to add LLM-fixed compilable example to vector DB: {e}")
@@ -868,7 +875,8 @@ class PipelineOrchestrator:
                                     'source': 'pipeline_runtime',
                                     'verified': True,
                                     'file_path': example.file_path,
-                                }
+                                },
+                                drift_score=None  # ID-05: No drift (verified first try)
                             )
                         except Exception as e:
                             logger.debug(f"Failed to add verified example to vector DB: {e}")
@@ -1096,6 +1104,11 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             # Store LLM-fixed verified example in vector DB
                             if self.vector_db_service.is_available():
                                 try:
+                                    # Use final drift score (ID-05: Pass drift to vector DB)
+                                    drift_to_store = None
+                                    if self._drift_detector and global_config.drift.enabled:
+                                        drift_to_store = final_drift  # From lines 1085-1095
+
                                     self.vector_db_service.add_example(
                                         example_id=example.example_id,
                                         code=fixed_code,
@@ -1106,7 +1119,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                             'file_path': example.file_path,
                                             'fix_attempt': attempt + 1,
                                             'used_similar_examples': len(similar_examples) > 0,
-                                        }
+                                        },
+                                        drift_score=drift_to_store  # ID-05: Pass drift score
                                     )
                                 except Exception as e:
                                     logger.debug(f"Failed to add LLM-fixed example to vector DB: {e}")

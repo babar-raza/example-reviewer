@@ -29,7 +29,7 @@ def print_result(result: ToolResult, json_output: bool = False) -> None:
         print(result.to_json())
     else:
         if result.success:
-            print("✓ Success")
+            print("[OK] Success")
             if result.data:
                 for key, value in result.data.items():
                     if isinstance(value, (dict, list)):
@@ -45,7 +45,59 @@ def print_result(result: ToolResult, json_output: bool = False) -> None:
                     else:
                         print(f"  {key}: {value}")
         else:
-            print(f"✗ Failed: {result.error}")
+            print(f"[FAIL] Failed: {result.error}")
+
+
+def clean_vector_db(args) -> ToolResult:
+    """
+    Clean high-drift examples from vector DB.
+
+    NEW (ID-05): CLI command to remove drifted examples that may cause contagion.
+    """
+    from ..core.database import Database
+    from ..services.vector_db_service import VectorDBService
+    from ..core.config import ConfigurationManager
+
+    try:
+        # Initialize database and config
+        db = Database(Path(args.db_path))
+        config_manager = ConfigurationManager(Path(args.config_dir))
+        global_config = config_manager.load_global_config()
+
+        # Initialize vector DB service
+        vector_db = VectorDBService(
+            persist_directory=global_config.vector_db.persist_directory,
+            embedding_model=global_config.vector_db.embedding_model,
+            enabled=global_config.vector_db.enabled,
+        )
+
+        if not vector_db.is_available():
+            return ToolResult(
+                success=False,
+                error="Vector DB not available (disabled or missing dependencies)"
+            )
+
+        # Clean high-drift examples
+        removed = vector_db.clean_high_drift(
+            family=args.family,
+            max_drift=args.max_drift
+        )
+
+        return ToolResult(
+            success=True,
+            data={
+                'family': args.family,
+                'max_drift': args.max_drift,
+                'removed_count': removed,
+                'message': f"Removed {removed} high-drift examples from vector DB"
+            }
+        )
+
+    except Exception as e:
+        return ToolResult(
+            success=False,
+            error=f"Failed to clean vector DB: {str(e)}"
+        )
 
 
 def main() -> int:
@@ -104,7 +156,15 @@ def main() -> int:
                                         help='Family identifier')
     runtime_verify_parser.add_argument('--max-examples', type=int,
                                         help='Maximum examples to verify')
-    
+
+    # Runtime fix command
+    runtime_fix_parser = subparsers.add_parser('runtime-fix',
+                                                help='Fix runtime errors with LLM')
+    runtime_fix_parser.add_argument('--family', '-f', type=str, required=True,
+                                     help='Family identifier')
+    runtime_fix_parser.add_argument('--max-examples', type=int,
+                                     help='Maximum examples to fix')
+
     # Markdown update command
     md_update_parser = subparsers.add_parser('md-update',
                                               help='Update markdown files')
@@ -144,7 +204,25 @@ def main() -> int:
     # List families command
     list_parser = subparsers.add_parser('list-families',
                                          help='List available families')
-    
+
+    # Backfill command
+    backfill_parser = subparsers.add_parser('backfill',
+                                             help='Backfill missing context data')
+    backfill_parser.add_argument('--family', '-f', type=str, required=True,
+                                  help='Family identifier')
+    backfill_parser.add_argument('--targets', '-t', type=str, nargs='+',
+                                  help='Backfill targets (test_data, api_reference, examples, gist_source_code)')
+    backfill_parser.add_argument('--force', action='store_true',
+                                  help='Force re-download even if data exists')
+
+    # Clean vector DB command (ID-05)
+    clean_vector_db_parser = subparsers.add_parser('clean-vector-db',
+                                                     help='Clean high-drift examples from vector DB')
+    clean_vector_db_parser.add_argument('--family', '-f', type=str, required=True,
+                                         help='Family identifier')
+    clean_vector_db_parser.add_argument('--max-drift', type=float, default=0.3,
+                                         help='Maximum drift score to keep (default: 0.3)')
+
     args = parser.parse_args()
     
     if not args.command:
@@ -193,7 +271,13 @@ def main() -> int:
             family=args.family,
             max_examples=args.max_examples,
         )
-    
+
+    elif args.command == 'runtime-fix':
+        result = tools.runtime_fix(
+            family=args.family,
+            max_examples=args.max_examples,
+        )
+
     elif args.command == 'md-update':
         result = tools.md_update(
             family=args.family,
@@ -224,11 +308,21 @@ def main() -> int:
             success=True,
             data={'families': families}
         )
-    
+
+    elif args.command == 'backfill':
+        result = tools.backfill(
+            family=args.family,
+            targets=args.targets,
+            force=args.force,
+        )
+
+    elif args.command == 'clean-vector-db':
+        result = clean_vector_db(args)
+
     if result:
         print_result(result, args.json)
         return 0 if result.success else 1
-    
+
     return 1
 
 
