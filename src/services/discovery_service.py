@@ -13,7 +13,7 @@ import fnmatch
 
 from ..core.models import ExampleRecord, ExampleStatus, SourceType, Location, GistInfo
 from ..core.database import Database
-from ..core.config import FamilyConfig
+from ..core.config import FamilyConfig, DiscoveryPatternsConfig, GlobalConfig
 
 logger = logging.getLogger(__name__)
 
@@ -43,21 +43,232 @@ class DiscoveryService:
     Service for discovering and extracting code examples from markdown files.
     Implements the A_discovery_extraction phase from the spec.
     """
-    
+
     def __init__(
         self,
         db: Database,
         content_roots: Optional[List[str]] = None,
+        filtering_config: Optional[DiscoveryPatternsConfig] = None,
+        global_config: Optional[GlobalConfig] = None,
+        family_config: Optional[FamilyConfig] = None,
     ):
         """
         Initialize discovery service.
-        
+
         Args:
             db: Database instance
             content_roots: List of content root directories to scan
+            filtering_config: Optional filtering configuration (uses defaults if not provided)
+            global_config: Global configuration
+            family_config: Family-specific configuration
         """
         self.db = db
         self.content_roots = content_roots or []
+        self.filtering_config = filtering_config or DiscoveryPatternsConfig()
+        self.global_config = global_config
+        self.family_config = family_config
+        self.filter_stats = {
+            'total_checked': 0,
+            'filtered_out': 0,
+            'reasons': {}
+        }
+
+        # Get effective discovery patterns (family overrides global)
+        self.discovery_patterns = self._get_effective_discovery_patterns()
+
+        # Compile fence patterns with safety checks
+        self.compiled_fence_patterns = self._compile_fence_patterns()
+
+    def _get_effective_discovery_patterns(self) -> DiscoveryPatternsConfig:
+        """Get effective discovery patterns (family overrides global)."""
+        if self.family_config and self.family_config.discovery_patterns:
+            return self.family_config.discovery_patterns
+        if self.global_config and self.global_config.discovery_patterns:
+            return self.global_config.discovery_patterns
+        # Fallback to defaults
+        return DiscoveryPatternsConfig()
+
+    def _compile_fence_patterns(self) -> List[Any]:
+        """Compile fence patterns with catastrophic backtracking prevention."""
+        compiled = []
+        for pattern in self.discovery_patterns.fence_patterns:
+            try:
+                compiled.append(re.compile(pattern, re.MULTILINE | re.DOTALL))
+            except re.error as e:
+                logger.error(f"Failed to compile fence pattern '{pattern}': {e}")
+        return compiled or [FENCE_PATTERN]  # Fallback to default if all fail
+
+    def normalize_language(self, language_tag: str) -> str:
+        """Normalize language tag to canonical form."""
+        if not self.discovery_patterns.normalize_to_canonical:
+            return language_tag
+
+        tag_lower = language_tag.lower()
+        for canonical, aliases in self.discovery_patterns.language_aliases.items():
+            if tag_lower in [a.lower() for a in aliases]:
+                return canonical
+
+        return language_tag
+
+    def _is_validatable_language(self, language_tag: str) -> bool:
+        """Check if language is validatable (after normalization)."""
+        normalized = self.normalize_language(language_tag)
+        validatable_lower = [lang.lower() for lang in self.discovery_patterns.validatable_languages]
+        return normalized.lower() in validatable_lower
+
+    def filter_snippet(self, code: str, config: Optional[DiscoveryPatternsConfig] = None) -> Tuple[bool, str]:
+        """
+        Filter snippet based on content rules.
+
+        Args:
+            code: Code content to filter
+            config: Optional filtering config (uses instance config if not provided)
+
+        Returns:
+            Tuple of (should_include: bool, reason: str)
+        """
+        if config is None:
+            config = self.filtering_config
+
+        self.filter_stats['total_checked'] += 1
+
+        # Line count check
+        lines = code.strip().split('\n')
+        line_count = len(lines)
+
+        if line_count < config.min_line_count:
+            reason = f"Too short ({line_count} lines < {config.min_line_count})"
+            self._track_filter_reason(reason)
+            return False, reason
+
+        if line_count > config.max_line_count:
+            reason = f"Too long ({line_count} lines > {config.max_line_count})"
+            self._track_filter_reason(reason)
+            return False, reason
+
+        # Content exclusion patterns
+        for pattern in config.content_exclude_patterns:
+            try:
+                if re.search(pattern, code, re.MULTILINE):
+                    reason = f"Matched exclusion pattern: {pattern}"
+                    self._track_filter_reason(reason)
+                    return False, reason
+            except re.error as e:
+                logger.warning(f"Invalid regex pattern '{pattern}': {e}")
+
+        # Require code indicators (at least one must match)
+        if config.require_code_indicators:
+            has_indicator = False
+            for pattern in config.require_code_indicators:
+                try:
+                    if re.search(pattern, code, re.MULTILINE | re.IGNORECASE):
+                        has_indicator = True
+                        break
+                except re.error as e:
+                    logger.warning(f"Invalid regex pattern '{pattern}': {e}")
+
+            if not has_indicator:
+                reason = "No C# code indicators found"
+                self._track_filter_reason(reason)
+                return False, reason
+
+        return True, "Passed all filters"
+
+    def _track_filter_reason(self, reason: str):
+        """Track filter reason for statistics."""
+        self.filter_stats['filtered_out'] += 1
+        if reason not in self.filter_stats['reasons']:
+            self.filter_stats['reasons'][reason] = 0
+        self.filter_stats['reasons'][reason] += 1
+
+    def get_filter_stats(self) -> Dict[str, Any]:
+        """Get filter statistics."""
+        return self.filter_stats.copy()
+
+    def _find_section_heading(self, lines: List[str], code_start: int) -> str:
+        """
+        Find the nearest markdown heading above the code block.
+
+        Args:
+            lines: All lines of the markdown file
+            code_start: Line index where the code block starts
+
+        Returns:
+            The heading text (without # markers) or empty string
+        """
+        for i in range(code_start - 1, -1, -1):
+            line = lines[i].strip()
+            if line.startswith('#'):
+                # Extract heading text (remove # markers)
+                return line.lstrip('#').strip()
+        return ""
+
+    def _extract_description_context(self, lines: List[str], code_start: int, max_paragraphs: int = 2) -> str:
+        """
+        Extract paragraph text immediately before the code block.
+
+        Args:
+            lines: All lines of the markdown file
+            code_start: Line index where the code block starts
+            max_paragraphs: Maximum number of paragraphs to capture
+
+        Returns:
+            Combined paragraph text or empty string
+        """
+        paragraphs = []
+        current_paragraph = []
+
+        # Walk backwards from code block
+        for i in range(code_start - 1, -1, -1):
+            line = lines[i].strip()
+
+            # Stop at headings or other code blocks
+            if line.startswith('#') or line.startswith('```'):
+                break
+
+            # Empty line signals paragraph break
+            if not line:
+                if current_paragraph:
+                    paragraphs.insert(0, ' '.join(reversed(current_paragraph)))
+                    current_paragraph = []
+                    if len(paragraphs) >= max_paragraphs:
+                        break
+            else:
+                current_paragraph.append(line)
+
+        # Don't forget the last paragraph if not empty
+        if current_paragraph and len(paragraphs) < max_paragraphs:
+            paragraphs.insert(0, ' '.join(reversed(current_paragraph)))
+
+        return '\n\n'.join(paragraphs)
+
+    def _extract_topic_from_path(self, file_path: str) -> str:
+        """
+        Extract topic from file path.
+
+        Args:
+            file_path: Path to the markdown file
+
+        Returns:
+            Human-readable topic string
+        """
+        # Get filename without extension
+        stem = Path(file_path).stem
+
+        # Handle index files - use parent directory name
+        if stem.lower() in ('index', '_index', 'readme'):
+            parent = Path(file_path).parent.name
+            stem = parent if parent else stem
+
+        # Convert hyphens/underscores to spaces, remove common prefixes
+        topic = stem.replace('-', ' ').replace('_', ' ')
+
+        # Remove common prefixes like "how to"
+        for prefix in ['how to ', 'how-to-']:
+            if topic.lower().startswith(prefix):
+                topic = topic[len(prefix):]
+
+        return topic.strip()
     
     def discover_family(
         self,
@@ -83,8 +294,15 @@ class DiscoveryService:
             'inline_examples': 0,
             'gist_examples': 0,
             'errors': 0,
+            'snippets_filtered_out': 0,
+            'filter_reasons': {},
         }
-        
+
+        # Update family config for this discovery run (enables family-specific overrides)
+        self.family_config = family_config
+        self.discovery_patterns = self._get_effective_discovery_patterns()
+        self.compiled_fence_patterns = self._compile_fence_patterns()
+
         # Get files to process
         files = self._find_markdown_files(family_config)
         stats['files_found'] = len(files)
@@ -108,13 +326,20 @@ class DiscoveryService:
                         stats['gist_examples'] += 1
                 
                 stats['files_processed'] += 1
-                
+
             except Exception as e:
                 logger.error(f"Error processing {file_path}: {e}")
                 stats['errors'] += 1
-        
+
+        # Add filter statistics
+        filter_stats = self.get_filter_stats()
+        stats['snippets_filtered_out'] = filter_stats['filtered_out']
+        stats['filter_reasons'] = filter_stats['reasons']
+
+        logger.info(f"Discovery complete: {stats['examples_found']} examples found, {stats['snippets_filtered_out']} filtered out")
+
         return stats
-    
+
     def _find_markdown_files(self, family_config: FamilyConfig) -> List[str]:
         """Find all markdown files matching family patterns."""
         files = []
@@ -172,16 +397,19 @@ class DiscoveryService:
         file_path: str,
         family: str
     ) -> List[ExampleRecord]:
-        """Extract inline fenced code blocks."""
+        """Extract inline fenced code blocks with content context."""
         examples = []
         lines = content.split('\n')
-        
+
+        # Extract topic once for the file
+        topic = self._extract_topic_from_path(file_path)
+
         block_index = 0
         in_code_block = False
         code_start_line = 0
         code_language = ''
         code_lines = []
-        
+
         for i, line in enumerate(lines):
             if line.startswith('```') and not in_code_block:
                 # Start of code block
@@ -189,19 +417,36 @@ class DiscoveryService:
                 code_start_line = i + 1
                 code_language = line[3:].strip().lower()
                 code_lines = []
-                
+
             elif line.startswith('```') and in_code_block:
                 # End of code block
                 in_code_block = False
                 code_content = '\n'.join(code_lines)
-                
-                # Only include validatable languages
-                if code_language in VALIDATABLE_LANGUAGES and code_content.strip():
+
+                # Only include validatable languages (using configurable patterns)
+                if self._is_validatable_language(code_language) and code_content.strip():
+                    # CD-02: Apply content-based filtering
+                    should_include, filter_reason = self.filter_snippet(code_content)
+
+                    if not should_include:
+                        logger.debug(f"Filtered out snippet at {file_path}:{code_start_line} - {filter_reason}")
+                        block_index += 1
+                        continue
+
+                    # Normalize language tag to canonical form
+                    normalized_language = self.normalize_language(code_language)
+
+                    # Extract content context for LLM relevance preservation
+                    # code_start_line is 1-indexed, but we need 0-indexed for array access
+                    fence_start_idx = code_start_line - 1  # Index of the ``` line
+                    section_heading = self._find_section_heading(lines, fence_start_idx)
+                    description_context = self._extract_description_context(lines, fence_start_idx)
+
                     example = ExampleRecord(
                         family=family,
                         file_path=file_path,
                         source_type=SourceType.INLINE,
-                        language=code_language,
+                        language=normalized_language,
                         location=Location(
                             block_index=block_index,
                             start_line=code_start_line,
@@ -209,15 +454,19 @@ class DiscoveryService:
                         ),
                         original_code=code_content,
                         status=ExampleStatus.DISCOVERED,
+                        # Content context fields
+                        section_heading=section_heading or None,
+                        description_context=description_context or None,
+                        topic=topic or None,
                     )
                     # Generate ID is called in model_post_init
                     examples.append(example)
-                
+
                 block_index += 1
-                
+
             elif in_code_block:
                 code_lines.append(line)
-        
+
         return examples
     
     def _extract_gist_examples(
@@ -226,23 +475,30 @@ class DiscoveryService:
         file_path: str,
         family: str
     ) -> List[ExampleRecord]:
-        """Extract gist shortcode references."""
+        """Extract gist shortcode references with content context."""
         examples = []
         lines = content.split('\n')
-        
+
+        # Extract topic once for the file
+        topic = self._extract_topic_from_path(file_path)
+
         # Hugo shortcode pattern: {{< gist owner id "filename" >}}
         for i, line in enumerate(lines):
             for match in GIST_SHORTCODE_PATTERN.finditer(line):
                 owner = match.group(1)
                 gist_id = match.group(2)
                 filename = match.group(3) or ""
-                
+
                 # Generate example ID from gist reference
                 ref_str = f"{owner}/{gist_id}/{filename}"
                 example_id = hashlib.sha256(
                     f"{file_path}:{ref_str}".encode()
                 ).hexdigest()[:16]
-                
+
+                # Extract content context
+                section_heading = self._find_section_heading(lines, i)
+                description_context = self._extract_description_context(lines, i)
+
                 example = ExampleRecord(
                     example_id=example_id,
                     family=family,
@@ -261,9 +517,13 @@ class DiscoveryService:
                     ),
                     original_code="",  # Will be fetched later
                     status=ExampleStatus.DISCOVERED,
+                    # Content context fields
+                    section_heading=section_heading or None,
+                    description_context=description_context or None,
+                    topic=topic or None,
                 )
                 examples.append(example)
-        
+
         return examples
     
     def discover_directory(

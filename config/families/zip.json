@@ -4,12 +4,10 @@
   "auto_commit": false,
   "commit_message_template": "fix(zip): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
-    "test-data/test-content"
+    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/zip"
   ],
   "content_pattern": {
-    "blog": "**/blog/**/index.md",
-    "docs": "**/docs/**/*.md",
-    "kb": "**/kb/**/*.md"
+    "blog": "**/index.md"
   },
   "nuget_config": {
     "primary_package": {
@@ -51,17 +49,26 @@
     "enabled": true,
     "mode": "lenient",
     "timeout_seconds": 30,
-    "required_files": ["sample.zip", "sample_dir"],
+    "required_files": ["sample.zip", "archive.zip", "outer.zip", "flatten.zip", "different_password.zip", "encrypted_password.zip", "encrypted.rar", "plrabn12.rar", "archive.7z", "archive.gz", "sample.gz", "alice29.txt", "sample.txt", "asyoulik.txt", "plrabn12.txt", "lcet10.txt", "sample_dir"],
     "file_aliases": {
-      "sample.zip": ["input.zip", "archive.zip", "example.zip", "source.zip", "ZipFileToBeExtracted.zip"],
-      "sample_dir": ["input", "data", "sourceDir", "files"],
-      "alice29.txt": ["file.txt", "source.txt", "input.txt"]
+      "sample.zip": ["input.zip", "example.zip", "source.zip", "ZipFileToBeExtracted.zip", "parent.zip"],
+      "archive.zip": ["test.zip", "data.zip"],
+      "plrabn12.rar": ["archive.rar", "input.rar", "example.rar", "sample.rar", "data.rar"],
+      "encrypted.rar": ["encrypted_archive.rar", "password_protected.rar"],
+      "archive.7z": ["input.7z", "protected.7z", "example.7z"],
+      "encrypted_password.zip": ["encrypted.zip"],
+      "different_password.zip": ["password_protected.zip", "secure.zip"],
+      "sample_dir": ["input", "data", "sourceDir", "files", "input_folder"],
+      "alice29.txt": ["file.txt", "source.txt", "input.txt", "file1.txt", "file2.txt"],
+      "sample.txt": ["data.txt", "readme.txt"],
+      "asyoulik.txt": ["text1.txt"],
+      "plrabn12.txt": ["text2.txt"]
     },
     "expected_outputs": ["*.zip", "output/*.zip", "*.7z"],
     "env": {}
   },
   "test_data": {
-    "local_path": "test-data/test-data/zip",
+    "local_path": "test-data/zip",
     "download_if_missing": false
   },
   "example_repo": {
@@ -73,5 +80,13 @@
   "api_reference": {
     "sources": ["test-data/test-reference/zip"],
     "cache_path": "./cache/api-reference/zip"
+  },
+  "discovery_patterns": {
+    "fence_patterns": [
+      "^```(\\w+|c#)\\s*\\n(.*?)^```"
+    ],
+    "validatable_languages": ["cs", "csharp", "c#", "C#"],
+    "normalize_to_canonical": true,
+    "regex_timeout_seconds": 5.0
   }
 }

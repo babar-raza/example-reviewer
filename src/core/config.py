@@ -41,8 +41,8 @@ class ResourceDetectionConfig(BaseModel):
 class GitConfig(BaseModel):
     """Git integration configuration."""
     enabled: bool = True
-    commit_message_template: str = "Verify examples: {family} ({count} files)"
-    commit_description_template: str = "Updated verified examples. RunId={run_id}"
+    commit_message_template: str = "chore({family}): verify {count} examples"
+    commit_description_template: str = "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}"
     only_commit_touched_files: bool = True
 
 
@@ -52,6 +52,16 @@ class GistConfig(BaseModel):
     target_account: str = ""
     auth_method: str = Field(default="none", pattern="^(pat|oauth|none)$")
     pat_env_var: str = "GIST_PAT"
+    upload_mode: str = Field(
+        default="inline-only",
+        pattern="^(upload-on-change|upload-always|inline-only)$",
+        description="Gist handling: upload-on-change, upload-always, or inline-only"
+    )
+    is_public: bool = Field(default=True, description="Create public or secret gists")
+    description_template: str = Field(
+        default="Verified example from {family} - {file_path}",
+        description="Template for gist descriptions"
+    )
 
 
 class TelemetryConfig(BaseModel):
@@ -59,6 +69,122 @@ class TelemetryConfig(BaseModel):
     internal_enabled: bool = True
     local_telemetry_enabled: bool = True
     local_telemetry_path: str = "./local-telemetry"
+    http_api_enabled: bool = True
+    http_api_url: str = "http://localhost:8765"
+    http_api_timeout_seconds: int = 10
+    http_api_retry_count: int = 3
+
+
+class VectorDBConfig(BaseModel):
+    """Vector database configuration for similarity search."""
+    enabled: bool = Field(default=False, description="Enable vector DB features")
+    provider: str = Field(default="chromadb", description="Vector DB provider")
+    embedding_model: str = Field(
+        default="all-MiniLM-L6-v2",
+        description="Sentence-transformers model for embeddings"
+    )
+    persist_directory: str = Field(default="./data/chroma", description="ChromaDB persist directory")
+    search_k: int = Field(default=3, ge=1, le=10, description="Number of similar examples to retrieve")
+    min_similarity_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Minimum similarity score (0.0-1.0)"
+    )
+
+
+class BackfillConfig(BaseModel):
+    """Backfill configuration for auto-downloading missing data."""
+    auto_enabled: bool = Field(default=False, description="Enable automatic backfill")
+    targets: List[str] = Field(
+        default_factory=lambda: ["test_data", "api_reference", "examples", "gist_source_code"],
+        description="Backfill targets (test_data, api_reference, examples, gist_source_code)"
+    )
+    github_timeout_seconds: int = Field(default=120, ge=10)
+    retry_on_failure: bool = Field(default=True)
+
+
+class DiscoveryPatternsConfig(BaseModel):
+    """Discovery pattern configuration for code extraction."""
+    fence_patterns: List[str] = Field(
+        default=["^```(\\w+|c#)\\s*\\n(.*?)^```"],
+        description="Regex patterns for code fence detection"
+    )
+    validatable_languages: List[str] = Field(
+        default=["cs", "csharp", "c#"],
+        description="Languages that should be validated"
+    )
+    language_aliases: Dict[str, List[str]] = Field(
+        default={
+            "csharp": ["cs", "c#", "C#", "csharp", "CSharp"],
+            "python": ["py", "python", "python3"]
+        },
+        description="Language normalization mapping"
+    )
+    normalize_to_canonical: bool = Field(
+        default=True,
+        description="Normalize language tags to canonical form"
+    )
+    regex_timeout_seconds: float = Field(
+        default=5.0,
+        ge=0.1,
+        le=30.0,
+        description="Regex execution timeout for safety"
+    )
+
+    # CD-02: Line count and content-based filtering
+    min_line_count: int = Field(
+        default=5,
+        ge=1,
+        description="Minimum lines to consider as code snippet"
+    )
+    max_line_count: int = Field(
+        default=500,
+        ge=1,
+        description="Maximum lines to consider as code snippet"
+    )
+    content_exclude_patterns: List[str] = Field(
+        default_factory=lambda: [
+            r"^[\s\n]*\{[\s\n]*[\"']",  # JSON object (starts with { followed by quote)
+            r"^\s*<\?xml",  # Starts with <?xml
+            r"^\s*Output:",  # Command output
+            r"^\s*\$\s+(dotnet|npm|node|python|pip|git|cd|ls|mkdir)",  # Shell commands
+        ],
+        description="Regex patterns for excluding non-code content"
+    )
+    require_code_indicators: List[str] = Field(
+        default_factory=lambda: [
+            r"\bclass\b",
+            r"\bpublic\b",
+            r"\bvoid\b",
+            r"\busing\b",
+            r"\bnamespace\b"
+        ],
+        description="Patterns indicating actual C# code (at least one must match)"
+    )
+
+
+class FinalReviewConfig(BaseModel):
+    """Final review phase configuration."""
+    enabled: bool = Field(default=True, description="Enable final LLM review phase")
+    auto_remediation_enabled: bool = Field(
+        default=False,
+        description="Enable automatic remediation of review issues (future feature)"
+    )
+    max_review_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Maximum re-review attempts per file"
+    )
+    strict_mode: bool = Field(
+        default=False,
+        description="In strict mode, any unresolved issue fails the review"
+    )
+    fail_on_critical: bool = Field(
+        default=True,
+        description="Fail review if critical issues are found"
+    )
 
 
 class GlobalConfig(BaseModel):
@@ -69,7 +195,11 @@ class GlobalConfig(BaseModel):
     git: GitConfig = Field(default_factory=GitConfig)
     gist: GistConfig = Field(default_factory=GistConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
-    
+    vector_db: VectorDBConfig = Field(default_factory=VectorDBConfig)
+    backfill: BackfillConfig = Field(default_factory=BackfillConfig)
+    discovery_patterns: DiscoveryPatternsConfig = Field(default_factory=DiscoveryPatternsConfig)
+    final_review: FinalReviewConfig = Field(default_factory=FinalReviewConfig)
+
     # Paths
     artifact_store_path: str = Field(default="./artifacts")
     database_path: str = Field(default="./data/example_reviewer.db")
@@ -152,7 +282,8 @@ class FamilyConfig(BaseModel):
     patterns: List[Dict[str, Any]] = Field(default_factory=list)
     api_patterns: Dict[str, Any] = Field(default_factory=dict)
     non_existent_apis: List[str] = Field(default_factory=list)
-    
+    discovery_patterns: Optional[DiscoveryPatternsConfig] = None
+
     def get_nuget_package_name(self) -> str:
         """Get primary NuGet package name."""
         if self.nuget_config:
@@ -230,13 +361,25 @@ class ConfigurationManager:
         
         if 'telemetry' in data:
             parsed['telemetry'] = TelemetryConfig(**data['telemetry'])
-        
+
+        if 'vector_db' in data:
+            parsed['vector_db'] = VectorDBConfig(**data['vector_db'])
+
+        if 'backfill' in data:
+            parsed['backfill'] = BackfillConfig(**data['backfill'])
+
+        if 'discovery_patterns' in data:
+            parsed['discovery_patterns'] = DiscoveryPatternsConfig(**data['discovery_patterns'])
+
+        if 'final_review' in data:
+            parsed['final_review'] = FinalReviewConfig(**data['final_review'])
+
         if 'artifact_store_path' in data:
             parsed['artifact_store_path'] = data['artifact_store_path']
-        
+
         if 'database_path' in data:
             parsed['database_path'] = data['database_path']
-        
+
         return GlobalConfig(**parsed)
     
     def _apply_env_overrides(self, config: GlobalConfig) -> GlobalConfig:
@@ -319,7 +462,11 @@ class ConfigurationManager:
         # API reference
         if 'api_reference' in data:
             parsed['api_reference'] = ApiReferenceConfig(**data['api_reference'])
-        
+
+        # Discovery patterns
+        if 'discovery_patterns' in data:
+            parsed['discovery_patterns'] = DiscoveryPatternsConfig(**data['discovery_patterns'])
+
         return FamilyConfig(**parsed)
     
     def list_families(self) -> List[str]:
