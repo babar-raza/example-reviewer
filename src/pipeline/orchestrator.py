@@ -531,6 +531,17 @@ class PipelineOrchestrator:
                 fixed = False
                 current_code = example.original_code
 
+                # Initialize drift detector (lazy, once per orchestrator)
+                if not hasattr(self, '_drift_detector'):
+                    from ..services.drift_detector import DriftDetector
+                    # Reuse embedding model from VectorDBService to avoid instantiation cost
+                    if self.vector_db_service.is_available() and self.vector_db_service._embedding_model:
+                        self._drift_detector = DriftDetector(self.vector_db_service._embedding_model)
+                        logger.debug("DriftDetector initialized with reused embedding model")
+                    else:
+                        self._drift_detector = None
+                        logger.warning("DriftDetector not available (vector DB or embedding model unavailable)")
+
                 # Load API reference context for LLM (LCE-01)
                 api_context = self._load_api_context(family_config)
                 if api_context:
@@ -581,7 +592,44 @@ class PipelineOrchestrator:
                     fixed_code = llm_response.content.strip()
                     if not fixed_code:
                         continue
-                    
+
+                    # Drift detection: Compare fixed code against ORIGINAL code
+                    if self._drift_detector and global_config.drift.enabled:
+                        drift_score, similarity = self._drift_detector.compute_drift(
+                            original_code=example.original_code,
+                            fixed_code=fixed_code
+                        )
+
+                        # Log drift score for observability
+                        if global_config.drift.log_all_drift_scores:
+                            logger.debug(
+                                f"Drift for {example.example_id} attempt {attempt+1}: "
+                                f"score={drift_score:.3f}, similarity={similarity:.3f}"
+                            )
+
+                        # Check threshold
+                        if drift_score > global_config.drift.threshold:
+                            logger.warning(
+                                f"Drift threshold exceeded for {example.example_id}: "
+                                f"{drift_score:.3f} > {global_config.drift.threshold}"
+                            )
+
+                            if global_config.drift.fail_on_exceed:
+                                # Store drift score and abort fix loop
+                                self.db.update_snippet(
+                                    example.example_id,
+                                    drift_score=drift_score,
+                                    drift_similarity=similarity
+                                )
+                                self.db.update_example_status(
+                                    example.example_id,
+                                    ExampleStatus.COMPILE_FAILED,
+                                    failure_reason=f"Drift threshold exceeded ({drift_score:.3f} > {global_config.drift.threshold})"
+                                )
+                                stats['failed'] += 1
+                                logger.info(f"Example {example.example_id} marked as compile-failed due to drift")
+                                break  # Exit retry loop
+
                     # Update example and retry compilation
                     example.compilable_code = fixed_code
                     success, result = self.compilation_service.compile_example(
@@ -648,6 +696,18 @@ class PipelineOrchestrator:
                         stats['compiled_with_fix'] += 1
                         self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE)
                         self.db.update_example_code(example.example_id, compilable_code=fixed_code)
+
+                        # Store final drift score for successful fix
+                        if self._drift_detector and global_config.drift.enabled:
+                            final_drift, final_sim = self._drift_detector.compute_drift(
+                                original_code=example.original_code,
+                                fixed_code=fixed_code
+                            )
+                            self.db.update_snippet(
+                                example.example_id,
+                                drift_score=final_drift,
+                                drift_similarity=final_sim
+                            )
                         # Store LLM-fixed compilable example in vector DB
                         if self.vector_db_service.is_available():
                             try:
@@ -905,8 +965,46 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                         if not llm_response.success or not llm_response.content:
                             logger.warning(f"LLM fix failed for {example.example_id}: {llm_response.error}")
                             break
-                        
+
                         fixed_code = llm_response.content
+
+                        # Drift detection: Compare fixed code against ORIGINAL code
+                        if self._drift_detector and global_config.drift.enabled:
+                            drift_score, similarity = self._drift_detector.compute_drift(
+                                original_code=example.original_code,
+                                fixed_code=fixed_code
+                            )
+
+                            # Log drift score for observability
+                            if global_config.drift.log_all_drift_scores:
+                                logger.debug(
+                                    f"Drift (runtime) for {example.example_id} attempt {attempt+1}: "
+                                    f"score={drift_score:.3f}, similarity={similarity:.3f}"
+                                )
+
+                            # Check threshold
+                            if drift_score > global_config.drift.threshold:
+                                logger.warning(
+                                    f"Drift threshold exceeded (runtime) for {example.example_id}: "
+                                    f"{drift_score:.3f} > {global_config.drift.threshold}"
+                                )
+
+                                if global_config.drift.fail_on_exceed:
+                                    # Store drift score and abort fix loop
+                                    self.db.update_snippet(
+                                        example.example_id,
+                                        drift_score=drift_score,
+                                        drift_similarity=similarity
+                                    )
+                                    self.db.update_example_status(
+                                        example.example_id,
+                                        ExampleStatus.RUNTIME_FAILED,
+                                        failure_reason=f"Drift threshold exceeded ({drift_score:.3f} > {global_config.drift.threshold})"
+                                    )
+                                    stats['failed'] += 1
+                                    logger.info(f"Example {example.example_id} marked as runtime-failed due to drift")
+                                    break  # Exit retry loop
+
                         example.verified_code = fixed_code
 
                         # Track previous result for cascading detection
@@ -983,6 +1081,18 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                 example.example_id,
                                 verified_code=fixed_code,
                             )
+
+                            # Store final drift score for successful fix
+                            if self._drift_detector and global_config.drift.enabled:
+                                final_drift, final_sim = self._drift_detector.compute_drift(
+                                    original_code=example.original_code,
+                                    fixed_code=fixed_code
+                                )
+                                self.db.update_snippet(
+                                    example.example_id,
+                                    drift_score=final_drift,
+                                    drift_similarity=final_sim
+                                )
                             # Store LLM-fixed verified example in vector DB
                             if self.vector_db_service.is_available():
                                 try:

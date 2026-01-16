@@ -14,7 +14,8 @@ from contextlib import contextmanager
 from .models import (
     ExampleRecord, ExampleStatus, SourceType, Location, GistInfo,
     CompileAttempt, RuntimeAttempt, MarkdownEdit, CommitRecord,
-    RunRecord, TelemetryEvent, EditType
+    RunRecord, TelemetryEvent, TelemetryRun, EditType,
+    ReviewResult, ReviewIssue, IssueSeverity, IssueType
 )
 
 logger = logging.getLogger(__name__)
@@ -55,13 +56,19 @@ class Database:
         status TEXT NOT NULL DEFAULT 'DISCOVERED',
         failure_reason TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        section_heading TEXT,
+        description_context TEXT,
+        topic TEXT,
+        drift_score REAL,
+        drift_similarity REAL
     );
     
     CREATE INDEX IF NOT EXISTS idx_examples_family ON example_records(family);
     CREATE INDEX IF NOT EXISTS idx_examples_status ON example_records(status);
     CREATE INDEX IF NOT EXISTS idx_examples_file_path ON example_records(file_path);
-    
+    CREATE INDEX IF NOT EXISTS idx_examples_drift ON example_records(drift_score);
+
     -- Compile attempts table
     CREATE TABLE IF NOT EXISTS compile_attempts (
         attempt_id TEXT PRIMARY KEY,
@@ -186,9 +193,114 @@ class Database:
         content TEXT NOT NULL,
         created_at TEXT NOT NULL
     );
-    
+
     CREATE INDEX IF NOT EXISTS idx_api_family ON api_reference_cache(family);
     CREATE INDEX IF NOT EXISTS idx_api_namespace ON api_reference_cache(namespace);
+
+    -- Review results table (Phase E: Final Review)
+    CREATE TABLE IF NOT EXISTS review_results (
+        review_id TEXT PRIMARY KEY,
+        file_path TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        family TEXT NOT NULL,
+        approved INTEGER NOT NULL DEFAULT 0,
+        review_attempt INTEGER DEFAULT 1,
+        llm_response TEXT,
+        timestamp TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_review_run ON review_results(run_id);
+    CREATE INDEX IF NOT EXISTS idx_review_file ON review_results(file_path);
+    CREATE INDEX IF NOT EXISTS idx_review_family ON review_results(family);
+
+    -- Review issues table (issues found during final review)
+    CREATE TABLE IF NOT EXISTS review_issues (
+        issue_id TEXT PRIMARY KEY,
+        review_id TEXT NOT NULL,
+        example_id TEXT NOT NULL,
+        issue_type TEXT NOT NULL DEFAULT 'other',
+        description TEXT NOT NULL,
+        suggestion TEXT,
+        severity TEXT DEFAULT 'warning',
+        resolved INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (review_id) REFERENCES review_results(review_id),
+        FOREIGN KEY (example_id) REFERENCES example_records(example_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_issue_review ON review_issues(review_id);
+    CREATE INDEX IF NOT EXISTS idx_issue_example ON review_issues(example_id);
+    CREATE INDEX IF NOT EXISTS idx_issue_severity ON review_issues(severity);
+
+    -- Gist publications table (track gist uploads)
+    CREATE TABLE IF NOT EXISTS gist_publications (
+        publication_id TEXT PRIMARY KEY,
+        example_id TEXT NOT NULL,
+        family TEXT NOT NULL,
+        old_gist_id TEXT,
+        new_gist_id TEXT NOT NULL,
+        new_gist_url TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'published',
+        timestamp TEXT NOT NULL,
+        FOREIGN KEY (example_id) REFERENCES example_records(example_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_gist_pub_example ON gist_publications(example_id);
+    CREATE INDEX IF NOT EXISTS idx_gist_pub_family ON gist_publications(family);
+
+    -- Telemetry runs table (full HTTP API schema ~40 fields)
+    CREATE TABLE IF NOT EXISTS telemetry_runs (
+        event_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        agent_name TEXT NOT NULL DEFAULT 'example-reviewer',
+        job_type TEXT NOT NULL,
+        end_time TEXT,
+        status TEXT NOT NULL DEFAULT 'running',
+        product TEXT DEFAULT '',
+        product_family TEXT DEFAULT '',
+        platform TEXT DEFAULT 'dotnet',
+        subdomain TEXT DEFAULT '',
+        website TEXT DEFAULT '',
+        website_section TEXT DEFAULT '',
+        item_name TEXT DEFAULT '',
+        items_discovered INTEGER DEFAULT 0,
+        items_succeeded INTEGER DEFAULT 0,
+        items_failed INTEGER DEFAULT 0,
+        items_skipped INTEGER DEFAULT 0,
+        duration_ms INTEGER DEFAULT 0,
+        input_summary TEXT DEFAULT '',
+        output_summary TEXT DEFAULT '',
+        source_ref TEXT DEFAULT '',
+        target_ref TEXT DEFAULT '',
+        error_summary TEXT,
+        error_details TEXT,
+        git_repo TEXT DEFAULT '',
+        git_branch TEXT DEFAULT '',
+        git_commit_hash TEXT DEFAULT '',
+        git_run_tag TEXT DEFAULT '',
+        git_commit_source TEXT DEFAULT 'llm',
+        git_commit_author TEXT DEFAULT 'Example Reviewer <example-reviewer@aspose.net>',
+        git_commit_timestamp TEXT,
+        host TEXT DEFAULT '',
+        environment TEXT DEFAULT 'dev',
+        trigger_type TEXT DEFAULT 'manual',
+        metrics_json TEXT DEFAULT '{}',
+        context_json TEXT DEFAULT '{}',
+        api_posted INTEGER DEFAULT 0,
+        api_posted_at TEXT,
+        api_retry_count INTEGER DEFAULT 0,
+        insight_id TEXT,
+        parent_run_id TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_telemetry_runs_run ON telemetry_runs(run_id);
+    CREATE INDEX IF NOT EXISTS idx_telemetry_runs_status ON telemetry_runs(status);
+    CREATE INDEX IF NOT EXISTS idx_telemetry_runs_family ON telemetry_runs(product_family);
+    CREATE INDEX IF NOT EXISTS idx_telemetry_runs_agent ON telemetry_runs(agent_name);
     """
     
     def __init__(self, db_path: Optional[Path] = None):
@@ -253,8 +365,9 @@ class Database:
                     location_block_index, location_start_line, location_end_line, location_anchor,
                     gist_owner, gist_id, gist_filename,
                     original_code, compilable_code, verified_code,
-                    status, failure_reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, failure_reason, created_at, updated_at,
+                    section_heading, description_context, topic
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 example.example_id,
                 example.family,
@@ -275,6 +388,9 @@ class Database:
                 example.failure_reason,
                 example.created_at.isoformat(),
                 example.updated_at.isoformat(),
+                example.section_heading,
+                example.description_context,
+                example.topic,
             ))
         return example.example_id
     
@@ -369,7 +485,76 @@ class Database:
                 params
             )
             return conn.total_changes > 0
-    
+
+    def update_example_original_code(
+        self,
+        example_id: str,
+        original_code: str,
+    ) -> bool:
+        """
+        Update the original_code field for an example.
+
+        Used by gist backfill to populate gist source content after discovery.
+
+        Args:
+            example_id: Example identifier
+            original_code: The fetched gist source code
+
+        Returns:
+            True if update successful, False otherwise
+        """
+        with self.get_connection() as conn:
+            conn.execute("""
+                UPDATE example_records
+                SET original_code = ?, updated_at = ?
+                WHERE example_id = ?
+            """, (original_code, datetime.utcnow().isoformat(), example_id))
+            return conn.total_changes > 0
+
+    def update_snippet(
+        self,
+        example_id: str,
+        drift_score: Optional[float] = None,
+        drift_similarity: Optional[float] = None,
+    ) -> bool:
+        """
+        Update drift tracking fields for an example.
+
+        Used by drift detector to store drift scores after each LLM fix iteration.
+
+        Args:
+            example_id: Example identifier
+            drift_score: Drift score (0.0=identical, 1.0=completely different)
+            drift_similarity: Similarity score (1.0=identical, 0.0=completely different)
+
+        Returns:
+            True if update successful, False otherwise
+        """
+        with self.get_connection() as conn:
+            updates = []
+            params = []
+
+            if drift_score is not None:
+                updates.append("drift_score = ?")
+                params.append(drift_score)
+
+            if drift_similarity is not None:
+                updates.append("drift_similarity = ?")
+                params.append(drift_similarity)
+
+            if not updates:
+                return False
+
+            updates.append("updated_at = ?")
+            params.append(datetime.utcnow().isoformat())
+            params.append(example_id)
+
+            conn.execute(
+                f"UPDATE example_records SET {', '.join(updates)} WHERE example_id = ?",
+                params
+            )
+            return conn.total_changes > 0
+
     def delete_examples_by_family(self, family: str) -> int:
         """Delete all examples for a family."""
         with self.get_connection() as conn:
@@ -385,7 +570,12 @@ class Database:
                 gist_id=row['gist_id'] or '',
                 filename=row['gist_filename'] or '',
             )
-        
+
+        # Handle new context fields (may be None for old records)
+        section_heading = row['section_heading'] if 'section_heading' in row.keys() else None
+        description_context = row['description_context'] if 'description_context' in row.keys() else None
+        topic = row['topic'] if 'topic' in row.keys() else None
+
         return ExampleRecord(
             example_id=row['example_id'],
             family=row['family'],
@@ -406,6 +596,9 @@ class Database:
             failure_reason=row['failure_reason'],
             created_at=datetime.fromisoformat(row['created_at']),
             updated_at=datetime.fromisoformat(row['updated_at']),
+            section_heading=section_heading,
+            description_context=description_context,
+            topic=topic,
         )
     
     # =========================================================================
@@ -665,7 +858,29 @@ class Database:
             examples_failed=row['examples_failed'],
             error=row['error'],
         )
-    
+
+    def get_latest_run(self, family: str) -> Optional[RunRecord]:
+        """
+        Get the most recent run for a family.
+
+        Args:
+            family: Product family identifier
+
+        Returns:
+            Most recent RunRecord or None if no runs exist
+        """
+        with self.get_connection() as conn:
+            row = conn.execute("""
+                SELECT * FROM run_records
+                WHERE family = ?
+                ORDER BY started_at DESC
+                LIMIT 1
+            """, (family,)).fetchone()
+
+            if row:
+                return self._row_to_run(row)
+        return None
+
     # =========================================================================
     # TELEMETRY
     # =========================================================================
@@ -691,11 +906,216 @@ class Database:
                 event.timestamp.isoformat(),
             ))
         return event.event_id
-    
+
+    # =========================================================================
+    # TELEMETRY RUNS (Full HTTP API schema)
+    # =========================================================================
+
+    def save_telemetry_run(self, run: TelemetryRun) -> str:
+        """
+        Save a telemetry run record.
+
+        Args:
+            run: TelemetryRun with full ~40 field schema
+
+        Returns:
+            event_id of saved record
+        """
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO telemetry_runs (
+                    event_id, run_id, created_at, start_time, agent_name, job_type,
+                    end_time, status, product, product_family, platform, subdomain,
+                    website, website_section, item_name, items_discovered,
+                    items_succeeded, items_failed, items_skipped, duration_ms,
+                    input_summary, output_summary, source_ref, target_ref,
+                    error_summary, error_details, git_repo, git_branch,
+                    git_commit_hash, git_run_tag, git_commit_source, git_commit_author,
+                    git_commit_timestamp, host, environment, trigger_type,
+                    metrics_json, context_json, api_posted, api_posted_at,
+                    api_retry_count, insight_id, parent_run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                run.event_id,
+                run.run_id,
+                run.created_at.isoformat(),
+                run.start_time.isoformat(),
+                run.agent_name,
+                run.job_type,
+                run.end_time.isoformat() if run.end_time else None,
+                run.status,
+                run.product,
+                run.product_family,
+                run.platform,
+                run.subdomain,
+                run.website,
+                run.website_section,
+                run.item_name,
+                run.items_discovered,
+                run.items_succeeded,
+                run.items_failed,
+                run.items_skipped,
+                run.duration_ms,
+                run.input_summary,
+                run.output_summary,
+                run.source_ref,
+                run.target_ref,
+                run.error_summary,
+                run.error_details,
+                run.git_repo,
+                run.git_branch,
+                run.git_commit_hash,
+                run.git_run_tag,
+                run.git_commit_source,
+                run.git_commit_author,
+                run.git_commit_timestamp.isoformat() if run.git_commit_timestamp else None,
+                run.host,
+                run.environment,
+                run.trigger_type,
+                json.dumps(run.metrics_json),
+                json.dumps(run.context_json),
+                1 if run.api_posted else 0,
+                run.api_posted_at.isoformat() if run.api_posted_at else None,
+                run.api_retry_count,
+                run.insight_id,
+                run.parent_run_id,
+            ))
+        return run.event_id
+
+    def get_telemetry_run(self, event_id: str) -> Optional[TelemetryRun]:
+        """
+        Get a telemetry run by event_id.
+
+        Args:
+            event_id: Unique event identifier
+
+        Returns:
+            TelemetryRun or None if not found
+        """
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM telemetry_runs WHERE event_id = ?",
+                (event_id,)
+            ).fetchone()
+
+            if row:
+                return self._row_to_telemetry_run(row)
+        return None
+
+    def update_telemetry_run(self, event_id: str, updates: Dict[str, Any]) -> bool:
+        """
+        Update specific fields of a telemetry run.
+
+        Args:
+            event_id: Event to update
+            updates: Dictionary of field->value pairs to update
+
+        Returns:
+            True if updated successfully
+        """
+        if not updates:
+            return False
+
+        # Build dynamic update query
+        set_clauses = []
+        params = []
+
+        # Map Python field names to column names
+        for field, value in updates.items():
+            if field in ['metrics_json', 'context_json']:
+                set_clauses.append(f"{field} = ?")
+                params.append(json.dumps(value))
+            elif field in ['end_time', 'created_at', 'start_time', 'git_commit_timestamp', 'api_posted_at']:
+                set_clauses.append(f"{field} = ?")
+                params.append(value.isoformat() if value else None)
+            elif field == 'api_posted':
+                set_clauses.append(f"{field} = ?")
+                params.append(1 if value else 0)
+            else:
+                set_clauses.append(f"{field} = ?")
+                params.append(value)
+
+        params.append(event_id)
+
+        with self.get_connection() as conn:
+            conn.execute(
+                f"UPDATE telemetry_runs SET {', '.join(set_clauses)} WHERE event_id = ?",
+                params
+            )
+            return conn.total_changes > 0
+
+    def get_telemetry_runs_by_run_id(self, run_id: str) -> List[TelemetryRun]:
+        """Get all telemetry runs for a pipeline run."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM telemetry_runs WHERE run_id = ? ORDER BY created_at",
+                (run_id,)
+            ).fetchall()
+
+            return [self._row_to_telemetry_run(row) for row in rows]
+
+    def _row_to_telemetry_run(self, row: sqlite3.Row) -> TelemetryRun:
+        """Convert database row to TelemetryRun."""
+        from datetime import timezone
+
+        def parse_dt(val):
+            if val:
+                dt = datetime.fromisoformat(val)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            return None
+
+        return TelemetryRun(
+            event_id=row['event_id'],
+            run_id=row['run_id'],
+            created_at=parse_dt(row['created_at']) or datetime.now(timezone.utc),
+            start_time=parse_dt(row['start_time']) or datetime.now(timezone.utc),
+            agent_name=row['agent_name'] or 'example-reviewer',
+            job_type=row['job_type'],
+            end_time=parse_dt(row['end_time']),
+            status=row['status'] or 'running',
+            product=row['product'] or '',
+            product_family=row['product_family'] or '',
+            platform=row['platform'] or 'dotnet',
+            subdomain=row['subdomain'] or '',
+            website=row['website'] or '',
+            website_section=row['website_section'] or '',
+            item_name=row['item_name'] or '',
+            items_discovered=row['items_discovered'] or 0,
+            items_succeeded=row['items_succeeded'] or 0,
+            items_failed=row['items_failed'] or 0,
+            items_skipped=row['items_skipped'] or 0,
+            duration_ms=row['duration_ms'] or 0,
+            input_summary=row['input_summary'] or '',
+            output_summary=row['output_summary'] or '',
+            source_ref=row['source_ref'] or '',
+            target_ref=row['target_ref'] or '',
+            error_summary=row['error_summary'],
+            error_details=row['error_details'],
+            git_repo=row['git_repo'] or '',
+            git_branch=row['git_branch'] or '',
+            git_commit_hash=row['git_commit_hash'] or '',
+            git_run_tag=row['git_run_tag'] or '',
+            git_commit_source=row['git_commit_source'] or 'llm',
+            git_commit_author=row['git_commit_author'] or 'Example Reviewer <example-reviewer@aspose.net>',
+            git_commit_timestamp=parse_dt(row['git_commit_timestamp']),
+            host=row['host'] or '',
+            environment=row['environment'] or 'dev',
+            trigger_type=row['trigger_type'] or 'manual',
+            metrics_json=json.loads(row['metrics_json']) if row['metrics_json'] else {},
+            context_json=json.loads(row['context_json']) if row['context_json'] else {},
+            api_posted=bool(row['api_posted']),
+            api_posted_at=parse_dt(row['api_posted_at']),
+            api_retry_count=row['api_retry_count'] or 0,
+            insight_id=row['insight_id'],
+            parent_run_id=row['parent_run_id'],
+        )
+
     # =========================================================================
     # STATISTICS
     # =========================================================================
-    
+
     def get_family_stats(self, family: str) -> Dict[str, Any]:
         """Get statistics for a family."""
         with self.get_connection() as conn:
@@ -740,10 +1160,398 @@ class Database:
             families = conn.execute(
                 "SELECT DISTINCT family FROM example_records"
             ).fetchall()
-            
+
             stats = {}
             for row in families:
                 family = row['family']
                 stats[family] = self.get_family_stats(family)
-            
+
             return stats
+
+    # =========================================================================
+    # TELEMETRY AGGREGATION
+    # =========================================================================
+
+    def get_phase_timings(self, run_id: str) -> List[Dict[str, Any]]:
+        """
+        Get phase timing data for a run.
+
+        Args:
+            run_id: Pipeline run ID
+
+        Returns:
+            List of phase timing records with phase name, duration, and success status
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT
+                    phase,
+                    duration_ms,
+                    success,
+                    timestamp,
+                    metadata
+                FROM telemetry_events
+                WHERE run_id = ?
+                  AND event_type = 'phase_timing'
+                ORDER BY timestamp
+            """, (run_id,)).fetchall()
+
+            return [
+                {
+                    'phase': row['phase'],
+                    'duration_ms': row['duration_ms'],
+                    'success': bool(row['success']),
+                    'timestamp': row['timestamp'],
+                    'metadata': json.loads(row['metadata']) if row['metadata'] else {},
+                }
+                for row in rows
+            ]
+
+    def get_attempt_counts(self, run_id: str) -> Dict[str, Any]:
+        """
+        Get compilation and runtime attempt statistics for a run.
+
+        Args:
+            run_id: Pipeline run ID
+
+        Returns:
+            Dictionary with attempt counts by type
+        """
+        with self.get_connection() as conn:
+            # Get compilation attempts
+            compile_rows = conn.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(success) as successful
+                FROM compile_attempts
+                WHERE example_id IN (
+                    SELECT example_id
+                    FROM example_records
+                    WHERE example_id IN (
+                        SELECT DISTINCT example_id
+                        FROM compile_attempts
+                        WHERE timestamp >= (
+                            SELECT started_at
+                            FROM run_records
+                            WHERE run_id = ?
+                        )
+                    )
+                )
+            """, (run_id,)).fetchone()
+
+            # Get runtime attempts
+            runtime_rows = conn.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(success) as successful
+                FROM runtime_attempts
+                WHERE example_id IN (
+                    SELECT example_id
+                    FROM example_records
+                    WHERE example_id IN (
+                        SELECT DISTINCT example_id
+                        FROM runtime_attempts
+                        WHERE timestamp >= (
+                            SELECT started_at
+                            FROM run_records
+                            WHERE run_id = ?
+                        )
+                    )
+                )
+            """, (run_id,)).fetchone()
+
+            return {
+                'compilation': {
+                    'total_attempts': compile_rows['total'] or 0,
+                    'successful': compile_rows['successful'] or 0,
+                    'failed': (compile_rows['total'] or 0) - (compile_rows['successful'] or 0),
+                },
+                'runtime': {
+                    'total_attempts': runtime_rows['total'] or 0,
+                    'successful': runtime_rows['successful'] or 0,
+                    'failed': (runtime_rows['total'] or 0) - (runtime_rows['successful'] or 0),
+                },
+            }
+
+    def get_failure_breakdown(self, family: str) -> Dict[str, Any]:
+        """
+        Get failure breakdown by status for a family.
+
+        Args:
+            family: Product family identifier
+
+        Returns:
+            Dictionary with failure counts and common error patterns
+        """
+        with self.get_connection() as conn:
+            # Get failure counts by status
+            status_rows = conn.execute("""
+                SELECT
+                    status,
+                    COUNT(*) as count
+                FROM example_records
+                WHERE family = ?
+                  AND status IN ('COMPILE_FAILED', 'RUNTIME_FAILED', 'FINAL_REVIEW_FAILED')
+                GROUP BY status
+            """, (family,)).fetchall()
+
+            failure_counts = {
+                row['status']: row['count']
+                for row in status_rows
+            }
+
+            # Get sample failure reasons
+            failure_samples = {}
+            for status in ['COMPILE_FAILED', 'RUNTIME_FAILED', 'FINAL_REVIEW_FAILED']:
+                samples = conn.execute("""
+                    SELECT failure_reason
+                    FROM example_records
+                    WHERE family = ? AND status = ? AND failure_reason IS NOT NULL
+                    LIMIT 5
+                """, (family, status)).fetchall()
+
+                failure_samples[status] = [
+                    row['failure_reason'][:200]  # Truncate to 200 chars
+                    for row in samples
+                ]
+
+            return {
+                'failure_counts': failure_counts,
+                'failure_samples': failure_samples,
+                'total_failures': sum(failure_counts.values()),
+            }
+
+    # =========================================================================
+    # REVIEW RESULTS
+    # =========================================================================
+
+    def save_review_result(self, result: ReviewResult) -> str:
+        """
+        Save a review result with its issues.
+
+        Args:
+            result: ReviewResult with issues
+
+        Returns:
+            review_id
+        """
+        with self.get_connection() as conn:
+            # Save the review result
+            conn.execute("""
+                INSERT OR REPLACE INTO review_results (
+                    review_id, file_path, run_id, family,
+                    approved, review_attempt, llm_response, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                result.review_id,
+                result.file_path,
+                result.run_id,
+                result.family,
+                1 if result.approved else 0,
+                result.review_attempt,
+                result.llm_response,
+                result.timestamp.isoformat(),
+            ))
+
+            # Save all issues
+            for issue in result.issues:
+                # Skip issues with invalid example_id to avoid FK constraint violations
+                if not issue.example_id or issue.example_id == 'unknown':
+                    logger.warning(f"Skipping review issue with invalid example_id: {issue.example_id}")
+                    continue
+
+                conn.execute("""
+                    INSERT OR REPLACE INTO review_issues (
+                        issue_id, review_id, example_id,
+                        issue_type, description, suggestion,
+                        severity, resolved, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    issue.issue_id,
+                    issue.review_id,
+                    issue.example_id,
+                    issue.issue_type.value,
+                    issue.description,
+                    issue.suggestion,
+                    issue.severity.value,
+                    1 if issue.resolved else 0,
+                    issue.created_at.isoformat(),
+                ))
+
+        return result.review_id
+
+    def get_review_result(self, review_id: str) -> Optional[ReviewResult]:
+        """Get a review result by ID with its issues."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM review_results WHERE review_id = ?",
+                (review_id,)
+            ).fetchone()
+
+            if not row:
+                return None
+
+            # Get issues for this review
+            issue_rows = conn.execute(
+                "SELECT * FROM review_issues WHERE review_id = ? ORDER BY created_at",
+                (review_id,)
+            ).fetchall()
+
+            issues = [self._row_to_review_issue(ir) for ir in issue_rows]
+
+            return self._row_to_review_result(row, issues)
+
+    def get_review_results_by_run(self, run_id: str) -> List[ReviewResult]:
+        """Get all review results for a run."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM review_results WHERE run_id = ? ORDER BY timestamp",
+                (run_id,)
+            ).fetchall()
+
+            results = []
+            for row in rows:
+                # Get issues for each review
+                issue_rows = conn.execute(
+                    "SELECT * FROM review_issues WHERE review_id = ?",
+                    (row['review_id'],)
+                ).fetchall()
+                issues = [self._row_to_review_issue(ir) for ir in issue_rows]
+                results.append(self._row_to_review_result(row, issues))
+
+            return results
+
+    def get_review_results_by_file(self, file_path: str, run_id: Optional[str] = None) -> List[ReviewResult]:
+        """Get review results for a file, optionally filtered by run."""
+        with self.get_connection() as conn:
+            query = "SELECT * FROM review_results WHERE file_path = ?"
+            params = [file_path]
+
+            if run_id:
+                query += " AND run_id = ?"
+                params.append(run_id)
+
+            query += " ORDER BY review_attempt DESC"
+
+            rows = conn.execute(query, params).fetchall()
+
+            results = []
+            for row in rows:
+                issue_rows = conn.execute(
+                    "SELECT * FROM review_issues WHERE review_id = ?",
+                    (row['review_id'],)
+                ).fetchall()
+                issues = [self._row_to_review_issue(ir) for ir in issue_rows]
+                results.append(self._row_to_review_result(row, issues))
+
+            return results
+
+    def get_latest_review_attempt(self, file_path: str, run_id: str) -> int:
+        """Get the latest review attempt number for a file in a run."""
+        with self.get_connection() as conn:
+            row = conn.execute("""
+                SELECT MAX(review_attempt) as max_attempt
+                FROM review_results
+                WHERE file_path = ? AND run_id = ?
+            """, (file_path, run_id)).fetchone()
+
+            return row['max_attempt'] if row and row['max_attempt'] else 0
+
+    def get_unresolved_issues_for_file(self, file_path: str, run_id: Optional[str] = None) -> List[ReviewIssue]:
+        """Get unresolved issues for a file."""
+        with self.get_connection() as conn:
+            query = """
+                SELECT ri.*
+                FROM review_issues ri
+                JOIN review_results rr ON ri.review_id = rr.review_id
+                WHERE rr.file_path = ? AND ri.resolved = 0
+            """
+            params = [file_path]
+
+            if run_id:
+                query += " AND rr.run_id = ?"
+                params.append(run_id)
+
+            query += " ORDER BY ri.created_at"
+
+            rows = conn.execute(query, params).fetchall()
+            return [self._row_to_review_issue(row) for row in rows]
+
+    def resolve_issue(self, issue_id: str) -> bool:
+        """Mark an issue as resolved."""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE review_issues SET resolved = 1 WHERE issue_id = ?",
+                (issue_id,)
+            )
+            return conn.total_changes > 0
+
+    def get_review_stats_by_family(self, family: str) -> Dict[str, Any]:
+        """Get review statistics for a family."""
+        with self.get_connection() as conn:
+            # Total reviews
+            total_rows = conn.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(approved) as approved
+                FROM review_results
+                WHERE family = ?
+            """, (family,)).fetchone()
+
+            # Issues by severity
+            severity_rows = conn.execute("""
+                SELECT
+                    ri.severity,
+                    COUNT(*) as count
+                FROM review_issues ri
+                JOIN review_results rr ON ri.review_id = rr.review_id
+                WHERE rr.family = ?
+                GROUP BY ri.severity
+            """, (family,)).fetchall()
+
+            # Issues by type
+            type_rows = conn.execute("""
+                SELECT
+                    ri.issue_type,
+                    COUNT(*) as count
+                FROM review_issues ri
+                JOIN review_results rr ON ri.review_id = rr.review_id
+                WHERE rr.family = ?
+                GROUP BY ri.issue_type
+            """, (family,)).fetchall()
+
+            return {
+                'total_reviews': total_rows['total'] or 0,
+                'approved': total_rows['approved'] or 0,
+                'rejected': (total_rows['total'] or 0) - (total_rows['approved'] or 0),
+                'issues_by_severity': {row['severity']: row['count'] for row in severity_rows},
+                'issues_by_type': {row['issue_type']: row['count'] for row in type_rows},
+            }
+
+    def _row_to_review_result(self, row: sqlite3.Row, issues: List[ReviewIssue]) -> ReviewResult:
+        """Convert database row to ReviewResult."""
+        return ReviewResult(
+            review_id=row['review_id'],
+            file_path=row['file_path'],
+            run_id=row['run_id'],
+            family=row['family'],
+            approved=bool(row['approved']),
+            review_attempt=row['review_attempt'],
+            issues=issues,
+            llm_response=row['llm_response'],
+            timestamp=datetime.fromisoformat(row['timestamp']),
+        )
+
+    def _row_to_review_issue(self, row: sqlite3.Row) -> ReviewIssue:
+        """Convert database row to ReviewIssue."""
+        return ReviewIssue(
+            issue_id=row['issue_id'],
+            review_id=row['review_id'],
+            example_id=row['example_id'],
+            issue_type=IssueType(row['issue_type']),
+            description=row['description'],
+            suggestion=row['suggestion'],
+            severity=IssueSeverity(row['severity']),
+            resolved=bool(row['resolved']),
+            created_at=datetime.fromisoformat(row['created_at']),
+        )

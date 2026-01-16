@@ -138,6 +138,12 @@
     "fail_on_critical": true,
     "only_review_llm_fixed": true
   },
+  "drift": {
+    "enabled": true,
+    "threshold": 0.3,
+    "fail_on_exceed": true,
+    "log_all_drift_scores": true
+  },
   "artifact_store_path": "./artifacts",
   "database_path": "./data/example_reviewer.db",
   "content_url_patterns": {

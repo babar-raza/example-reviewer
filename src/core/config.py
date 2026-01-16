@@ -306,6 +306,28 @@ class FinalReviewConfig(BaseModel):
     )
 
 
+class DriftConfig(BaseModel):
+    """Configuration for drift detection during LLM fix iterations."""
+    enabled: bool = Field(
+        default=True,
+        description="Enable drift detection in compilation and runtime fix loops"
+    )
+    threshold: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Maximum allowed drift score (0.0=identical, 1.0=completely different)"
+    )
+    fail_on_exceed: bool = Field(
+        default=True,
+        description="Abort fix loop when drift exceeds threshold"
+    )
+    log_all_drift_scores: bool = Field(
+        default=True,
+        description="Log drift scores for all fix attempts (debug visibility)"
+    )
+
+
 class GlobalConfig(BaseModel):
     """Global configuration settings."""
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -318,6 +340,7 @@ class GlobalConfig(BaseModel):
     backfill: BackfillConfig = Field(default_factory=BackfillConfig)
     discovery_patterns: DiscoveryPatternsConfig = Field(default_factory=DiscoveryPatternsConfig)
     final_review: FinalReviewConfig = Field(default_factory=FinalReviewConfig)
+    drift: DriftConfig = Field(default_factory=DriftConfig)
 
     # Paths
     artifact_store_path: str = Field(default="./artifacts")
@@ -492,6 +515,9 @@ class ConfigurationManager:
 
         if 'final_review' in data:
             parsed['final_review'] = FinalReviewConfig(**data['final_review'])
+
+        if 'drift' in data:
+            parsed['drift'] = DriftConfig(**data['drift'])
 
         if 'artifact_store_path' in data:
             parsed['artifact_store_path'] = data['artifact_store_path']
