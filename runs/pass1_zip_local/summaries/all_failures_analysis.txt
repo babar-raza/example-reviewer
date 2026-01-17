@@ -1,0 +1,271 @@
+================================================================================
+COMPILATION FAILURES
+================================================================================
+Total: 13
+
+1. index.md [block 3]
+   ID: 82b32595a1a95f57
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md
+   Error: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_82b32595a1a95f57\Program.cs(7,64): error CS0246: The type or namespace name 'CompressionLevel' 
+   Code: using System.IO;
+using Aspose.Zip;
+using Aspose.Zip.Saving;
+
+static class InMemoryZipper
+{
+    public static byte[] ZipFolderToBytes(string sourceFolder, CompressionLevel level = CompressionLevel.Normal)
+    {
+        if (!Directory.Exists(sourceFolder))
+            throw new DirectoryNotFoundExcept
+
+2. index.md [block 3]
+   ID: 16e46ba91e969d22
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md
+   Error: c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_16e46ba91e969d22\Program.cs(7,64): error CS0246: The type or namespace name 'CompressionLevel' 
+   Code: using System.IO;
+using System.IO.Compression;
+using Aspose.Zip;
+using Aspose.Zip.Saving;
+
+static class InMemoryZipper
+{
+    public static byte[] ZipFolderToBytes(string sourceFolder, CompressionLevel level = CompressionLevel.Normal)
+    {
+        if (!Directory.Exists(sourceFolder))
+            thro
+
+3. index.md [block 4]
+   ID: 06641d1ee92fbf33
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md
+   Error: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_06641d1ee92fbf33\Program.cs(5,17): error CS0234: The type or namespace name 'AspNetCore' does n
+   Code: // File: Program.cs (minimal API)
+using System.Text;
+using Aspose.Zip;
+using Aspose.Zip.Saving;
+
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+app.MapGet("/download-zip", () =>
+{
+    using var buffer = new MemoryStream();
+    var deflate = new DeflateCompressionSettin
+
+4. index.md [block 4]
+   ID: a70498f6a23b0d86
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md
+   Error: CSC : error CS5001: Program does not contain a static 'Main' method suitable for an entry point [c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compil
+   Code: // File: ZipResponseBuilder.cs
+using System.IO;
+using System.Text;
+using System.IO.Compression;
+using Aspose.Zip;
+using Aspose.Zip.Saving;
+
+public static class ZipResponseBuilder
+{
+    public static byte[] BuildZipBytes()
+    {
+        using var buffer = new MemoryStream();
+        var deflate = new
+
+5. index.md [block 5]
+   ID: 240eeaad00afc786
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md
+   Error: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_240eeaad00afc786\Program.cs(5,17): error CS0234: The type or namespace name 'AspNetCore' does n
+   Code: app.MapGet("/stream-zip", async (HttpContext ctx) =>
+{
+    ctx.Response.ContentType = "application/zip";
+    ctx.Response.Headers.ContentDisposition = $"attachment; filename=\"bundle.zip\"";
+
+    var deflate = new DeflateCompressionSettings(CompressionLevel.Normal);
+    var settings = new ArchiveEnt
+
+6. index.md [block 1]
+   ID: 9b93de2fc567cfee
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\unrar-rar-archive-csharp\index.md
+   Error: c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_9b93de2fc567cfee\Program.cs(1,7): error CS0246: The type or namespace name 'SevenZip' could not
+   Code: using (RarArchive archive = new RarArchive("input.rar"))
+{
+    RarArchiveEntry entry = archive.Entries["example.txt"];
+    entry.Extract("output_folder/example.txt");
+}
+
+7. index.md [block 3]
+   ID: d36bf13c649897c6
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\unrar-rar-archive-csharp\index.md
+   Error: c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_d36bf13c649897c6\Program.cs(16,27): error CS0246: The type or namespace name 'RarOptions' could
+   Code: using (RarArchive archive = new RarArchive("protected.rar", "your_password"))
+{
+    RarArchiveEntry entry = archive.Entries["secure_file.txt"];
+    entry.Extract("output_folder/secure_file.txt");
+}
+
+8. index.md [block 4]
+   ID: 9b0bbbe2e529804a
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\unrar-rar-archive-csharp\index.md
+   Error: c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_9b0bbbe2e529804a\Program.cs(1,7): error CS0246: The type or namespace name 'SevenZip' could not
+   Code: using (RarArchive archive = new RarArchive("protected.rar", "your_password"))
+{
+    archive.ExtractToDirectory("output_folder/");
+}
+
+9. _index.md [block 0]
+   ID: b3262dbed12a02b2
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\docs\developer-guide\_index.md
+   Error: c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_b3262dbed12a02b2\Program.cs(20,49): error CS0117: 'ArchiveFactory' does not contain a definitio
+   Code: using Aspose.Zip;
+using Aspose.Zip.Compression;
+
+namespace ZipExample
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            // Initialize the archive
+            using (Archive archive = ArchiveFactory.Create(ArchiveType.Zip))
+            {
+                // Add fi
+
+10. _index.md [block 0]
+   ID: 16a89b71a1c3a644
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\docs\developer-guide\universal-compressor\_index.md
+   Error: c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_16a89b71a1c3a644\Program.cs(16,89): error CS0103: The name 'ArchiveFormat' does not exist in th
+   Code: using Aspose.Zip;
+
+// Compress a directory into a ZIP archive
+ArchiveFactory.CompressDirectory("C:\\InputDirectory", "C:\\OutputArchive.zip");
+
+// Compress into a 7z archive
+ArchiveFactory.CompressDirectory("C:\\InputDirectory", "C:\\OutputArchive.7z");
+
+// Compress into a TAR archive
+ArchiveFactory
+
+11. how-to-extract-rar-csharp.md [block 3]
+   ID: 6eef84a5e17149e1
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\kb\rar-extractor\how-to-extract-rar-csharp.md
+   Error: c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_6eef84a5e17149e1\Program.cs(8,25): error CS1729: 'ZipArchiveEntry' does not contain a construct
+   Code: var file = File.Create(entry.Name);
+
+12. how-to-extract-rar-csharp.md [block 4]
+   ID: 77dfe65cf1da2fe9
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\kb\rar-extractor\how-to-extract-rar-csharp.md
+   Error: c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_77dfe65cf1da2fe9\Program.cs(7,32): error CS0103: The name 'entry' does not exist in the current
+   Code: using (var fileEntry = entry.Open())
+{
+    byte[] data = new byte[1024];
+    int bytesCount;
+    while ((bytesCount = fileEntry.Read(data, 0, data.Length)) > 0)
+    {
+        file.Write(data, 0, bytesCount);
+    }
+}
+
+13. how-to-extract-password-protected-zip-csharp.md [block 3]
+   ID: 4ecb787feb477c1c
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\kb\universal-extractor\how-to-extract-password-protected-zip-csharp.md
+   Error: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\compile\compile_4ecb787feb477c1c\Program.cs(19,63): error CS0246: The type or namespace name 'PasswordProtectio
+   Code: using System.IO;
+using Aspose.Zip;
+
+// Open the password protected ZIP file
+using (FileStream zipFile = File.Open("protected.zip", FileMode.Open))
+{
+    // Open archive with password
+    using (Archive archive = new Archive(zipFile, new PasswordProtection("your_password")))
+    {
+        // Extract 
+
+
+================================================================================
+RUNTIME FAILURES
+================================================================================
+Total: 17
+
+1. index.md [block 3]
+   ID: decc73b062162b32
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\create-flat-zip-csharp\index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_decc73b062162b32\path\to\parent.zip'.
+
+2. index.md [block 4]
+   ID: 95f48248cf73260d
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\create-flat-zip-csharp\index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_95f48248cf73260d\path\to\your\input.zip'.
+
+3. index.md [block 1]
+   ID: d063b9ae0bb4f4ec
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\create-tar-archive-csharp\index.md
+   Stderr: Build failed: 
+
+4. index.md [block 3]
+   ID: ccb4f567863cbbc4
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\create-tar-archive-csharp\index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_ccb4f567863cbbc4\input_folder'.
+
+5. index.md [block 4]
+   ID: 8c86972ead2f2a94
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\csharp-7z-archives-aspose-zip\index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_8c86972ead2f2a94\path\to\alice29.txt'.
+
+6. index.md [block 1]
+   ID: 8ee9e8a500fb4ee6
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md
+   Stderr: Build failed: 
+
+7. index.md [block 2]
+   ID: 38853c82330c5828
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md
+   Stderr: Build failed: 
+
+8. index.md [block 0]
+   ID: de64dd360afdb07e
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\extract-rar-online\index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_de64dd360afdb07e\path\to\your\archive.rar'.
+
+9. index.md [block 0]
+   ID: 4198dab0c093eb14
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\unlock-password-protected-zip-online\index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_4198dab0c093eb14\path\to\your\encrypted.zip'.
+
+10. index.md [block 0]
+   ID: a7d531c3cd38cd27
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\unlock-rar-online\index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_a7d531c3cd38cd27\path\to\your\archive.rar'.
+
+11. index.md [block 2]
+   ID: 4e08831b975e86c1
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\blog\unzip-7z-programmatically-csharp\index.md
+   Stderr: Build failed: 
+
+12. _index.md [block 0]
+   ID: 669e169ecff271c4
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\docs\developer-guide\rar-extractor\_index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_669e169ecff271c4\path\to\your\example.rar'.
+
+13. _index.md [block 2]
+   ID: 5d5b723e84d96f73
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\docs\developer-guide\rar-extractor\_index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_5d5b723e84d96f73\path\to\your\archive.rar'.
+
+14. _index.md [block 0]
+   ID: b4163d18e27b0070
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\docs\developer-guide\universal-extractor\_index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_b4163d18e27b0070\path\to\example.zip'.
+
+15. _index.md [block 1]
+   ID: 5a5d808c2ea7cfa4
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\docs\developer-guide\universal-extractor\_index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_5a5d808c2ea7cfa4\path\to\example.zip'.
+
+16. _index.md [block 2]
+   ID: dfb46c5acae58309
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\docs\developer-guide\universal-extractor\_index.md
+   Exception: Could not find a part of the path 'c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_dfb46c5acae58309\path\to\your\example.zip'.
+
+17. how-to-extract-password-protected-zip-csharp.md [block 2]
+   ID: 7d7fd8c300d87ea7
+   Path: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\test-content\zip\kb\universal-extractor\how-to-extract-password-protected-zip-csharp.md
+   Stderr: Build failed: 
+

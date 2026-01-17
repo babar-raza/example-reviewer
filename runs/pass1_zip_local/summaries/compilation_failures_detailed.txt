@@ -1,0 +1,4 @@
+  File "<string>", line 22
+    fname = fpath.split('\')[-1] if '\' in fpath else fpath.split('/')[-1]
+                                      ^
+SyntaxError: unexpected character after line continuation character
