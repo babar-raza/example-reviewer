@@ -55,14 +55,18 @@ Extracting files from a password protected [ZIP](https://docs.aspose.net/file-fo
 Install the Aspose.ZIP package from NuGet Package Manager.
 
 ```cs
+using System.IO;
 using Aspose.Zip;
 
 public class Program
 {
     public static void Main(string[] args)
     {
-        var archive = new Archive("input.zip");
-        archive.Save("output.zip");
+        // Extract password-protected ZIP file
+        using (Archive archive = new Archive("protected.zip", new ArchiveLoadOptions() { DecryptionPassword = "password123" }))
+        {
+            archive.ExtractToDirectory("ExtractedFiles");
+        }
     }
 }
 ```
@@ -71,22 +75,40 @@ public class Program
 
 ### Step 2: Open the Password Protected ZIP File
 
-Create a `FileStream` to open the encrypted ZIP file.
+Create a `FileStream` to open the encrypted ZIP file and configure the decryption password.
 
 ```cs
 using System.IO;
-FileStream zipFile = File.Open("archive.zip", FileMode.Open);
+using Aspose.Zip;
+
+// Open the password-protected ZIP file
+using (FileStream zipFile = File.Open("protected.zip", FileMode.Open))
+{
+    // Configure decryption password
+    var loadOptions = new ArchiveLoadOptions() { DecryptionPassword = "password123" };
+
+    // Load archive with password
+    using (Archive archive = new Archive(zipFile, loadOptions))
+    {
+        // Archive is ready for extraction
+        Console.WriteLine("Password-protected ZIP opened successfully");
+    }
+}
 ```
 
 ---
 
 ### Step 3: Provide the Password and Extract Files
 
-Instantiate the `Archive` class and provide the ZIP password for extraction.
+Instantiate the `Archive` class with password options and extract all files.
 
 ```cs
-using (Aspose.Zip.Archive archive = new Aspose.Zip.Archive("your_password"))
+using Aspose.Zip;
+
+// Load the password-protected ZIP with decryption password
+using (Archive archive = new Archive("protected.zip", new ArchiveLoadOptions() { DecryptionPassword = "your_password" }))
 {
+    // Extract all files to the target directory
     archive.ExtractToDirectory("ExtractedFiles");
 }
 ```
@@ -100,17 +122,22 @@ using (Aspose.Zip.Archive archive = new Aspose.Zip.Archive("your_password"))
 Here is the complete C# code sample demonstrating how to extract files from a password protected ZIP archive:
 
 ```cs
+using System;
 using System.IO;
 using Aspose.Zip;
 
 // Open the password protected ZIP file
 using (FileStream zipFile = File.Open("protected.zip", FileMode.Open))
 {
+    // Configure decryption password
+    var loadOptions = new ArchiveLoadOptions() { DecryptionPassword = "your_password" };
+
     // Open archive with password
-    using (Archive archive = new Archive(zipFile, new PasswordProtection("your_password")))
+    using (Archive archive = new Archive(zipFile, loadOptions))
     {
         // Extract all files to target directory
         archive.ExtractToDirectory("ExtractedFiles");
+        Console.WriteLine("Files extracted successfully");
     }
 }
 ```

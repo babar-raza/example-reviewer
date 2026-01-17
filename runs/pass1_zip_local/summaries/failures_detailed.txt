@@ -1,0 +1,54 @@
+=== COMPILATION FAILURES (10) ===
+1. index.md [block 3]
+   ID: 82b32595a1a95f57
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_82b32595a1a95f57\\Program.cs(7,64): error CS0246: The type or namespace name 'Comp
+
+2. index.md [block 4]
+   ID: 06641d1ee92fbf33
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_06641d1ee92fbf33\\Program.cs(5,17): error CS0234: The type or namespace name 'AspN
+
+3. index.md [block 5]
+   ID: 240eeaad00afc786
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_240eeaad00afc786\\Program.cs(5,17): error CS0234: The type or namespace name 'AspN
+
+4. index.md [block 1]
+   ID: 9b93de2fc567cfee
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_9b93de2fc567cfee\\Program.cs(5,7): error CS0246: The type or namespace name 'Seven
+
+5. index.md [block 3]
+   ID: d36bf13c649897c6
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_d36bf13c649897c6\\Program.cs(16,51): error CS0117: 'RarArchiveLoadOptions' does no
+
+6. index.md [block 4]
+   ID: 9b0bbbe2e529804a
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_9b0bbbe2e529804a\\Program.cs(2,18): error CS0234: The type or namespace name 'Extr
+
+7. _index.md [block 0]
+   ID: b3262dbed12a02b2
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_b3262dbed12a02b2\\Program.cs(20,53): error CS0117: 'ArchiveFactory' does not conta
+
+8. _index.md [block 0]
+   ID: 16a89b71a1c3a644
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_16a89b71a1c3a644\\Program.cs(16,89): error CS0103: The name 'ArchiveFormat' does n
+
+9. how-to-extract-rar-csharp.md [block 4]
+   ID: 77dfe65cf1da2fe9
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_77dfe65cf1da2fe9\\Program.cs(7,32): error CS0103: The name 'entry' does not exist 
+
+10. how-to-extract-password-protected-zip-csharp.md [block 3]
+   ID: 4ecb787feb477c1c
+   Error: ["C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\runs\\pass1_zip_local\\workspace\\compile\\compile_4ecb787feb477c1c\\Program.cs(19,63): error CS0246: The type or namespace name 'Pas
+
+=== RUNTIME FAILURES (3) ===
+1. index.md [block 2]
+   ID: 38853c82330c5828
+   Error: Build failed: 
+
+2. how-to-zip-folders-csharp-dotnet.md [block 5]
+   ID: 6de2dc6db64a6e9e
+   Error: Build failed: 
+
+3. how-to-extract-password-protected-zip-csharp.md [block 2]
+   ID: 7d7fd8c300d87ea7
+   Error: Build failed: 
+
