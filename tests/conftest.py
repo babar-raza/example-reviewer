@@ -1,7 +1,45 @@
 """Pytest configuration and fixtures for Example Reviewer tests."""
 
-import pytest
+import importlib
+import sys
 from pathlib import Path
+
+import pytest
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+try:
+    import src.core as _core
+    import src.services as _services
+
+    sys.modules.setdefault("core", _core)
+    sys.modules.setdefault("services", _services)
+
+    for name in (
+        "backfill_service",
+        "compilation_service",
+        "discovery_service",
+        "llm_service",
+        "markdown_service",
+        "runtime_service",
+        "telemetry_service",
+        "vector_db_service",
+    ):
+        sys.modules.setdefault(
+            f"services.{name}",
+            importlib.import_module(f"src.services.{name}"),
+        )
+
+    for name in ("config", "database", "models"):
+        sys.modules.setdefault(
+            f"core.{name}",
+            importlib.import_module(f"src.core.{name}"),
+        )
+except Exception:
+    # Optional compatibility aliases; tests will surface errors if needed.
+    pass
 
 
 def pytest_addoption(parser):

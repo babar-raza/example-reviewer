@@ -5,6 +5,7 @@ Implements Phase A: Discovery and Extraction.
 
 import re
 import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Generator
@@ -73,6 +74,7 @@ class DiscoveryService:
             'reasons': {},
             'filtered_gists': 0,
         }
+        self._legacy_schema: Optional[bool] = None
 
         # Get effective discovery patterns (family overrides global)
         self.discovery_patterns = self._get_effective_discovery_patterns()
@@ -252,26 +254,27 @@ class DiscoveryService:
         paragraphs = []
         current_paragraph = []
 
-        for i in range(len(context_window) - 1, -1, -1):
-            line = context_window[i].strip()
+        if config.max_paragraphs > 0:
+            for i in range(len(context_window) - 1, -1, -1):
+                line = context_window[i].strip()
 
-            # Stop at headings or other code blocks
-            if line.startswith('#') or line.startswith('```'):
-                break
+                # Stop at headings or other code blocks
+                if line.startswith('#') or line.startswith('```'):
+                    break
 
-            # Empty line signals paragraph break
-            if not line:
-                if current_paragraph:
-                    paragraphs.insert(0, ' '.join(reversed(current_paragraph)))
-                    current_paragraph = []
-                    if len(paragraphs) >= config.max_paragraphs:
-                        break
-            else:
-                current_paragraph.append(line)
+                # Empty line signals paragraph break
+                if not line:
+                    if current_paragraph:
+                        paragraphs.insert(0, ' '.join(reversed(current_paragraph)))
+                        current_paragraph = []
+                        if len(paragraphs) >= config.max_paragraphs:
+                            break
+                else:
+                    current_paragraph.append(line)
 
-        # Don't forget the last paragraph if not empty
-        if current_paragraph and len(paragraphs) < config.max_paragraphs:
-            paragraphs.insert(0, ' '.join(reversed(current_paragraph)))
+            # Don't forget the last paragraph if not empty
+            if current_paragraph and len(paragraphs) < config.max_paragraphs:
+                paragraphs.insert(0, ' '.join(reversed(current_paragraph)))
 
         description_context = '\n\n'.join(paragraphs)
 
@@ -327,8 +330,9 @@ class DiscoveryService:
     def discover_family(
         self,
         family: str,
-        family_config: FamilyConfig,
+        family_config: Optional[FamilyConfig] = None,
         max_files: Optional[int] = None,
+        max_pages: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Discover all code examples for a family.
@@ -337,10 +341,16 @@ class DiscoveryService:
             family: Family identifier
             family_config: Family configuration
             max_files: Maximum files to process (for testing)
+            max_pages: Alias for max_files (legacy compatibility)
             
         Returns:
             Statistics dictionary
         """
+        if family_config is None:
+            family_config = FamilyConfig(family=family, content_roots=self.content_roots)
+
+        if max_pages is not None and max_files is None:
+            max_files = max_pages
         stats = {
             'files_found': 0,
             'files_processed': 0,
@@ -374,15 +384,21 @@ class DiscoveryService:
         for file_path in files:
             try:
                 examples = self._process_file(file_path, family)
-                
-                for example in examples:
-                    self.db.save_example(example)
-                    stats['examples_found'] += 1
-                    
-                    if example.source_type == SourceType.INLINE:
-                        stats['inline_examples'] += 1
-                    else:
-                        stats['gist_examples'] += 1
+
+                if self._uses_legacy_schema():
+                    self._save_examples_legacy(file_path, family, examples)
+                    stats['examples_found'] += len(examples)
+                    stats['inline_examples'] += sum(1 for e in examples if e.source_type == SourceType.INLINE)
+                    stats['gist_examples'] += sum(1 for e in examples if e.source_type != SourceType.INLINE)
+                else:
+                    for example in examples:
+                        self.db.save_example(example)
+                        stats['examples_found'] += 1
+                        
+                        if example.source_type == SourceType.INLINE:
+                            stats['inline_examples'] += 1
+                        else:
+                            stats['gist_examples'] += 1
                 
                 stats['files_processed'] += 1
 
@@ -396,9 +412,84 @@ class DiscoveryService:
         stats['filter_reasons'] = filter_stats['reasons']
         stats['filtered_gists'] = filter_stats['filtered_gists']
 
+        stats['pages_scanned'] = stats['files_processed']
+        stats['snippets_found'] = stats['examples_found']
+
         logger.info(f"Discovery complete: {stats['examples_found']} examples found, {stats['snippets_filtered_out']} snippets filtered out, {stats['filtered_gists']} gists filtered out")
 
         return stats
+
+    def _uses_legacy_schema(self) -> bool:
+        if self._legacy_schema is not None:
+            return self._legacy_schema
+        try:
+            with self.db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='example_records'"
+                ).fetchone()
+                self._legacy_schema = row is None
+        except Exception:
+            self._legacy_schema = False
+        return self._legacy_schema
+
+    def _save_examples_legacy(self, file_path: str, family: str, examples: List[ExampleRecord]) -> None:
+        conn = self.db.connect()
+        file_path_obj = Path(file_path)
+        relative_path = file_path_obj.as_posix()
+        for root in self.content_roots:
+            try:
+                relative_path = file_path_obj.relative_to(root).as_posix()
+                break
+            except Exception:
+                continue
+        site = "blog" if "blog.aspose.net" in file_path_obj.as_posix() else "docs"
+
+        row = conn.execute(
+            "SELECT page_id FROM pages WHERE file_path = ?",
+            (file_path,),
+        ).fetchone()
+        if row:
+            page_id = row[0]
+        else:
+            result = conn.execute(
+                """
+                INSERT INTO pages (file_path, relative_path, site, family, state)
+                VALUES (?, ?, ?, ?, 'scanned')
+                """,
+                (file_path, relative_path, site, family),
+            )
+            page_id = result.lastrowid
+
+        for example in examples:
+            snippet_ordinal = example.location.block_index + 1
+            locator = {"snippet_ordinal": snippet_ordinal}
+            if example.section_heading:
+                locator["heading_context"] = [example.section_heading]
+            locator_json = json.dumps(locator)
+            snippet_type = "fence" if example.source_type == SourceType.INLINE else "gist"
+
+            result = conn.execute(
+                """
+                INSERT OR REPLACE INTO snippets (
+                    page_id, snippet_ordinal, locator_json,
+                    snippet_type, language, status
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (page_id, snippet_ordinal, locator_json, snippet_type, example.language, "unverified"),
+            )
+            snippet_id = result.lastrowid
+
+            content_hash = hashlib.sha256((example.original_code or "").encode("utf-8")).hexdigest()
+            conn.execute(
+                """
+                INSERT INTO snippet_versions (
+                    snippet_id, version_type, code_content, content_hash
+                ) VALUES (?, 'original', ?, ?)
+                """,
+                (snippet_id, example.original_code or "", content_hash),
+            )
+
+        conn.commit()
 
     def _find_markdown_files(self, family_config: FamilyConfig) -> List[str]:
         """Find all markdown files matching family patterns."""

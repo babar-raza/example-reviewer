@@ -60,8 +60,7 @@ def temp_db(tmp_path):
     # Cleanup is automatic with tmp_path
 
 
-@pytest.fixture
-def default_service(temp_db):
+def _build_default_service(temp_db):
     """Create discovery service with default configuration."""
     patterns_config = DiscoveryPatternsConfig()
     service = DiscoveryService(
@@ -70,6 +69,12 @@ def default_service(temp_db):
     )
     service.discovery_patterns = patterns_config
     return service
+
+
+@pytest.fixture
+def default_service(temp_db):
+    """Create discovery service with default configuration."""
+    return _build_default_service(temp_db)
 
 
 def test_default_context_extraction(default_service):
@@ -306,7 +311,7 @@ def test_context_extraction_with_zero_max_paragraphs(temp_db):
 def test_backward_compatibility(temp_db):
     """Test that default config matches original hardcoded behavior."""
     # Original behavior: max_paragraphs=2, enabled, no file header
-    service = default_service(temp_db)
+    service = _build_default_service(temp_db)
 
     lines = SAMPLE_MARKDOWN.split('\n')
     code_start_idx = next(i for i, line in enumerate(lines) if line.strip() == '```csharp')

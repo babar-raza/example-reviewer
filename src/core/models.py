@@ -3,11 +3,13 @@ Core data models for Example Reviewer Pipeline.
 Uses Pydantic for validation and serialization.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 import hashlib
+import socket
+import uuid
 
 
 class ExampleStatus(str, Enum):
@@ -62,6 +64,11 @@ class Location(BaseModel):
     anchor: str = ""
 
 
+class CodeLocation(Location):
+    """Compatibility alias for legacy code location usage."""
+    pass
+
+
 class GistInfo(BaseModel):
     """Gist reference information."""
     owner: str = ""
@@ -81,13 +88,18 @@ class ExampleRecord(BaseModel):
     language: str = Field(default="csharp")
     location: Location = Field(default_factory=Location)
     gist: Optional[GistInfo] = None
-    original_code: str = Field(default="", description="Code as discovered")
+    original_code: Optional[str] = Field(default="", description="Code as discovered")
     compilable_code: Optional[str] = Field(default=None, description="Code after compile fixes")
     verified_code: Optional[str] = Field(default=None, description="Code after runtime verification")
     status: ExampleStatus = Field(default=ExampleStatus.DISCOVERED)
     failure_reason: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Content context fields for LLM relevance preservation
+    section_heading: Optional[str] = Field(default=None, description="Markdown heading above code block")
+    description_context: Optional[str] = Field(default=None, description="Paragraphs before code block")
+    topic: Optional[str] = Field(default=None, description="Topic inferred from file path")
     
     @computed_field
     @property
@@ -97,13 +109,20 @@ class ExampleRecord(BaseModel):
     
     def generate_id(self) -> str:
         """Generate stable ID from content hash."""
-        content = f"{self.family}:{self.file_path}:{self.location.block_index}:{self.original_code}"
+        content = f"{self.family}:{self.file_path}:{self.location.block_index}:{self.original_code or ''}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
     
     def model_post_init(self, __context) -> None:
         """Generate ID if not provided."""
         if not self.example_id:
             self.example_id = self.generate_id()
+
+    @field_validator("original_code", mode="before")
+    @classmethod
+    def _normalize_original_code(cls, value: Optional[str]) -> str:
+        if value is None:
+            return ""
+        return value
     
     def can_transition_to(self, new_status: ExampleStatus) -> bool:
         """Check if transition to new status is valid."""
@@ -248,22 +267,16 @@ class LLMFixPayload(BaseModel):
     default_usings: List[str] = Field(default_factory=list)
 
     def to_prompt(self) -> str:
-        """Convert the payload to a prompt string for LLM."""
-        prompt_parts = [f"# Code to Fix\n```csharp\n{self.code}\n```\n"]
-
+        """Generate a text representation of the payload for logging."""
+        parts = [f"Context: {self.context_type}"]
+        if self.family:
+            parts.append(f"Family: {self.family}")
         if self.errors:
-            prompt_parts.append(f"\n# Errors\n" + "\n".join(f"- {err}" for err in self.errors))
-
-        if self.default_usings:
-            prompt_parts.append(f"\n# Available Namespaces\n" + "\n".join(f"- {ns}" for ns in self.default_usings))
-
-        if self.api_references:
-            prompt_parts.append(f"\n# API References\n" + "\n".join(f"- {ref}" for ref in self.api_references))
-
+            parts.append(f"Errors:\n" + "\n".join(self.errors[:5]))
         if self.scaffolding_hints:
-            prompt_parts.append(f"\n# Hints\n" + "\n".join(f"- {hint}" for hint in self.scaffolding_hints))
-
-        return "\n".join(prompt_parts)
+            parts.append(f"Hints:\n" + "\n".join(self.scaffolding_hints[:3]))
+        parts.append(f"Code:\n{self.code[:500]}{'...' if len(self.code) > 500 else ''}")
+        return "\n\n".join(parts)
 
 
 class TelemetryEvent(BaseModel):
@@ -278,8 +291,201 @@ class TelemetryEvent(BaseModel):
     success: bool = Field(default=True)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    
+
     def model_post_init(self, __context) -> None:
         if not self.event_id:
             content = f"{self.run_id}:{self.event_type}:{self.timestamp.isoformat()}"
             self.event_id = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+class TelemetryRun(BaseModel):
+    """
+    Full telemetry run record matching local-telemetry HTTP API schema.
+    Supports ~40 fields for comprehensive run tracking.
+    """
+    # Required identifiers
+    event_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()),
+        description="Unique event ID (UUID)"
+    )
+    run_id: str = Field(..., description="Pipeline run ID")
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Record creation timestamp"
+    )
+    start_time: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Run start timestamp"
+    )
+    agent_name: str = Field(default="example-reviewer", description="Agent identifier")
+    job_type: str = Field(..., description="Type of job (e.g., 'validation', 'discovery')")
+
+    # Status fields
+    end_time: Optional[datetime] = Field(default=None, description="Run end timestamp")
+    status: str = Field(
+        default="running",
+        pattern="^(running|success|failure|partial)$",
+        description="Run status"
+    )
+
+    # Product context
+    product: str = Field(default="", description="Product display name (e.g., 'Aspose.Zip for .NET')")
+    product_family: str = Field(default="", description="Product family identifier")
+    platform: str = Field(default="dotnet", description="Target platform")
+    subdomain: str = Field(default="", description="Subdomain from content roots")
+    website: str = Field(default="", description="Website/repo URL")
+    website_section: str = Field(default="", description="Website section (blog/docs/kb)")
+    item_name: str = Field(default="", description="Item/file being processed")
+
+    # Item counts
+    items_discovered: int = Field(default=0, ge=0, description="Total items discovered")
+    items_succeeded: int = Field(default=0, ge=0, description="Items successfully processed")
+    items_failed: int = Field(default=0, ge=0, description="Items that failed")
+    items_skipped: int = Field(default=0, ge=0, description="Items skipped")
+    duration_ms: int = Field(default=0, ge=0, description="Total duration in milliseconds")
+
+    # Summary fields
+    input_summary: str = Field(default="", description="Summary of input/scope")
+    output_summary: str = Field(default="", description="Summary of outputs/results")
+    source_ref: str = Field(default="", description="Source reference (path/URL)")
+    target_ref: str = Field(default="", description="Target reference (path/URL)")
+    error_summary: Optional[str] = Field(default=None, description="Error summary if failed")
+    error_details: Optional[str] = Field(default=None, description="Detailed error info")
+
+    # Git information
+    git_repo: str = Field(default="", description="Git repository URL")
+    git_branch: str = Field(default="", description="Git branch name")
+    git_commit_hash: str = Field(default="", description="Git commit SHA")
+    git_run_tag: str = Field(default="", description="Run-specific tag")
+    git_commit_source: str = Field(default="llm", description="Commit source (llm/manual)")
+    git_commit_author: str = Field(
+        default="Example Reviewer <example-reviewer@aspose.net>",
+        description="Commit author identity"
+    )
+    git_commit_timestamp: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp of associated commit"
+    )
+
+    # Environment
+    host: str = Field(
+        default_factory=lambda: socket.gethostname(),
+        description="Host machine name"
+    )
+    environment: str = Field(default="dev", description="Environment (dev/staging/prod)")
+    trigger_type: str = Field(default="manual", description="Trigger type (manual/scheduled/ci)")
+
+    # JSON metadata fields
+    metrics_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metrics as JSON"
+    )
+    context_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional context as JSON"
+    )
+
+    # API posting status
+    api_posted: bool = Field(default=False, description="Whether posted to HTTP API")
+    api_posted_at: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp when posted to API"
+    )
+    api_retry_count: int = Field(default=0, ge=0, description="Number of API post retries")
+
+    # Relations
+    insight_id: Optional[str] = Field(default=None, description="Related insight ID")
+    parent_run_id: Optional[str] = Field(default=None, description="Parent run ID for nested runs")
+
+    def to_api_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for HTTP API posting."""
+        data = self.model_dump(mode='json')
+        # Convert datetime objects to ISO strings
+        for key in ['created_at', 'start_time', 'end_time', 'git_commit_timestamp', 'api_posted_at']:
+            if data.get(key):
+                if isinstance(data[key], str):
+                    pass  # Already string
+                else:
+                    data[key] = data[key].isoformat()
+        return data
+
+    def calculate_duration(self) -> int:
+        """Calculate duration from start to end time."""
+        if self.end_time and self.start_time:
+            delta = self.end_time - self.start_time
+            return int(delta.total_seconds() * 1000)
+        return self.duration_ms
+
+
+class IssueSeverity(str, Enum):
+    """Severity level for review issues."""
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    CRITICAL = "critical"
+
+
+class IssueType(str, Enum):
+    """Type of review issue."""
+    SYNTAX_ERROR = "syntax_error"
+    MISSING_CONTEXT = "missing_context"
+    INCOMPLETE_CODE = "incomplete_code"
+    API_MISMATCH = "api_mismatch"
+    SECURITY_CONCERN = "security_concern"
+    FORMATTING_ISSUE = "formatting_issue"
+    DOCUMENTATION_GAP = "documentation_gap"
+    OTHER = "other"
+
+
+class ReviewIssue(BaseModel):
+    """An issue found during final LLM review."""
+    issue_id: str = Field(default="", description="Unique issue ID")
+    review_id: str = Field(..., description="Parent review ID")
+    example_id: str = Field(..., description="Example this issue relates to")
+    issue_type: IssueType = Field(default=IssueType.OTHER)
+    description: str = Field(..., description="Description of the issue")
+    suggestion: Optional[str] = Field(default=None, description="Suggested fix")
+    severity: IssueSeverity = Field(default=IssueSeverity.WARNING)
+    resolved: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    def model_post_init(self, __context) -> None:
+        if not self.issue_id:
+            content = f"{self.review_id}:{self.example_id}:{self.description[:50]}:{self.created_at.isoformat()}"
+            self.issue_id = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+class ReviewResult(BaseModel):
+    """Result of a final LLM review for a file."""
+    review_id: str = Field(default="", description="Unique review ID")
+    file_path: str = Field(..., description="Reviewed file path")
+    run_id: str = Field(..., description="Pipeline run ID")
+    family: str = Field(..., description="Product family")
+    approved: bool = Field(default=False)
+    review_attempt: int = Field(default=1, description="Which review attempt this is")
+    issues: List[ReviewIssue] = Field(default_factory=list)
+    llm_response: Optional[str] = Field(default=None, description="Raw LLM response")
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    def model_post_init(self, __context) -> None:
+        if not self.review_id:
+            content = f"{self.run_id}:{self.file_path}:{self.review_attempt}:{self.timestamp.isoformat()}"
+            self.review_id = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    @property
+    def issue_count(self) -> int:
+        """Get count of issues found."""
+        return len(self.issues)
+
+    @property
+    def unresolved_count(self) -> int:
+        """Get count of unresolved issues."""
+        return sum(1 for issue in self.issues if not issue.resolved)
+
+    @property
+    def has_critical_issues(self) -> bool:
+        """Check if any critical issues exist."""
+        return any(
+            issue.severity == IssueSeverity.CRITICAL and not issue.resolved
+            for issue in self.issues
+        )

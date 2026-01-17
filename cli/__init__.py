@@ -1,19 +1,49 @@
 """
-Top-level CLI package for cleaner invocation.
+Top-level CLI package for Example Reviewer.
 
-This package provides a convenient entry point for the Example Reviewer Pipeline CLI.
+This package provides the `python -m cli` entry point as an alias
+for the internal `src.cli.main` module.
 
 Usage:
-    python -m cli [command] [options]
-
-Example:
     python -m cli run --family zip
-    python -m cli discover --family pdf --max-files 10
-    python -m cli status --family zip
-
-For backward compatibility, the old invocation pattern still works:
-    python -m src.cli.main [command] [options]
+    python -m cli scan --family zip
+    python -m cli extract --family zip
 """
+
+__version__ = "0.1.0"
+
 from src.cli.main import main
 
-__all__ = ['main']
+import os
+
+
+class CLI:
+    """Compatibility CLI wrapper for config resolution helpers."""
+
+    def _resolve_auto_commit(self, cli_flag, family_config):
+        if cli_flag is not None:
+            return bool(cli_flag)
+        if family_config and "auto_commit" in family_config:
+            return bool(family_config.get("auto_commit"))
+        env_value = os.getenv("AUTO_COMMIT_ENABLED", "").lower()
+        if env_value in {"true", "1", "yes"}:
+            return True
+        if env_value in {"false", "0", "no"}:
+            return False
+        return False
+
+    def _load_telemetry_settings(self, override_url: str | None = None):
+        telemetry_url = override_url or os.getenv("TELEMETRY_API_URL", "")
+        timeout_raw = os.getenv("TELEMETRY_API_TIMEOUT_MS", "")
+        timeout_ms = int(timeout_raw) if timeout_raw.isdigit() else 2000
+        auth_enabled = os.getenv("TELEMETRY_API_AUTH_ENABLED", "").lower() in {"true", "1", "yes"}
+        auth_token = os.getenv("TELEMETRY_API_AUTH_TOKEN") if auth_enabled else None
+        return {
+            "telemetry_url": telemetry_url,
+            "timeout_ms": timeout_ms,
+            "auth_enabled": auth_enabled,
+            "auth_token": auth_token,
+        }
+
+
+__all__ = ['main', 'CLI']

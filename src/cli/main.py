@@ -278,6 +278,7 @@ def _render_drift_trends(trends: dict, n_runs: int) -> str:
 def main() -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
+        prog='cli',
         description='Example Reviewer Pipeline CLI',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

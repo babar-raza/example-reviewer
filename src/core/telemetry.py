@@ -5,11 +5,12 @@ Provides context managers and helpers for tracking pipeline performance.
 
 import json
 import logging
+import os
 import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from .models import TelemetryEvent
 from .database import Database
@@ -245,8 +246,17 @@ def export_run_telemetry(
     exported_files = {}
 
     try:
+        output_root = Path(output_dir)
+        if os.name == "nt" and str(output_dir).startswith(("/", "\\")):
+            if len(output_root.drive) == 0:
+                logger.error(f"Output directory not supported on Windows: {output_dir}")
+                return {}
+        if not output_root.exists() or not output_root.is_dir():
+            logger.error(f"Output directory not available: {output_dir}")
+            return {}
+
         # Create output directory
-        run_dir = Path(output_dir) / run_id
+        run_dir = output_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
         # Get run record
@@ -554,20 +564,26 @@ def get_drift_trends(
         run_metrics = []
         avg_drifts = []
 
-        for run in runs:
+        for idx, run in enumerate(runs):
             run_id = run[0]
             started_at = run[1]
+            next_started_at = runs[idx - 1][1] if idx > 0 else None
 
-            # Get examples processed in this run (approximation: examples with updated_at >= run start)
+            # Get examples processed in this run (bounded by run window when possible)
             with db.get_connection() as conn:
-                cursor = conn.execute("""
+                query = """
                     SELECT drift_score
                     FROM example_records
                     WHERE family = ?
                       AND drift_score IS NOT NULL
                       AND updated_at >= ?
-                """, (family, started_at))
+                """
+                params = [family, started_at]
+                if next_started_at:
+                    query += " AND updated_at < ?"
+                    params.append(next_started_at)
 
+                cursor = conn.execute(query, params)
                 drift_scores = [row[0] for row in cursor.fetchall()]
 
             if drift_scores:

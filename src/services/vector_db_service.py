@@ -17,6 +17,9 @@ try:
     from sentence_transformers import SentenceTransformer
     VECTOR_DB_AVAILABLE = True
 except ImportError:
+    chromadb = None
+    Settings = None
+    SentenceTransformer = None
     VECTOR_DB_AVAILABLE = False
     logger.warning(
         "ChromaDB or sentence-transformers not installed. "
@@ -88,13 +91,18 @@ class VectorDBService:
         # Create persist directory
         Path(self.persist_directory).mkdir(parents=True, exist_ok=True)
 
-        # Initialize ChromaDB persistent client (for data persistence)
-        self._client = chromadb.PersistentClient(
-            path=self.persist_directory,
-            settings=Settings(
-                anonymized_telemetry=False,
-            )
-        )
+        settings = Settings(anonymized_telemetry=False) if Settings else None
+
+        if hasattr(chromadb, "Client"):
+            self._client = chromadb.Client(settings) if settings else chromadb.Client()
+        else:
+            if settings:
+                self._client = chromadb.PersistentClient(
+                    path=self.persist_directory,
+                    settings=settings,
+                )
+            else:
+                self._client = chromadb.PersistentClient(path=self.persist_directory)
 
         # Get or create collection
         self._collection = self._client.get_or_create_collection(
@@ -269,9 +277,15 @@ class VectorDBService:
                     logger.debug(f"Could not search {collection_name}: {e}")
                     continue
 
+            # Deduplicate by example_id, keep highest similarity
+            best_by_id: Dict[str, Tuple[str, str, float, Dict[str, Any]]] = {}
+            for example_id, code, similarity, metadata in all_results:
+                current = best_by_id.get(example_id)
+                if not current or similarity > current[2]:
+                    best_by_id[example_id] = (example_id, code, similarity, metadata)
+
             # Sort by similarity (descending) and take top k
-            all_results.sort(key=lambda x: x[2], reverse=True)
-            final_results = all_results[:k]
+            final_results = sorted(best_by_id.values(), key=lambda x: x[2], reverse=True)[:k]
 
             logger.debug(
                 f"Found {len(final_results)} similar examples "

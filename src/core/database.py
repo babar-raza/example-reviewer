@@ -339,6 +339,10 @@ class Database:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
         return self._conn
+
+    def connect(self) -> sqlite3.Connection:
+        """Open and return a persistent connection (legacy API)."""
+        return self.conn
     
     def initialize_schema(self) -> None:
         """Initialize database schema."""
@@ -359,6 +363,12 @@ class Database:
     def save_example(self, example: ExampleRecord) -> str:
         """Save or update an example record."""
         with self.get_connection() as conn:
+            existing = conn.execute(
+                "SELECT family FROM example_records WHERE example_id = ?",
+                (example.example_id,),
+            ).fetchone()
+            if existing and existing["family"] != example.family:
+                example.example_id = example.generate_id()
             conn.execute("""
                 INSERT OR REPLACE INTO example_records (
                     example_id, family, file_path, source_type, language,
@@ -545,8 +555,6 @@ class Database:
             if not updates:
                 return False
 
-            updates.append("updated_at = ?")
-            params.append(datetime.utcnow().isoformat())
             params.append(example_id)
 
             conn.execute(
@@ -1336,6 +1344,30 @@ class Database:
             review_id
         """
         with self.get_connection() as conn:
+            run_row = conn.execute(
+                "SELECT 1 FROM run_records WHERE run_id = ?",
+                (result.run_id,),
+            ).fetchone()
+            if not run_row:
+                conn.execute(
+                    """
+                    INSERT INTO run_records (
+                        run_id, family, started_at, status, phases_completed,
+                        examples_processed, examples_successful, examples_failed
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        result.run_id,
+                        result.family,
+                        datetime.utcnow().isoformat(),
+                        "review",
+                        json.dumps([]),
+                        0,
+                        0,
+                        0,
+                    ),
+                )
+
             # Save the review result
             conn.execute("""
                 INSERT OR REPLACE INTO review_results (
@@ -1360,6 +1392,53 @@ class Database:
                     logger.warning(f"Skipping review issue with invalid example_id: {issue.example_id}")
                     continue
 
+                example_row = conn.execute(
+                    "SELECT 1 FROM example_records WHERE example_id = ?",
+                    (issue.example_id,),
+                ).fetchone()
+                if not example_row:
+                    now = datetime.utcnow().isoformat()
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO example_records (
+                            example_id, family, file_path, source_type, language,
+                            location_block_index, location_start_line, location_end_line, location_anchor,
+                            gist_owner, gist_id, gist_filename,
+                            original_code, compilable_code, verified_code,
+                            status, failure_reason, created_at, updated_at,
+                            section_heading, description_context, topic,
+                            drift_score, drift_similarity
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            issue.example_id,
+                            result.family,
+                            result.file_path,
+                            SourceType.INLINE.value,
+                            "csharp",
+                            0,
+                            0,
+                            0,
+                            "",
+                            None,
+                            None,
+                            None,
+                            "",
+                            None,
+                            None,
+                            ExampleStatus.DISCOVERED.value,
+                            None,
+                            now,
+                            now,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                    )
+
+                issue_review_id = result.review_id
                 conn.execute("""
                     INSERT OR REPLACE INTO review_issues (
                         issue_id, review_id, example_id,
@@ -1368,7 +1447,7 @@ class Database:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     issue.issue_id,
-                    issue.review_id,
+                    issue_review_id,
                     issue.example_id,
                     issue.issue_type.value,
                     issue.description,

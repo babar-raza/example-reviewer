@@ -1,0 +1,2 @@
+"""Discovery compatibility package."""
+

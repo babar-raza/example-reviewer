@@ -241,7 +241,7 @@ class DiscoveryPatternsConfig(BaseModel):
 
     # CD-02: Line count and content-based filtering
     min_line_count: int = Field(
-        default=5,
+        default=1,
         ge=1,
         description="Minimum lines to consider as code snippet"
     )
@@ -265,7 +265,8 @@ class DiscoveryPatternsConfig(BaseModel):
             r"\bpublic\b",
             r"\bvoid\b",
             r"\busing\b",
-            r"\bnamespace\b"
+            r"\bnamespace\b",
+            r"\bvar\b"
         ],
         description="Patterns indicating actual C# code (at least one must match)"
     )

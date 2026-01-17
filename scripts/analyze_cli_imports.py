@@ -215,6 +215,15 @@ class ImportAnalyzer(ast.NodeVisitor):
         """Track async function definitions (same as regular functions)."""
         self.visit_FunctionDef(node)  # Reuse the same logic
 
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        """Track class definitions as available names."""
+        if self.current_scope:
+            self.current_scope.local_assignments.add(node.name)
+        else:
+            self.module_level_names.add(node.name)
+
+        self.generic_visit(node)
+
     def visit_Name(self, node: ast.Name) -> None:
         """Track name usage."""
         if self.current_scope and isinstance(node.ctx, ast.Load):
