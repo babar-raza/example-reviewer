@@ -1,0 +1,39 @@
+2026-01-15 11:44:02,442 - src.core.database - INFO - Database initialized at data\example_reviewer.db
+2026-01-15 11:44:02,465 - src.pipeline.orchestrator - INFO - Phase A: Discovery for zip
+2026-01-15 11:44:02,471 - src.services.discovery_service - INFO - Processing 1 files for family zip
+2026-01-15 11:44:02,502 - src.pipeline.orchestrator - INFO - Phase B: Compilation verification for zip
+2026-01-15 11:44:09,404 - src.pipeline.orchestrator - INFO - Phase C: Runtime verification for zip
+2026-01-15 11:44:12,541 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-01-15 11:44:12,542 - src.services.llm_service - WARNING - LLM request failed (attempt 1/3): Error code: 404 - {'error': {'message': "model 'gpt-4o-mini' not found", 'type': 'api_error', 'param': None, 'code': None}}
+2026-01-15 11:44:17,576 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-01-15 11:44:17,576 - src.services.llm_service - WARNING - LLM request failed (attempt 2/3): Error code: 404 - {'error': {'message': "model 'gpt-4o-mini' not found", 'type': 'api_error', 'param': None, 'code': None}}
+2026-01-15 11:44:27,625 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-01-15 11:44:27,626 - src.services.llm_service - WARNING - LLM request failed (attempt 3/3): Error code: 404 - {'error': {'message': "model 'gpt-4o-mini' not found", 'type': 'api_error', 'param': None, 'code': None}}
+2026-01-15 11:44:27,626 - src.pipeline.orchestrator - WARNING - LLM fix failed for 63df4e0debc7169c: Error code: 404 - {'error': {'message': "model 'gpt-4o-mini' not found", 'type': 'api_error', 'param': None, 'code': None}}
+2026-01-15 11:44:29,306 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-01-15 11:44:29,306 - src.services.llm_service - WARNING - LLM request failed (attempt 1/3): Error code: 404 - {'error': {'message': "model 'gpt-4o-mini' not found", 'type': 'api_error', 'param': None, 'code': None}}
+2026-01-15 11:44:34,348 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-01-15 11:44:34,348 - src.services.llm_service - WARNING - LLM request failed (attempt 2/3): Error code: 404 - {'error': {'message': "model 'gpt-4o-mini' not found", 'type': 'api_error', 'param': None, 'code': None}}
+2026-01-15 11:44:44,385 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 404 Not Found"
+2026-01-15 11:44:44,385 - src.services.llm_service - WARNING - LLM request failed (attempt 3/3): Error code: 404 - {'error': {'message': "model 'gpt-4o-mini' not found", 'type': 'api_error', 'param': None, 'code': None}}
+2026-01-15 11:44:44,385 - src.pipeline.orchestrator - WARNING - LLM fix failed for 6588882347f26cc1: Error code: 404 - {'error': {'message': "model 'gpt-4o-mini' not found", 'type': 'api_error', 'param': None, 'code': None}}
+2026-01-15 11:44:44,406 - src.pipeline.orchestrator - INFO - Phase D: Markdown update for zip
+2026-01-15 11:44:44,410 - src.pipeline.orchestrator - INFO - Phase E: Final LLM review for zip
+2026-01-15 11:44:44,415 - src.pipeline.orchestrator - INFO - Phase F: Finalization for zip
+2026-01-15 11:44:44,415 - src.pipeline.orchestrator - ERROR - Pipeline failed: Database.complete_run() got an unexpected keyword argument 'examples_failed'. Did you mean 'examples_verified'?
+Traceback (most recent call last):
+  File "c:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\src\pipeline\orchestrator.py", line 209, in run_full_pipeline
+    self.db.complete_run(
+    ~~~~~~~~~~~~~~~~~~~~^
+        run_id,
+        ^^^^^^^
+    ...<3 lines>...
+        examples_failed=compile_stats.get('failed', 0),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+TypeError: Database.complete_run() got an unexpected keyword argument 'examples_failed'. Did you mean 'examples_verified'?
+{
+  "success": false,
+  "error": "Database.complete_run() got an unexpected keyword argument 'error_message'"
+}

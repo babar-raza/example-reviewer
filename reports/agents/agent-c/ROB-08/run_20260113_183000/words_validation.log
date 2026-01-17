@@ -1,0 +1,71 @@
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\src\cli.py:428: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "generated_at": datetime.utcnow().isoformat(),
+[*] Starting validation for family: words
+[i] Using custom content root: D:\onedrive\Documents\GitHub\aspose.net\content
+[i] Run ID: 52
+[i] Artifacts directory: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_135133_52
+[*] Setting up .NET workspace...
+[OK] Workspace ready
+[*] Checking Ollama...
+[OK] Using Ollama model: qwen2.5-coder:latest
+[i] Limiting to 15 snippets
+[i] Found 15 unverified snippets
+
+[1/15] Validating snippet 239 from content\blog.aspose.net\words\mail-merge-word-documents-dotnet-csharp\index.md
+  [OK] Verified - Fixed after 4 iterations using qwen2.5-coder:latest
+
+[2/15] Validating snippet 240 from content\blog.aspose.net\words\mail-merge-word-documents-dotnet-csharp\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[3/15] Validating snippet 241 from content\docs.aspose.net\words\en\developer-guide\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[4/15] Validating snippet 243 from content\docs.aspose.net\words\en\developer-guide\chm-file-processor\_index.md
+  [OK] Verified - Fixed after 2 iterations using qwen2.5-coder:latest
+
+[5/15] Validating snippet 244 from content\docs.aspose.net\words\en\developer-guide\document-comparer\_index.md
+  [OK] Verified - Fixed after 4 iterations using qwen2.5-coder:latest
+
+[6/15] Validating snippet 245 from content\docs.aspose.net\words\en\developer-guide\document-converter\_index.md
+  [OK] Verified - Original code compiles successfully
+
+[7/15] Validating snippet 246 from content\docs.aspose.net\words\en\developer-guide\document-converter\_index.md
+  [OK] Verified - Fixed after 2 iterations using qwen2.5-coder:latest
+
+[8/15] Validating snippet 247 from content\docs.aspose.net\words\en\developer-guide\document-converter\_index.md
+  [OK] Verified - Fixed after 2 iterations using qwen2.5-coder:latest
+
+[9/15] Validating snippet 248 from content\docs.aspose.net\words\en\developer-guide\document-converter\_index.md
+  [OK] Verified - Original code compiles successfully
+
+[10/15] Validating snippet 249 from content\docs.aspose.net\words\en\developer-guide\document-converter\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[11/15] Validating snippet 250 from content\docs.aspose.net\words\en\developer-guide\document-merger\_index.md
+  [OK] Verified - Original code compiles successfully
+
+[12/15] Validating snippet 251 from content\docs.aspose.net\words\en\developer-guide\document-merger\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[13/15] Validating snippet 252 from content\docs.aspose.net\words\en\developer-guide\document-merger\_index.md
+  [OK] Verified - Fixed after 2 iterations using qwen2.5-coder:latest
+
+[14/15] Validating snippet 253 from content\docs.aspose.net\words\en\developer-guide\document-merger\_index.md
+  [OK] Verified - Fixed after 4 iterations using qwen2.5-coder:latest
+
+[15/15] Validating snippet 254 from content\docs.aspose.net\words\en\developer-guide\document-merger\_index.md
+  [OK] Verified - Fixed after 3 iterations using qwen2.5-coder:latest
+
+[OK] Validation completed
+[i] Snippets processed: 15
+[i] Verified: 11
+[i] Needs fix: 4
+[i] Errors: 0
+[*] Generating validation report...
+[OK] Report saved to: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_135133_52\validation_report.json
+
+=== Validation Summary ===
+Total snippets: 229
+Verified: 28
+Needs fix: 18
+Unverified: 183

@@ -1,13 +1,12 @@
 """
-Entry point for python -m cli
+Entry point for `python -m cli` invocation.
 
-This module delegates to src.cli.main.main() to provide a cleaner
-invocation pattern for the Example Reviewer Pipeline CLI.
-
-Usage:
-    python -m cli [command] [options]
+This delegates to src.cli.main for backward compatibility while
+providing the user-facing contract documented in README.md.
 """
+
+import sys
 from src.cli.main import main
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    sys.exit(main())

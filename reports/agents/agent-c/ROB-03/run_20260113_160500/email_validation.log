@@ -1,0 +1,71 @@
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\src\cli.py:422: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "generated_at": datetime.utcnow().isoformat(),
+[*] Starting validation for family: email
+[i] Using custom content root: D:\onedrive\Documents\GitHub\aspose.net\content
+[i] Run ID: 43
+[i] Artifacts directory: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_120806_43
+[*] Setting up .NET workspace...
+[OK] Workspace ready
+[*] Checking Ollama...
+[OK] Using Ollama model: qwen2.5-coder:latest
+[i] Limiting to 15 snippets
+[i] Found 15 unverified snippets
+
+[1/15] Validating snippet 2551 from content\blog.aspose.net\email\convert-email-formats-csharp-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[2/15] Validating snippet 2552 from content\blog.aspose.net\email\convert-email-formats-csharp-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[3/15] Validating snippet 2553 from content\blog.aspose.net\email\convert-email-formats-csharp-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[4/15] Validating snippet 2554 from content\blog.aspose.net\email\convert-email-formats-csharp-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[5/15] Validating snippet 2555 from content\blog.aspose.net\email\convert-email-formats-csharp-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[6/15] Validating snippet 2556 from content\blog.aspose.net\email\convert-email-formats-csharp-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[7/15] Validating snippet 2557 from content\blog.aspose.net\email\convert-email-formats-csharp-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[8/15] Validating snippet 2558 from content\blog.aspose.net\email\convert-email-formats-csharp-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[9/15] Validating snippet 2559 from content\blog.aspose.net\email\convert-email-formats-csharp-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[10/15] Validating snippet 2560 from content\docs.aspose.net\email\en\developer-guide\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[11/15] Validating snippet 2562 from content\docs.aspose.net\email\en\developer-guide\email-format-converter\_index.md
+  [OK] Verified - Original code compiles successfully
+
+[12/15] Validating snippet 2563 from content\docs.aspose.net\email\en\developer-guide\email-format-converter\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[13/15] Validating snippet 2564 from content\docs.aspose.net\email\en\developer-guide\email-format-converter\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[14/15] Validating snippet 2565 from content\docs.aspose.net\email\en\developer-guide\email-format-converter\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[15/15] Validating snippet 2566 from content\docs.aspose.net\email\en\developer-guide\email-format-converter\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[OK] Validation completed
+[i] Snippets processed: 15
+[i] Verified: 1
+[i] Needs fix: 14
+[i] Errors: 0
+[*] Generating validation report...
+[OK] Report saved to: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_120806_43\validation_report.json
+
+=== Validation Summary ===
+Total snippets: 55
+Verified: 1
+Needs fix: 14
+Unverified: 40

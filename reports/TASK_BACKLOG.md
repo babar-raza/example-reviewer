@@ -2133,3 +2133,1713 @@ git reset --hard <commit_before_reorg>
 
 **Status**: READY TO START (Wave 1 - REORG-01)
 **Next Action**: Spawn Agent B for REORG-01 (directory structure creation)
+
+---
+---
+
+# Task Backlog: Commit & Telemetry Policy Fixes
+
+**Created**: 2026-01-15
+**Plan Source**: C:\Users\prora\.claude\plans\valiant-noodling-pizza.md
+**Orchestrator**: Fix commit and telemetry policies per user requirements
+**Goal**:
+1. Commit: Conventional format, description template, hardcoded co-author
+2. Telemetry: POST to HTTP API + SQLite with full ~40 field schema
+
+---
+
+## Executive Summary
+
+**Context**: Current implementation has gaps:
+- Commit: Description template exists but unused, no co-author, non-conventional format
+- Telemetry: Schema has ~10 fields vs required ~40 fields, no HTTP API integration
+
+**Solution**:
+- Update GitConfig with conventional commit format
+- Add co-author trailer to commit message in orchestrator
+- Create TelemetryRun model with full ~40 field schema
+- Create TelemetryService for HTTP API + SQLite dual-write
+- Integrate into orchestrator at start/end of pipeline
+
+---
+
+## Workstream Allocation
+
+| Workstream | Owner | Tasks | Priority | Can Start |
+|------------|-------|-------|----------|-----------|
+| **WS1: Config Updates** | Implementation | CT-01, CT-04, CT-08 | P0 | YES |
+| **WS2: Model Updates** | Implementation | CT-03 | P0 | YES (parallel with WS1) |
+| **WS3: Database Schema** | Implementation | CT-05 | P0 | After WS2 |
+| **WS4: Commit Message** | Implementation | CT-02 | P0 | After WS1 |
+| **WS5: TelemetryService** | Implementation | CT-06, CT-07 | P0 | After WS3 |
+| **WS6: Testing** | Testing | CT-09 | P1 | After WS4, WS5 |
+
+---
+
+## Task CT-01: Update GitConfig Defaults
+
+**ID**: CT-01
+**Scope**: Update GitConfig model with conventional commit template and description template
+**Priority**: P0 (Critical)
+**Status**: READY
+**Risk**: LOW (config-only)
+**Estimated Time**: 10 minutes
+
+**Affected Paths**:
+- `src/core/config.py` (UPDATE - lines 41-47)
+
+**Current State**:
+```python
+class GitConfig(BaseModel):
+    enabled: bool = True
+    commit_message_template: str = "Verify examples: {family} ({count} files)"
+    commit_description_template: str = "Updated verified examples. RunId={run_id}"
+    only_commit_touched_files: bool = True
+```
+
+**Required Change**:
+```python
+class GitConfig(BaseModel):
+    enabled: bool = True
+    commit_message_template: str = "chore({family}): verify {count} examples"
+    commit_description_template: str = "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}"
+    only_commit_touched_files: bool = True
+```
+
+**Acceptance Criteria**:
+- [ ] commit_message_template uses conventional commits format
+- [ ] commit_description_template includes structured run info
+- [ ] No syntax errors
+
+---
+
+## Task CT-02: Update Commit Message with Co-Author
+
+**ID**: CT-02
+**Scope**: Update finalization phase to include description and co-author trailer
+**Priority**: P0 (Critical)
+**Status**: BLOCKED (needs CT-01)
+**Risk**: LOW (git command modification)
+**Estimated Time**: 15 minutes
+
+**Affected Paths**:
+- `src/pipeline/orchestrator.py` (UPDATE - lines 993-1003)
+
+**Current State** (approx):
+```python
+message = global_config.git.commit_message_template.format(
+    family=family, count=len(touched_files),
+)
+result = subprocess.run(
+    ["git", "commit", "-m", message],
+    capture_output=True, text=True,
+)
+```
+
+**Required Change**:
+```python
+message_title = global_config.git.commit_message_template.format(
+    family=family, count=len(touched_files)
+)
+description = global_config.git.commit_description_template.format(
+    family=family, count=len(touched_files), run_id=run_id
+)
+co_author = "Example Reviewer <example-reviewer@aspose.net>"
+full_message = f"{message_title}\n\n{description}\n\nCo-Authored-By: {co_author}"
+
+result = subprocess.run(
+    ["git", "commit", "-m", full_message],
+    capture_output=True, text=True,
+)
+```
+
+**Acceptance Criteria**:
+- [ ] Full commit message includes title + description + co-author
+- [ ] Co-author is hardcoded as `Example Reviewer <example-reviewer@aspose.net>`
+- [ ] No syntax errors
+
+---
+
+## Task CT-03: Add TelemetryRun Model
+
+**ID**: CT-03
+**Scope**: Add TelemetryRun Pydantic model with ~40 fields matching HTTP API schema
+**Priority**: P0 (Critical)
+**Status**: READY
+**Risk**: LOW (additive model)
+**Estimated Time**: 30 minutes
+
+**Affected Paths**:
+- `src/core/models.py` (UPDATE - add new model)
+
+**Key Fields** (from local-telemetry.md spec):
+- Required: event_id, run_id, agent_name, job_type, start_time, created_at
+- Status: end_time, status, duration_ms
+- Product: product, product_family, platform, subdomain, website, website_section
+- Counts: items_discovered, items_succeeded, items_failed, items_skipped
+- Git: git_repo, git_branch, git_commit_hash, git_commit_source, git_commit_author
+- Environment: host, environment, trigger_type
+- JSON: metrics_json, context_json
+- API: api_posted, api_posted_at, api_retry_count
+
+**Acceptance Criteria**:
+- [ ] TelemetryRun model with ~40 fields
+- [ ] All fields have appropriate types and defaults
+- [ ] Default factories for uuid, datetime, hostname
+- [ ] No syntax errors
+
+---
+
+## Task CT-04: Update TelemetryConfig with HTTP API Fields
+
+**ID**: CT-04
+**Scope**: Add HTTP API configuration fields to TelemetryConfig
+**Priority**: P0 (Critical)
+**Status**: READY (parallel with CT-01)
+**Risk**: LOW (config-only)
+**Estimated Time**: 10 minutes
+
+**Affected Paths**:
+- `src/core/config.py` (UPDATE - lines 67-71)
+
+**Current State**:
+```python
+class TelemetryConfig(BaseModel):
+    internal_enabled: bool = True
+    local_telemetry_enabled: bool = True
+    local_telemetry_path: str = "./local-telemetry"
+```
+
+**Required Change**:
+```python
+class TelemetryConfig(BaseModel):
+    internal_enabled: bool = True
+    local_telemetry_enabled: bool = True
+    local_telemetry_path: str = "./local-telemetry"
+    http_api_enabled: bool = True
+    http_api_url: str = "http://localhost:8765"
+    http_api_timeout_seconds: int = 10
+    http_api_retry_count: int = 3
+```
+
+**Acceptance Criteria**:
+- [ ] HTTP API fields added with sensible defaults
+- [ ] No syntax errors
+
+---
+
+## Task CT-05: Add telemetry_runs Table Schema
+
+**ID**: CT-05
+**Scope**: Add telemetry_runs table with all ~40 columns + CRUD methods
+**Priority**: P0 (Critical)
+**Status**: BLOCKED (needs CT-03)
+**Risk**: MEDIUM (database schema change)
+**Estimated Time**: 45 minutes
+
+**Affected Paths**:
+- `src/core/database.py` (UPDATE - add table schema + methods)
+
+**New Table Schema**:
+```sql
+CREATE TABLE IF NOT EXISTS telemetry_runs (
+    event_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    start_time TEXT NOT NULL,
+    -- ... ~35 more columns matching TelemetryRun model
+)
+```
+
+**New Methods**:
+- `save_telemetry_run(run: TelemetryRun) -> str`
+- `get_telemetry_run(event_id: str) -> Optional[TelemetryRun]`
+- `update_telemetry_run(event_id: str, updates: Dict) -> bool`
+
+**Acceptance Criteria**:
+- [ ] Table schema matches TelemetryRun model
+- [ ] CRUD methods implemented
+- [ ] Backward compatible with existing schema
+- [ ] No syntax errors
+
+---
+
+## Task CT-06: Create TelemetryService
+
+**ID**: CT-06
+**Scope**: Create new TelemetryService for HTTP API + SQLite dual-write
+**Priority**: P0 (Critical)
+**Status**: BLOCKED (needs CT-05)
+**Risk**: MEDIUM (new service, HTTP integration)
+**Estimated Time**: 1 hour
+
+**Affected Paths**:
+- `src/services/telemetry_service.py` (NEW FILE)
+
+**Key Methods**:
+- `create_run_event(run_id, job_type, family_config, status="running") -> TelemetryRun`
+- `start_run(event: TelemetryRun) -> bool` (POST + save locally)
+- `update_run(event_id, updates) -> bool` (PATCH + update locally)
+- `complete_run(event_id, status, counts...) -> bool` (final update)
+- `associate_commit(event_id, commit_hash, timestamp) -> bool` (POST /associate-commit)
+- `_post_to_api(event) -> bool` (HTTP POST with retry)
+- `_patch_api(event_id, updates) -> bool` (HTTP PATCH with retry)
+
+**Acceptance Criteria**:
+- [ ] HTTP API calls are non-blocking (log warning, don't crash)
+- [ ] Retry logic implemented
+- [ ] Both HTTP and SQLite writes on each operation
+- [ ] Proper field population from config/context
+- [ ] No syntax errors
+
+---
+
+## Task CT-07: Integrate TelemetryService into Orchestrator
+
+**ID**: CT-07
+**Scope**: Wire TelemetryService into pipeline start/end
+**Priority**: P0 (Critical)
+**Status**: BLOCKED (needs CT-06)
+**Risk**: MEDIUM (orchestrator modification)
+**Estimated Time**: 30 minutes
+
+**Affected Paths**:
+- `src/pipeline/orchestrator.py` (UPDATE - add service property + calls)
+
+**Integration Points**:
+1. Add `TelemetryService` as lazy-initialized property
+2. At pipeline start: `create_run_event()` + `start_run()`
+3. Track `telemetry_event_id` through pipeline
+4. At finalization (after git commit): `associate_commit()` + `complete_run()`
+
+**Acceptance Criteria**:
+- [ ] TelemetryService initialized lazily
+- [ ] Run event created at pipeline start
+- [ ] Commit associated with event after git commit
+- [ ] Run completed with final counts
+- [ ] No blocking failures (telemetry errors don't crash pipeline)
+
+---
+
+## Task CT-08: Update config/global.json Defaults
+
+**ID**: CT-08
+**Scope**: Update global.json with new config defaults
+**Priority**: P0 (Critical)
+**Status**: READY (parallel with CT-01)
+**Risk**: LOW (config file update)
+**Estimated Time**: 5 minutes
+
+**Affected Paths**:
+- `config/global.json` (UPDATE)
+
+**Required Changes**:
+```json
+"git": {
+    "enabled": false,
+    "commit_message_template": "chore({family}): verify {count} examples",
+    "commit_description_template": "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}",
+    "only_commit_touched_files": true
+},
+"telemetry": {
+    "internal_enabled": true,
+    "local_telemetry_enabled": true,
+    "local_telemetry_path": "./local-telemetry",
+    "http_api_enabled": true,
+    "http_api_url": "http://localhost:8765",
+    "http_api_timeout_seconds": 10,
+    "http_api_retry_count": 3
+}
+```
+
+**Acceptance Criteria**:
+- [ ] Git config updated with conventional commit format
+- [ ] Telemetry config includes HTTP API fields
+- [ ] Valid JSON syntax
+
+---
+
+## Task CT-09: Testing & Verification
+
+**ID**: CT-09
+**Scope**: Write tests and verify implementation
+**Priority**: P1 (High)
+**Status**: BLOCKED (needs CT-07)
+**Risk**: LOW (testing)
+**Estimated Time**: 1 hour
+
+**Verification Commands**:
+```bash
+# Commit verification
+git log -1 --format="%B"
+# Expected format:
+# chore(zip): verify 5 examples
+#
+# Automated verification of 5 examples.
+#
+# RunId: 2026-01-15T...
+# Family: zip
+#
+# Co-Authored-By: Example Reviewer <example-reviewer@aspose.net>
+
+# Telemetry SQLite check
+sqlite3 data/example_reviewer.db \
+  "SELECT event_id, status, items_succeeded, api_posted FROM telemetry_runs"
+
+# HTTP API check (if server running)
+curl "http://localhost:8765/api/v1/runs?agent_name=example-reviewer"
+```
+
+**Acceptance Criteria**:
+- [ ] Commit message format verified
+- [ ] Telemetry records in SQLite
+- [ ] HTTP API posts successful (when server available)
+- [ ] No regressions in existing tests
+
+---
+
+## Critical Path
+
+CT-01 + CT-03 + CT-04 + CT-08 (parallel, 30 min) → CT-02 + CT-05 (30 min) → CT-06 (1 hr) → CT-07 (30 min) → CT-09 (1 hr)
+
+**Total Estimated Time**: ~3.5 hours
+
+---
+
+**Status**: CT-01, CT-03, CT-04, CT-08 READY TO START (parallel)
+
+---
+---
+
+# Task Backlog: Healing Plans (Infrastructure, Discovery, Drift, CLI Testing)
+
+**Created**: 2026-01-16 (Orchestrator Run)
+**Plan Sources**:
+- `plans/healing/cli-testing-system.md`
+- `plans/healing/infrastructure-hardening.md`
+- `plans/healing/configurable-discovery.md`
+- `plans/healing/intent-drift-prevention.md`
+- `plans/healing/HEALING_PLANS_AUDIT_SUMMARY.md`
+**Orchestrator**: Comprehensive healing across CLI testing, infrastructure, discovery patterns, and intent drift prevention
+**Priority Source**: HEALING_PLANS_AUDIT_SUMMARY recommended execution order
+
+---
+
+## Executive Summary
+
+**Context**: All healing plans have undergone Reality Check and rescoping. Auto-Commit and Telemetry plans (already in this backlog) were rescoped to enhance existing Phase F and TelemetryService implementations. Four additional healing plans provide systematic improvements across CLI testing, infrastructure, discovery configuration, and intent drift prevention.
+
+**Recommended Execution Order** (from HEALING_PLANS_AUDIT_SUMMARY):
+1. **Phase 1: Foundation & CLI Safety (Week 1)** - CT-01, CT-02, IH-02, IH-04 (17h)
+2. **Phase 2: Testing & CI Automation (Week 2)** - CT-04, CT-03 (8h)
+3. **Phase 3: Discovery & Drift Prevention (Week 3)** - CD-01, CD-02, ID-04 (30h)
+4. **Phase 4: Enhanced Configuration (Week 4)** - ID-02 (10h)
+5. **Phase 5: Advanced Features (Week 5+)** - IH-03, remaining tasks
+
+**Total Critical Path Effort**: ~109 hours (~13.5 days)
+
+**Key Dependencies**:
+- CLI Testing (CT) tasks are independent - can start immediately
+- Infrastructure (IH) tasks are independent - can start immediately
+- Discovery (CD) tasks can run in parallel with CLI testing
+- Intent Drift (ID) tasks should start after CD-01 (reuse pattern detection)
+
+---
+
+## Workstream Allocation (Max 5 parallel)
+
+| Workstream | Owner Agent | Tasks | Priority | Can Start | Notes |
+|------------|-------------|-------|----------|-----------|-------|
+| **WS1: CLI Testing Foundation** | A (Discovery) | CT-01, CT-02 | P0 | YES | Highest user impact - prevents import errors |
+| **WS2: Infrastructure Hygiene** | D (Docs) | IH-02, IH-04 | P0 | YES | Low risk, user-facing improvements |
+| **WS3: CLI CI Integration** | E (Ops) | CT-04, CT-03 | P1 | After WS1 | Automates CLI validation |
+| **WS4: Discovery Config** | B (Implementation) | CD-01, CD-02 | P1 | YES | Parallel with CLI work |
+| **WS5: Drift Prevention** | B (Implementation) | ID-04, ID-02 | P1 | After WS4 | Reuses pattern detection |
+
+---
+
+## PLAN_FIX Tasks (Documentation Updates)
+
+### Task PLAN_FIX-01: Update Configurable Discovery Plan Reality Check
+
+**ID**: PLAN_FIX-01
+**Scope**: Add Reality Check section and Pydantic model recommendations to configurable-discovery.md
+**Owner-Agent**: Agent D (Docs & Specs)
+**Priority**: P2 (Low - optional enhancement)
+**Status**: PENDING (documentation-only, not blocking implementation)
+**Risk**: ZERO (doc updates only)
+**Estimated Time**: 30 minutes
+
+**Affected Paths**:
+- `plans/healing/configurable-discovery.md` (UPDATE - add sections)
+
+**Changes Needed** (from HEALING_PLANS_AUDIT_SUMMARY):
+- [ ] Add Repo Reality Check section with validation commands
+- [ ] Update CD-01 to use Pydantic `BaseModel` instead of `@dataclass`
+- [ ] Update fence pattern to handle `c#` language: `(\w+|c#)` instead of `(\w*)`
+- [ ] Add regex performance acceptance check
+- [ ] Make telemetry metric names explicit in CD-02
+
+**Acceptance Criteria**:
+- [ ] Reality Check section added with bash validation commands
+- [ ] Pydantic example provided in CD-01 taskcard
+- [ ] Fence pattern regex updated in plan
+- [ ] Plan remains structurally consistent
+
+---
+
+### Task PLAN_FIX-02: Update Intent Drift Prevention Plan Reality Check
+
+**ID**: PLAN_FIX-02
+**Scope**: Add Reality Check section and drift computation clarifications to intent-drift-prevention.md
+**Owner-Agent**: Agent D (Docs & Specs)
+**Priority**: P2 (Low - optional enhancement)
+**Status**: PENDING (documentation-only, not blocking implementation)
+**Risk**: ZERO (doc updates only)
+**Estimated Time**: 30 minutes
+
+**Affected Paths**:
+- `plans/healing/intent-drift-prevention.md` (UPDATE - add sections)
+
+**Changes Needed** (from HEALING_PLANS_AUDIT_SUMMARY):
+- [ ] Add Repo Reality Check section
+- [ ] Clarify in ID-01 that drift is computed against `original_code`
+- [ ] Update ID-01 to reuse `VectorDBService` embedding model instance
+- [ ] Add acceptance check to ID-05: "exclude_high_drift=true filters correctly"
+- [ ] Add note about cost of SentenceTransformer instantiation
+
+**Acceptance Criteria**:
+- [ ] Reality Check section added
+- [ ] Drift computation against `original_code` clarified
+- [ ] VectorDBService reuse documented
+- [ ] Plan remains structurally consistent
+
+---
+
+## Phase 1: Foundation & CLI Safety (Week 1) - HIGHEST PRIORITY
+
+### Task CT-01: Static Import Analyzer
+
+**ID**: CT-01
+**Scope**: Create AST-based static analyzer to detect undefined names in Python CLI code
+**Owner-Agent**: Agent A (Discovery & Architecture)
+**Priority**: P0 (CRITICAL - Highest impact, prevents production import errors)
+**Status**: READY TO START
+**Risk**: LOW (analysis tool only, no production code changes)
+**Estimated Time**: 8 hours
+**Expected Impact**: ⭐ Catches CLI import errors before runtime - prevents user-facing failures
+
+**Gap Linkage**: Fixes CT-GAP-01 (No static analysis for import errors in CLI code)
+
+**Problem**: CLI uses lazy imports (to speed up `--help`) causing hidden `NameError`/`ImportError` at runtime. Static type checkers don't catch these because imports exist - just not in the right scope.
+
+**Affected Paths**:
+- `scripts/analyze_cli_imports.py` (NEW - ~500 lines) - AST-based analyzer
+- `tests/test_import_analyzer.py` (NEW - ~150 lines) - Analyzer tests
+- `scripts/README.md` (UPDATE - add analyzer documentation)
+
+**Acceptance Criteria**:
+- [ ] `ImportAnalyzer` class implemented with AST-based scope resolution
+- [ ] Tracks all scope types: module, function, closure, comprehension, TYPE_CHECKING
+- [ ] Detects undefined names with function name, line number, variable name
+- [ ] Exit codes: 0 = success, 1 = undefined names found
+- [ ] Handles Python builtins correctly (no false positives)
+- [ ] Handles `TYPE_CHECKING` imports (excluded from runtime scope)
+- [ ] CLI usage: `python scripts/analyze_cli_imports.py src/cli/main.py`
+- [ ] Unit tests pass: `pytest tests/test_import_analyzer.py -v` (10+ tests)
+- [ ] Fast execution (< 1 second for typical CLI file)
+- [ ] Documentation in scripts/README.md with examples
+
+**Core Classes** (from plan lines 175-207):
+```python
+@dataclass
+class FunctionScope:
+    name: str
+    lineno: int
+    qualified_name: str  # e.g., "outer.inner"
+    parameters: Set[str]
+    local_assignments: Set[str]
+    local_imports: Set[str]
+    names_used: Dict[str, int]  # name -> first line used
+    comprehension_vars: Set[str]
+    nested_function_names: Set[str]
+    parent_scope: Optional['FunctionScope']  # For closures
+
+class ImportAnalyzer(ast.NodeVisitor):
+    def __init__(self):
+        self.module_level_names: Set[str] = set()
+        self.type_checking_names: Set[str] = set()
+        self.function_scopes: List[FunctionScope] = []
+        self.current_scope: Optional[FunctionScope] = None
+        self.in_type_checking: bool = False
+
+    def visit_Import(self, node): ...
+    def visit_ImportFrom(self, node): ...
+    def visit_FunctionDef(self, node): ...
+    def visit_Name(self, node): ...
+    def visit_ListComp(self, node): ...
+```
+
+**Scope Resolution Algorithm** (from plan lines 209-220):
+Names are available if they come from:
+1. Module-level imports/definitions
+2. Function parameters
+3. Local assignments (for loops, with aliases, except names)
+4. Local imports (inside function)
+5. Comprehension variables
+6. Nested function names
+7. Closure scope (parent function scopes)
+8. Python builtins (`open`, `print`, `len`, etc.)
+9. Common typing names (`Dict`, `List`, `Optional`, etc.)
+
+**Example Output** (from plan lines 131-142):
+```
+Analyzing src/cli/main.py for undefined names...
+======================================================================
+❌ Found 2 undefined names:
+
+Function: run_command (line 145)
+  - 'Database' used at line 150 (not imported in function scope)
+  - 'logger' used at line 155 (not defined anywhere)
+
+Exit code: 1
+```
+
+**Required Tests** (from plan lines 221-238):
+- Test undefined module import usage
+- Test closure scope tracking
+- Test comprehension variables
+- Test TYPE_CHECKING handling
+- Test nested functions
+- Test no false positives for builtins
+
+**Plan Reference**: cli-testing-system.md lines 93-350
+
+---
+
+### Task CT-02: Execution Smoke Tests
+
+**ID**: CT-02
+**Scope**: Create smoke tests for all CLI commands to validate basic execution
+**Owner-Agent**: Agent C (Tests & Verification)
+**Priority**: P0 (CRITICAL - Validates basic CLI functionality)
+**Status**: READY TO START
+**Risk**: LOW (test-only, uses mocks and temp directories)
+**Estimated Time**: 4 hours
+**Expected Impact**: ⭐ Prevents CLI execution failures before they reach users
+
+**Gap Linkage**: Fixes CT-GAP-02 (No smoke tests for CLI command execution)
+
+**Affected Paths**:
+- `tests/test_cli_smoke.py` (NEW - ~200 lines) - Smoke tests for all CLI commands
+- `tests/conftest.py` (UPDATE - add CLI fixtures)
+
+**Acceptance Criteria**:
+- [ ] Tests for `--help` on all subcommands (run, discover, compile, validate)
+- [ ] Test basic execution: `python -m src.cli.main run --family zip --dry-run`
+- [ ] Verify no import errors raised during execution
+- [ ] All tests use subprocess for real CLI invocation
+- [ ] Tests use temporary directories (no pollution)
+- [ ] Mock expensive operations (LLM calls, network requests)
+- [ ] All tests complete in < 30 seconds total
+- [ ] Unit tests pass: `pytest tests/test_cli_smoke.py -v` (8+ tests)
+
+**Test Examples** (from plan lines 406-441):
+```python
+def test_main_help():
+    """Test main --help works without import errors."""
+    result = subprocess.run(
+        ['python', '-m', 'src.cli.main', '--help'],
+        capture_output=True, text=True
+    )
+    assert result.returncode == 0
+    assert '--help' in result.stdout
+
+def test_run_dry_run():
+    """Test run command executes without errors in dry-run mode."""
+    result = subprocess.run(
+        ['python', '-m', 'src.cli.main', 'run',
+         '--family', 'zip', '--dry-run', '--max-examples', '1'],
+        capture_output=True, text=True, timeout=30
+    )
+    # Should complete without import errors
+    assert 'NameError' not in result.stderr
+    assert 'ImportError' not in result.stderr
+```
+
+**Fixtures** (from plan lines 443-458):
+```python
+@pytest.fixture
+def temp_workspace():
+    """Create temporary workspace for CLI tests."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workspace = Path(tmpdir)
+        # Create minimal config structure
+        (workspace / 'config').mkdir()
+        (workspace / 'config' / 'global.json').write_text('{}')
+        yield workspace
+```
+
+**Plan Reference**: cli-testing-system.md lines 354-495
+
+---
+
+### Task IH-02: Fix CLI Entry Point
+
+**ID**: IH-02
+**Scope**: Create top-level `cli` package for cleaner CLI invocation
+**Owner-Agent**: Agent D (Docs & Specs)
+**Priority**: P0 (CRITICAL - User-facing improvement)
+**Status**: READY TO START
+**Risk**: LOW (additive change, backward compatible)
+**Estimated Time**: 3 hours
+**Expected Impact**: Cleaner user experience - `python -m cli` instead of `python -m src.cli.main`
+
+**Gap Linkage**: Fixes IH-GAP-02 (CLI invocation awkward - requires `python -m src.cli.main`)
+
+**Affected Paths**:
+- `cli/__init__.py` (NEW)
+- `cli/__main__.py` (NEW)
+- `README.md` (UPDATE - update CLI examples)
+- `docs/*.md` (UPDATE - update CLI examples in docs)
+
+**Current State**:
+```bash
+# Current (awkward)
+python -m src.cli.main run --family zip
+
+# Desired (clean)
+python -m cli run --family zip
+```
+
+**Acceptance Criteria**:
+- [ ] `cli/__init__.py` created (imports from `src.cli.main`)
+- [ ] `cli/__main__.py` created (delegates to `src.cli.main`)
+- [ ] Both invocations work: `python -m cli` and `python -m src.cli.main`
+- [ ] All docs updated with new invocation pattern
+- [ ] README.md updated with examples
+- [ ] Backward compatibility maintained (old invocation still works)
+
+**Implementation** (from infrastructure-hardening.md):
+```python
+# cli/__init__.py
+"""CLI package - provides cleaner entry point."""
+from src.cli.main import main
+
+__all__ = ['main']
+
+# cli/__main__.py
+"""CLI entry point."""
+from src.cli.main import main
+
+if __name__ == '__main__':
+    main()
+```
+
+**Verification Commands**:
+```bash
+# Test new invocation
+python -m cli --help
+python -m cli run --family zip --dry-run
+
+# Test backward compatibility
+python -m src.cli.main --help
+```
+
+**Plan Reference**: infrastructure-hardening.md (IH-02 taskcard)
+
+---
+
+### Task IH-04: Repository Hygiene
+
+**ID**: IH-04
+**Scope**: Clean up root directory - archive old plans, organize test files
+**Owner-Agent**: Agent D (Docs & Specs)
+**Priority**: P0 (CRITICAL - Quick win, improves dev experience)
+**Status**: READY TO START
+**Risk**: ZERO (file organization only)
+**Estimated Time**: 2 hours
+**Expected Impact**: Cleaner repository, easier navigation
+
+**Gap Linkage**: Fixes IH-GAP-04 (Root directory cluttered with old plans, test files)
+
+**Affected Paths**:
+- `archive/` (NEW - directory for old plans)
+- `tests/` (UPDATE - organize test files)
+- Root directory (CLEAN - move files)
+
+**Files to Archive/Organize** (from git status in context):
+```
+Root directory clutter:
+- RUNTIME_ATTEMPT_FIX_SUMMARY.md
+- analyze_failure.py, analyze_failures.py, analyze_remaining_failures.py, analyze_runtime_failures.py
+- check_example_status.py, create_encrypted_samples.py
+- run_e2e_verification.py, run_single_example_debug.py
+- validate_hardening.py, verify_runtime_recording.py
+- Multiple old test files (test_*.py) in root that should be in tests/
+
+Old plans deleted (D status in git):
+- IMPLEMENTATION-PLAN.md, VALIDATION_FAILURE_ANALYSIS.md, PHASE5_IMPLEMENTATION.md
+- docs/bugfix-workspace-wrapper-20260109.md, docs/session-summary-20260109.md
+```
+
+**Acceptance Criteria**:
+- [ ] `archive/old-plans/` created
+- [ ] Old .md files from git status moved to archive
+- [ ] Analysis scripts moved to `scripts/analysis/` or archived
+- [ ] Root test files moved to `tests/` directory
+- [ ] Root directory clean - only essential files remain
+- [ ] Git commit created documenting cleanup
+- [ ] No functional regressions (all tests still pass)
+
+**Cleanup Actions**:
+1. Create `archive/old-plans/` and `archive/analysis-scripts/`
+2. Move old markdown files to `archive/old-plans/`
+3. Move analysis scripts to `archive/analysis-scripts/`
+4. Move root test files to `tests/` (maintaining test discovery)
+5. Update .gitignore if needed
+6. Document cleanup in CHANGELOG.md
+
+**Verification Commands**:
+```bash
+# Verify tests still work
+pytest tests/ -v
+
+# Verify no broken imports
+python -m src.cli.main --help
+
+# Check root directory cleanliness
+ls -la | grep -E "\\.py$|\\.md$"
+```
+
+**Plan Reference**: infrastructure-hardening.md (IH-04 taskcard)
+
+---
+
+## Phase 2: Testing & CI Automation (Week 2)
+
+### Task CT-04: CI Integration
+
+**ID**: CT-04
+**Scope**: Create GitHub Actions workflow for automated CLI testing
+**Owner-Agent**: Agent E (Observability & Ops)
+**Priority**: P1 (HIGH - Automates validation)
+**Status**: BLOCKED (needs CT-01, CT-02)
+**Risk**: LOW (CI configuration only)
+**Estimated Time**: 2 hours
+**Expected Impact**: Automated CLI validation on every commit
+
+**Gap Linkage**: Fixes CT-GAP-04 (No CI/CD integration for CLI validation)
+
+**Dependencies**: CT-01 (static analyzer), CT-02 (smoke tests)
+
+**Affected Paths**:
+- `.github/workflows/cli_tests.yml` (NEW - ~60 lines)
+
+**Acceptance Criteria**:
+- [ ] GitHub Actions workflow created
+- [ ] Runs on: push to main/develop, pull requests to main
+- [ ] Job 1: Static analysis (runs analyze_cli_imports.py)
+- [ ] Job 2: Smoke tests (runs pytest tests/test_cli_smoke.py)
+- [ ] Job 3: Matrix tests (runs on PR only)
+- [ ] Python 3.10 used
+- [ ] Dependencies cached for fast execution
+- [ ] Status checks appear on PRs
+
+**Workflow Structure** (from plan lines 618-660):
+```yaml
+name: CLI Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Run static import analyzer
+        run: python scripts/analyze_cli_imports.py src/cli/main.py
+
+  smoke-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run smoke tests
+        run: pytest tests/test_cli_smoke.py -v
+
+  matrix-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run matrix tests
+        run: pytest tests/test_cli_matrix.py -v
+```
+
+**Verification**:
+- [ ] Push to branch triggers workflow
+- [ ] Workflow appears in Actions tab
+- [ ] All jobs pass
+- [ ] PR shows status checks
+
+**Plan Reference**: cli-testing-system.md lines 587-662
+
+---
+
+### Task CT-03: Runtime Matrix Tests
+
+**ID**: CT-03
+**Scope**: Systematic testing of CLI option combinations
+**Owner-Agent**: Agent C (Tests & Verification)
+**Priority**: P1 (MEDIUM - Comprehensive coverage)
+**Status**: BLOCKED (needs CT-02)
+**Risk**: LOW (test-only)
+**Estimated Time**: 6 hours
+**Expected Impact**: Comprehensive CLI option coverage
+
+**Gap Linkage**: Fixes CT-GAP-03 (No systematic testing of CLI option combinations)
+
+**Dependencies**: CT-02 (smoke tests foundation)
+
+**Affected Paths**:
+- `tests/test_cli_matrix.py` (NEW - ~250 lines)
+
+**Acceptance Criteria**:
+- [ ] Parameterized tests for `run` command option combinations
+- [ ] Test flag combinations (boolean flags)
+- [ ] Test value parameter combinations
+- [ ] Test incompatible options are rejected
+- [ ] All tests complete in < 2 minutes
+- [ ] Unit tests pass: `pytest tests/test_cli_matrix.py -v` (15+ tests)
+
+**Test Matrix** (from plan lines 529-565):
+```python
+@pytest.mark.parametrize("family,max_examples", [
+    ("zip", 1),
+    ("zip", 5),
+    ("pdf", 1),
+])
+def test_run_family_combinations(family, max_examples):
+    """Test run command with various family/max_examples combinations."""
+    result = subprocess.run(
+        ['python', '-m', 'src.cli.main', 'run',
+         '--family', family, '--max-examples', str(max_examples), '--dry-run'],
+        capture_output=True, text=True, timeout=60
+    )
+    assert 'NameError' not in result.stderr
+    assert 'ImportError' not in result.stderr
+```
+
+**Option Combinations to Test**:
+- `--family zip --dry-run`
+- `--family zip --max-examples 5`
+- `--family zip --dry-run --max-examples 1`
+- `--family zip --enable-git-commit --dry-run` (should not commit in dry-run)
+- Incompatible: `--enable-git-commit --disable-git-commit` (mutually exclusive)
+
+**Plan Reference**: cli-testing-system.md lines 497-583
+
+---
+
+## Phase 3: Discovery & Drift Prevention (Week 3)
+
+### Task CD-01: Make Code Fence Detection Configurable
+
+**ID**: CD-01
+**Scope**: Make markdown code fence patterns and language detection configurable
+**Owner-Agent**: Agent B (Implementation)
+**Priority**: P1 (HIGH - Foundation for discovery improvements)
+**Status**: READY TO START
+**Risk**: MEDIUM (changes discovery logic)
+**Estimated Time**: 12 hours
+**Expected Impact**: Flexible code fence detection across different markdown formats
+
+**Gap Linkage**: Fixes CD-GAP-01 (Hardcoded fence patterns can't handle all markdown formats)
+
+**Problem**: Current discovery hardcodes fence pattern `^```(\\w*)\\s*\\n(.*?)^````. Can't handle:
+- Language aliases (c#, C#, csharp, cs all mean C#)
+- Multi-character language tags (c# has non-word character)
+- Alternative fence formats
+
+**Affected Paths**:
+- `src/core/config.py` (UPDATE - add `DiscoveryPatternsConfig` model)
+- `src/services/discovery_service.py` (UPDATE - use configurable patterns)
+- `config/families/*.json` (UPDATE - add discovery_patterns section)
+- `config/global.json` (UPDATE - add default patterns)
+- `tests/test_discovery_patterns.py` (NEW - ~100 lines)
+
+**Configuration Model** (from plan + HEALING_PLANS_AUDIT_SUMMARY):
+**NOTE**: Use Pydantic BaseModel (not dataclass) as config system is Pydantic-based.
+
+```python
+from pydantic import BaseModel, Field
+from typing import List, Dict
+
+class DiscoveryPatternsConfig(BaseModel):
+    """Discovery pattern configuration for code extraction."""
+    fence_patterns: List[str] = Field(
+        default=["^```(\\w+|c#)\\s*\\n(.*?)^```"],  # Updated to handle c#
+        description="Regex patterns for code fence detection"
+    )
+    validatable_languages: List[str] = Field(
+        default=["cs", "csharp"],
+        description="Languages that should be validated"
+    )
+    language_aliases: Dict[str, List[str]] = Field(
+        default={
+            "csharp": ["cs", "c#", "C#", "csharp", "CSharp"],
+            "python": ["py", "python", "python3"]
+        },
+        description="Language normalization mapping"
+    )
+    normalize_to_canonical: bool = Field(
+        default=True,
+        description="Normalize language tags to canonical form"
+    )
+```
+
+**Language Normalization** (from plan lines 133-180):
+```python
+def normalize_language(language_tag: str, config: DiscoveryPatternsConfig) -> str:
+    """Normalize language tag to canonical form."""
+    if not config.normalize_to_canonical:
+        return language_tag
+
+    tag_lower = language_tag.lower()
+    for canonical, aliases in config.language_aliases.items():
+        if tag_lower in [a.lower() for a in aliases]:
+            return canonical
+
+    return language_tag  # Return original if no match
+```
+
+**Acceptance Criteria**:
+- [ ] `DiscoveryPatternsConfig` Pydantic model added to config.py
+- [ ] Discovery service uses configurable patterns from config
+- [ ] Language normalization working (c#, C#, cs → csharp)
+- [ ] Global config has sensible defaults
+- [ ] Family configs can override patterns
+- [ ] Unit tests pass: `pytest tests/test_discovery_patterns.py -v` (8+ tests)
+- [ ] No regressions in existing discovery (ZIP family still works)
+- [ ] Performance: regex execution < 10ms per page on large files
+
+**Fence Pattern Safety** (from HEALING_PLANS_AUDIT_SUMMARY):
+- Add regex catastrophic backtracking prevention
+- Test with large markdown files (10,000+ lines)
+- Add timeout safeguards (fail gracefully after 5 seconds)
+
+**Plan Reference**: configurable-discovery.md lines 88-298
+
+---
+
+### Task CD-02: Add Line Count and Content-Based Filtering
+
+**ID**: CD-02
+**Scope**: Add filtering for snippet line count and content patterns
+**Owner-Agent**: Agent B (Implementation)
+**Priority**: P1 (HIGH - Prevents "not code" false positives)
+**Status**: READY TO START (parallel with CD-01)
+**Risk**: MEDIUM (changes discovery logic)
+**Estimated Time**: 10 hours
+**Expected Impact**: Filters out non-code snippets (JSON, XML, output)
+
+**Gap Linkage**: Fixes CD-GAP-02 (No content-based filtering - treats JSON/XML as code snippets)
+
+**Problem**: Current discovery accepts all code fences as snippets, including:
+- JSON/XML configuration (not compilable code)
+- Command-line output
+- File listings
+- Extremely short snippets (1-2 lines, likely not complete code)
+
+**Affected Paths**:
+- `src/core/config.py` (UPDATE - add filtering config to DiscoveryPatternsConfig)
+- `src/services/discovery_service.py` (UPDATE - apply content filters)
+- `config/families/*.json` (UPDATE - add filtering rules)
+- `tests/test_discovery_filters.py` (NEW - ~80 lines)
+
+**Enhanced Configuration** (from plan lines 300-382):
+```python
+class DiscoveryPatternsConfig(BaseModel):
+    # ... existing fields ...
+
+    min_line_count: int = Field(
+        default=5,
+        description="Minimum lines to consider as code snippet"
+    )
+    max_line_count: int = Field(
+        default=500,
+        description="Maximum lines to consider as code snippet"
+    )
+    content_exclude_patterns: List[str] = Field(
+        default=[
+            r"^\\s*{\\s*$",  # Starts with { (likely JSON)
+            r"^\\s*<\\?xml",  # Starts with <?xml
+            r"^\\s*Output:",  # Command output
+            r"^\\s*\\$",      # Shell prompt
+        ],
+        description="Regex patterns for excluding non-code content"
+    )
+    require_code_indicators: List[str] = Field(
+        default=[
+            r"\\bclass\\b",
+            r"\\bpublic\\b",
+            r"\\bvoid\\b",
+            r"\\busing\\b",
+            r"\\bnamespace\\b"
+        ],
+        description="Patterns indicating actual C# code (at least one must match)"
+    )
+```
+
+**Filtering Logic** (from plan lines 384-435):
+```python
+def filter_snippet(code: str, config: DiscoveryPatternsConfig) -> Tuple[bool, str]:
+    """
+    Filter snippet based on content rules.
+    Returns: (should_include: bool, reason: str)
+    """
+    lines = code.strip().split('\\n')
+    line_count = len(lines)
+
+    # Line count check
+    if line_count < config.min_line_count:
+        return False, f"Too short ({line_count} lines < {config.min_line_count})"
+    if line_count > config.max_line_count:
+        return False, f"Too long ({line_count} lines > {config.max_line_count})"
+
+    # Content exclusion patterns
+    for pattern in config.content_exclude_patterns:
+        if re.search(pattern, code, re.MULTILINE):
+            return False, f"Matched exclusion pattern: {pattern}"
+
+    # Require code indicators
+    if config.require_code_indicators:
+        has_indicator = any(
+            re.search(pattern, code, re.MULTILINE | re.IGNORECASE)
+            for pattern in config.require_code_indicators
+        )
+        if not has_indicator:
+            return False, "No C# code indicators found"
+
+    return True, "Passed all filters"
+```
+
+**Telemetry Integration** (from plan lines 437-482):
+- Metric: `discovery.snippets_filtered_out` (counter)
+- Metric: `discovery.filter_reasons` (dict with counts per reason)
+- Log filter decisions at DEBUG level
+- Include filter stats in discovery summary
+
+**Acceptance Criteria**:
+- [ ] Line count filtering working (min=5, max=500 defaults)
+- [ ] Content exclusion patterns working (JSON, XML, output excluded)
+- [ ] Code indicator check working (requires C# keywords)
+- [ ] Telemetry metrics tracked: `discovery.snippets_filtered_out`
+- [ ] Filter reasons logged and counted
+- [ ] Unit tests pass: `pytest tests/test_discovery_filters.py -v` (6+ tests)
+- [ ] End-to-end test: ZIP family discovery excludes non-code fences
+- [ ] No false negatives (real code snippets still included)
+
+**Verification Commands**:
+```bash
+# Run discovery with filtering enabled
+python -m src.cli.main discover --family zip
+
+# Check telemetry for filter stats
+sqlite3 data/example_reviewer.db "
+SELECT metrics_json
+FROM telemetry_runs
+WHERE agent_name='example-reviewer'
+ORDER BY started_at DESC LIMIT 1
+" | jq '.discovery'
+
+# Expected output shows filtered_out count and reasons
+```
+
+**Plan Reference**: configurable-discovery.md lines 300-595
+
+---
+
+### Task ID-04: Two-Code Final Review (Quick Win)
+
+**ID**: ID-04
+**Scope**: Add two-code (original + fixed) final review to prevent intent drift
+**Owner-Agent**: Agent B (Implementation)
+**Priority**: P1 (HIGH - Quick win, prevents intent drift)
+**Status**: READY TO START (can run parallel with CD tasks)
+**Risk**: LOW (enhancement to existing LLM flow)
+**Estimated Time**: 8 hours
+**Expected Impact**: ⭐ Catches intent drift before marking verified
+
+**Gap Linkage**: Fixes ID-GAP-04 (No final review - LLM can drift from original intent during fixes)
+
+**Problem**: Current validation flow:
+1. LLM fixes code
+2. Code compiles
+3. Marked as verified - DONE
+
+**Missing**: No check that fixed code still matches original intent!
+
+**Solution**: Add Stage 5.5 (Final Review) after compilation succeeds:
+1. LLM receives: original_code + final_fixed_code
+2. LLM analyzes: "Does fixed code preserve original intent?"
+3. If intent preserved: verify ✅
+4. If intent drifted: needs-fix ❌ with drift explanation
+
+**Affected Paths**:
+- `src/services/llm_service.py` (UPDATE - add `final_review()` method)
+- `src/pipeline/orchestrator.py` (UPDATE - add Stage 5.5 after compilation)
+- `config/global.json` (UPDATE - add final_review config)
+- `tests/test_final_review.py` (NEW - ~60 lines)
+
+**LLM Prompt** (from plan lines 170-209):
+```python
+FINAL_REVIEW_PROMPT = """
+You are reviewing code that was automatically fixed by an LLM to resolve compilation errors.
+
+ORIGINAL CODE (intent source):
+```csharp
+{original_code}
+```
+
+FIXED CODE (after LLM fixes):
+```csharp
+{fixed_code}
+```
+
+TASK: Analyze whether the FIXED CODE preserves the intent and functionality of the ORIGINAL CODE.
+
+RESPOND WITH JSON:
+{{
+  "intent_preserved": true/false,
+  "confidence": 0.0-1.0,
+  "explanation": "Brief explanation of your analysis",
+  "drift_details": ["specific drift point 1", "specific drift point 2"]  // Only if intent_preserved=false
+}}
+
+GUIDELINES:
+- intent_preserved=true: Fixed code does the same thing as original (minor syntax changes OK)
+- intent_preserved=false: Fixed code has different functionality, missing features, or wrong logic
+- Be strict: If you're unsure, mark intent_preserved=false
+- Focus on semantic equivalence, not syntactic similarity
+"""
+```
+
+**Integration Point** (from plan lines 211-272):
+```python
+# In orchestrator.py, after compilation succeeds (Stage 5)
+
+# Stage 5.5: Final Review (if enabled)
+if self.global_config.final_review.enabled:
+    result['stages_completed'].append('final_review')
+
+    review = self.llm_service.final_review(
+        original_code=original_code,
+        fixed_code=final_code
+    )
+
+    if not review['intent_preserved']:
+        result['status'] = 'needs-fix'
+        result['message'] = f"Intent drift detected: {review['explanation']}"
+        result['drift_details'] = review.get('drift_details', [])
+
+        self.db.update_snippet(snippet_id, status='needs-fix')
+        self.db.log_event(
+            run_id, 'final_review_failed', 'warning',
+            f"Intent drift: {review['explanation']}"
+        )
+        return result
+
+    # Intent preserved - continue to verification
+    self.db.log_event(
+        run_id, 'final_review_passed', 'info',
+        f"Intent preserved (confidence: {review['confidence']})"
+    )
+```
+
+**Configuration** (from plan lines 274-287):
+```json
+// config/global.json
+"final_review": {
+  "enabled": true,
+  "confidence_threshold": 0.7,
+  "model": "sonnet-4.5",  // Use high-quality model
+  "timeout_seconds": 30
+}
+```
+
+**Acceptance Criteria**:
+- [ ] `final_review()` method added to LLMService
+- [ ] Stage 5.5 integrated in orchestrator after compilation
+- [ ] Prompt includes both original and fixed code
+- [ ] LLM response parsed and validated (JSON schema)
+- [ ] Intent drift detected → snippet marked needs-fix
+- [ ] Intent preserved → snippet continues to verification
+- [ ] Drift details logged to database
+- [ ] Config option to enable/disable final review
+- [ ] Unit tests pass: `pytest tests/test_final_review.py -v` (5+ tests)
+
+**Test Cases** (from plan lines 289-348):
+```python
+def test_final_review_detects_intent_drift():
+    """Test that final review catches intent drift."""
+    original = """
+    var archive = new Archive();
+    archive.CreateEntry("file.txt", new FileInfo("source.txt"));
+    archive.Save("output.zip");
+    """
+
+    # Fixed code changed functionality (wrong!)
+    fixed = """
+    using (var archive = new Archive())
+    {
+        archive.ExtractToDirectory("output.zip");  // WRONG - extracts instead of creates!
+    }
+    """
+
+    review = llm_service.final_review(original, fixed)
+    assert review['intent_preserved'] == False
+    assert 'extract' in review['explanation'].lower()
+
+def test_final_review_approves_valid_fix():
+    """Test that final review approves semantically equivalent fix."""
+    original = """
+    Archive archive = new Archive();
+    archive.CreateEntry("file.txt", new FileInfo("source.txt"));
+    """
+
+    # Fixed code same functionality (OK - just added using)
+    fixed = """
+    using (var archive = new Archive())
+    {
+        archive.CreateEntry("file.txt", new FileInfo("source.txt"));
+    }
+    """
+
+    review = llm_service.final_review(original, fixed)
+    assert review['intent_preserved'] == True
+```
+
+**Expected Impact**:
+- Prevents verified snippets with wrong functionality
+- Catches cases where LLM "fixes" by changing behavior
+- Low cost (only runs after compilation succeeds - rare)
+- High value (prevents false positives in verification)
+
+**Plan Reference**: intent-drift-prevention.md lines 88-399
+
+---
+
+## Phase 4: Enhanced Configuration (Week 4)
+
+### Task ID-02: Drift Threshold Gate
+
+**ID**: ID-02
+**Scope**: Implement drift score computation and threshold gating for fix attempts
+**Owner-Agent**: Agent B (Implementation)
+**Priority**: P1 (MEDIUM - Prevents runaway drift)
+**Status**: BLOCKED (needs ID-04 foundation)
+**Risk**: MEDIUM (adds complexity to fix loop)
+**Estimated Time**: 10 hours
+**Expected Impact**: Prevents LLM from drifting too far from original during fix iterations
+
+**Gap Linkage**: Fixes ID-GAP-02 (No drift threshold - LLM can drift arbitrarily far during fixes)
+
+**Dependencies**: ID-04 (establishes final review concept)
+
+**Problem**: Current fix loop has no drift budget:
+- LLM can change code drastically across multiple iterations
+- By iteration 5, code may be completely different from original
+- No mechanism to abort when drift exceeds threshold
+
+**Solution**: Compute drift score after each LLM fix attempt:
+1. Embed original_code and current_code using sentence-transformers
+2. Compute cosine similarity (1.0 = identical, 0.0 = completely different)
+3. Drift score = 1.0 - similarity
+4. If drift > threshold (e.g., 0.3): abort fix loop, mark needs-manual-review
+
+**Affected Paths**:
+- `src/services/drift_detector.py` (NEW - ~200 lines) - Drift computation service
+- `src/pipeline/orchestrator.py` (UPDATE - add drift check in fix loop)
+- `config/global.json` (UPDATE - add drift threshold config)
+- `tests/test_drift_detector.py` (NEW - ~80 lines)
+
+**IMPORTANT** (from HEALING_PLANS_AUDIT_SUMMARY):
+- Drift computed against `original_code`, NOT previous iteration
+- Reuse VectorDBService embedding model (don't instantiate new SentenceTransformer)
+- Model instantiation is expensive (~2 seconds) - only create once
+
+**Drift Detection Service** (from plan lines 434-511):
+```python
+from sentence_transformers import SentenceTransformer
+import numpy as np
+from typing import Tuple
+
+class DriftDetector:
+    """Detects semantic drift between original and fixed code."""
+
+    def __init__(self, model: SentenceTransformer):
+        """
+        Initialize with existing embedding model.
+
+        Args:
+            model: SentenceTransformer from VectorDBService (reuse to avoid instantiation cost)
+        """
+        self.model = model
+
+    def compute_drift(
+        self,
+        original_code: str,
+        fixed_code: str
+    ) -> Tuple[float, float]:
+        """
+        Compute drift score between original and fixed code.
+
+        Returns:
+            (drift_score, similarity)
+            drift_score: 0.0 (identical) to 1.0 (completely different)
+            similarity: 1.0 (identical) to 0.0 (completely different)
+        """
+        # Embed both code snippets
+        original_embedding = self.model.encode(original_code)
+        fixed_embedding = self.model.encode(fixed_code)
+
+        # Compute cosine similarity
+        similarity = np.dot(original_embedding, fixed_embedding) / (
+            np.linalg.norm(original_embedding) * np.linalg.norm(fixed_embedding)
+        )
+
+        # Drift = 1 - similarity
+        drift_score = 1.0 - similarity
+
+        return drift_score, similarity
+```
+
+**Integration Point** (from plan lines 513-583):
+```python
+# In orchestrator.py, fix loop (after each LLM fix attempt)
+
+# Initialize drift detector (reuse VectorDBService model)
+if not hasattr(self, '_drift_detector'):
+    from src.services.vector_db_service import VectorDBService
+    vector_db = VectorDBService(self.db)
+    self._drift_detector = DriftDetector(vector_db.model)
+
+# After LLM generates fixed code
+drift_score, similarity = self._drift_detector.compute_drift(
+    original_code=original_code,  # IMPORTANT: Compare against original, not previous iteration
+    fixed_code=current_code
+)
+
+# Log drift score
+self.db.update_snippet(
+    snippet_id,
+    drift_score=drift_score,
+    drift_similarity=similarity
+)
+
+# Check threshold
+drift_threshold = self.global_config.drift.threshold
+if drift_score > drift_threshold:
+    result['status'] = 'needs-manual-review'
+    result['message'] = f"Drift threshold exceeded ({drift_score:.3f} > {drift_threshold})"
+    result['drift_score'] = drift_score
+
+    self.db.log_event(
+        run_id, 'drift_threshold_exceeded', 'error',
+        f"Drift {drift_score:.3f} exceeds threshold {drift_threshold}"
+    )
+    return result  # Abort fix loop
+
+# Continue with compilation...
+```
+
+**Configuration** (from plan lines 585-599):
+```json
+// config/global.json
+"drift": {
+  "enabled": true,
+  "threshold": 0.3,
+  "fail_on_exceed": true,
+  "log_all_drift_scores": true
+}
+```
+
+**Database Schema Update** (from plan lines 601-618):
+```sql
+-- Add drift columns to snippets table
+ALTER TABLE snippets ADD COLUMN drift_score REAL;
+ALTER TABLE snippets ADD COLUMN drift_similarity REAL;
+
+-- Add drift threshold status
+-- status enum now includes: verified, needs-fix, needs-manual-review, unfixable
+```
+
+**Acceptance Criteria**:
+- [ ] `DriftDetector` class implemented
+- [ ] Reuses VectorDBService model (no duplicate instantiation)
+- [ ] Drift computed against original_code (not previous iteration)
+- [ ] Drift score and similarity logged to database
+- [ ] Threshold check aborts fix loop when exceeded
+- [ ] Snippet marked 'needs-manual-review' when drift exceeds threshold
+- [ ] Config option to enable/disable drift detection
+- [ ] Unit tests pass: `pytest tests/test_drift_detector.py -v` (6+ tests)
+- [ ] Performance: drift computation < 100ms per check
+
+**Test Cases** (from plan lines 620-688):
+```python
+def test_drift_detector_identical_code():
+    """Test drift score is 0.0 for identical code."""
+    code = "using Aspose.Zip; var archive = new Archive();"
+    drift_score, similarity = detector.compute_drift(code, code)
+
+    assert drift_score < 0.01  # Nearly identical
+    assert similarity > 0.99
+
+def test_drift_detector_completely_different():
+    """Test drift score is high for unrelated code."""
+    original = "using Aspose.Zip; var archive = new Archive();"
+    different = "using System.Net.Http; var client = new HttpClient();"
+    drift_score, similarity = detector.compute_drift(original, different)
+
+    assert drift_score > 0.5  # Significant drift
+    assert similarity < 0.5
+
+def test_drift_detector_minor_changes():
+    """Test drift score is low for minor syntax changes."""
+    original = "Archive archive = new Archive();"
+    fixed = "using (var archive = new Archive()) { }"  # Added using, var
+    drift_score, similarity = detector.compute_drift(original, fixed)
+
+    assert drift_score < 0.2  # Low drift
+    assert similarity > 0.8
+```
+
+**Threshold Recommendations** (from plan lines 690-719):
+- 0.0-0.1: Trivial changes (syntax, formatting, minor refactoring)
+- 0.1-0.2: Minor changes (added using statements, changed var to explicit type)
+- 0.2-0.3: Moderate changes (restructured code, added try-catch)
+- 0.3-0.5: Significant changes (different API usage, changed logic flow)
+- 0.5+: Major drift (completely different approach, likely wrong intent)
+
+**Recommended threshold**: 0.3 (conservative - allows moderate changes but blocks major drift)
+
+**Plan Reference**: intent-drift-prevention.md lines 401-876
+
+---
+
+## Phase 5: Advanced Features (Week 5+)
+
+### Task IH-03: Align Architecture Documentation
+
+**ID**: IH-03
+**Scope**: Update architecture.md to reflect current system state
+**Owner-Agent**: Agent D (Docs & Specs)
+**Priority**: P2 (MEDIUM - Documentation alignment)
+**Status**: PENDING (documentation-only)
+**Risk**: ZERO (doc updates only)
+**Estimated Time**: 8 hours
+**Expected Impact**: Accurate documentation for onboarding and reference
+
+**Gap Linkage**: Fixes IH-GAP-03 (architecture.md outdated - doesn't reflect current implementation)
+
+**Affected Paths**:
+- `docs/architecture.md` (UPDATE - comprehensive rewrite)
+
+**Current Issues** (from infrastructure-hardening.md):
+- Missing: Multi-phase pipeline architecture
+- Missing: Telemetry system integration
+- Missing: Git commit automation (Phase F)
+- Missing: Namespace validation layer
+- Missing: Pattern detection layer
+- Missing: Dependency resolution system
+- Outdated: Database schema (missing new tables)
+- Outdated: Service layer description
+
+**Required Sections**:
+1. **System Overview** - High-level architecture diagram
+2. **Pipeline Phases** - Discovery, Compilation, Runtime, Markdown Update, Finalization, Git Commit
+3. **Service Layer** - All services documented (LLM, Discovery, Compilation, Runtime, Markdown, Telemetry, VectorDB, Dependency)
+4. **Database Schema** - All tables documented with relationships
+5. **Configuration System** - Global, family, CLI override hierarchy
+6. **Validation Flow** - Stage-by-stage breakdown
+7. **Quality Gates** - Namespace validation, pattern detection, drift detection, infinite loop detection
+8. **Extensibility Points** - How to add new families, new validators, new patterns
+
+**Acceptance Criteria**:
+- [ ] Architecture diagram updated (Mermaid or ASCII art)
+- [ ] All pipeline phases documented with flow
+- [ ] All services documented with responsibilities
+- [ ] Database schema documented with ER diagram
+- [ ] Configuration hierarchy explained
+- [ ] Quality gates section added
+- [ ] Code examples for key extension points
+- [ ] Links to relevant source files
+- [ ] Document reviewed for accuracy (no outdated information)
+
+**Verification**:
+- [ ] Peer review confirms accuracy
+- [ ] All links resolve correctly
+- [ ] Diagrams render correctly in markdown viewer
+
+**Plan Reference**: infrastructure-hardening.md (IH-03 taskcard)
+
+---
+
+## Queued Tasks (Lower Priority)
+
+### CD-03: Make Gist Pattern Detection Configurable
+**ID**: CD-03
+**Priority**: P2 (MEDIUM)
+**Status**: QUEUED (after CD-01, CD-02)
+**Estimated Time**: 8 hours
+**Plan Reference**: configurable-discovery.md lines 597-840
+
+### CD-04: Make Context Extraction Configurable
+**ID**: CD-04
+**Priority**: P2 (MEDIUM)
+**Status**: QUEUED (after CD-01, CD-02)
+**Estimated Time**: 10 hours
+**Plan Reference**: configurable-discovery.md lines 842-1097
+
+### ID-01: Add Drift Score Computation and Tracking
+**ID**: ID-01
+**Priority**: P2 (MEDIUM)
+**Status**: QUEUED (covered by ID-02)
+**Note**: ID-02 includes drift computation, so ID-01 may be redundant
+**Plan Reference**: intent-drift-prevention.md lines 878-1119
+
+### ID-03: Original-Anchored Fix Prompts
+**ID**: ID-03
+**Priority**: P2 (MEDIUM)
+**Status**: QUEUED (after ID-02)
+**Estimated Time**: 6 hours
+**Plan Reference**: intent-drift-prevention.md lines 1121-1330
+
+### ID-05: Selective Vector DB Storage (High-Drift Exclusion)
+**ID**: ID-05
+**Priority**: P2 (MEDIUM)
+**Status**: QUEUED (after ID-02)
+**Estimated Time**: 8 hours
+**Plan Reference**: intent-drift-prevention.md lines 1332-1546
+
+### ID-06: Drift Metrics Dashboard
+**ID**: ID-06
+**Priority**: P3 (LOW)
+**Status**: QUEUED (after ID-05)
+**Estimated Time**: 12 hours
+**Plan Reference**: intent-drift-prevention.md lines 1548-1757
+
+---
+
+## Parallel Execution Strategy
+
+### Wave 1: Foundation (Start Immediately) - Parallel
+**Agents A + C + D**
+- **CT-01** (Agent A) - 8 hours - Static Import Analyzer
+- **CT-02** (Agent C) - 4 hours - CLI Smoke Tests
+- **IH-02** (Agent D) - 3 hours - Fix CLI Entry Point
+- **IH-04** (Agent D) - 2 hours - Repository Hygiene
+
+**Total Wall Time**: ~8 hours (parallel)
+
+### Wave 2: Testing & CI (After Wave 1) - Parallel
+**Agents C + E**
+- **CT-04** (Agent E) - 2 hours - CI Integration (needs CT-01, CT-02)
+- **CT-03** (Agent C) - 6 hours - Matrix Tests (needs CT-02)
+
+**Total Wall Time**: ~6 hours (parallel)
+
+### Wave 3: Discovery & Drift (After Wave 2) - Parallel
+**Agents B (x2 parallel tasks)**
+- **CD-01** (Agent B) - 12 hours - Configurable Fence Detection
+- **CD-02** (Agent B) - 10 hours - Content Filtering (can run parallel with CD-01)
+- **ID-04** (Agent B) - 8 hours - Final Review (can run parallel with CD tasks)
+
+**Total Wall Time**: ~12 hours (parallel CD-01 + CD-02 = 12h max)
+
+### Wave 4: Advanced Configuration (After Wave 3)
+**Agent B**
+- **ID-02** (Agent B) - 10 hours - Drift Threshold Gate (needs ID-04)
+
+**Total Wall Time**: ~10 hours
+
+### Wave 5: Documentation (After Wave 4)
+**Agent D**
+- **IH-03** (Agent D) - 8 hours - Architecture Docs
+
+**Total Wall Time**: ~8 hours
+
+---
+
+## Critical Path Summary
+
+**Total Sequential Time**: ~44 hours (if run sequentially)
+**Total Parallel Time**: ~44 hours (optimized with max 3 agents in parallel)
+**Total Calendar Time**: ~1-2 weeks (with agent spawn overhead)
+
+**Priority Sequence** (for user impact):
+1. CLI Testing (CT-01, CT-02) - Prevents production failures ⭐
+2. Infrastructure (IH-02, IH-04) - User experience improvements
+3. CI Integration (CT-04, CT-03) - Automates validation
+4. Discovery Config (CD-01, CD-02) - Flexible pattern detection
+5. Intent Drift (ID-04, ID-02) - Prevents false positives
+6. Documentation (IH-03) - Knowledge preservation
+
+---
+
+## Success Metrics
+
+### Primary Metrics (Must Achieve)
+- [ ] CLI static analyzer catches at least 1 import error in existing code
+- [ ] CLI smoke tests pass on all commands (run, discover, compile, validate)
+- [ ] Repository root directory clean (< 10 files in root)
+- [ ] Discovery filters out non-code snippets (JSON, XML, output)
+- [ ] Final review catches at least 1 intent drift case in testing
+
+### Secondary Metrics (Target)
+- [ ] CI workflow passes on first run
+- [ ] Discovery pattern customization works for at least 2 families
+- [ ] Drift detection reduces verification false positives by 10%+
+
+### Quality Gate
+**Threshold**: 4.0/5 minimum on ALL 12 dimensions for each task
+**Pass Rate Target**: 100% (no routing-backs required)
+
+---
+
+## Risk Assessment
+
+### High Risks
+- **CD-01, CD-02**: Discovery logic changes may break existing families
+  - **Mitigation**: Comprehensive tests on ZIP family first, regression testing
+- **ID-02**: Drift detection may have false positives (abort valid fixes)
+  - **Mitigation**: Conservative threshold (0.3), extensive testing, logging all decisions
+
+### Medium Risks
+- **CT-01**: AST analyzer may have false positives/negatives
+  - **Mitigation**: Test on real CLI code, handle all scope types, builtin detection
+
+### Low Risks
+- **IH-02, IH-04, CT-02, CT-04, ID-04, IH-03**: All low-risk enhancements
+  - **Mitigation**: Standard testing, backward compatibility checks
+
+---
+
+**Status**: READY TO START
+**Next Action**: Identify PLAN_FIX tasks, then spawn Agent A for CT-01 (Static Import Analyzer)
+
+**Next Action**: Begin implementation with WS1 (Config Updates)

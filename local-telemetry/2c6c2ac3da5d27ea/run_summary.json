@@ -1,0 +1,46 @@
+{
+  "run_id": "2c6c2ac3da5d27ea",
+  "family": "zip",
+  "status": "running",
+  "started_at": "2026-01-16T15:52:33.863176",
+  "completed_at": null,
+  "examples_processed": 0,
+  "examples_successful": 0,
+  "examples_failed": 0,
+  "phases_completed": "[]",
+  "total_duration_ms": 21490,
+  "attempt_counts": {
+    "compilation": {
+      "total_attempts": 0,
+      "successful": 0,
+      "failed": 0
+    },
+    "runtime": {
+      "total_attempts": 2,
+      "successful": 2,
+      "failed": 0
+    }
+  },
+  "phase_summary": {
+    "discovery": {
+      "duration_ms": 188,
+      "success": true
+    },
+    "compilation": {
+      "duration_ms": 8768,
+      "success": true
+    },
+    "runtime": {
+      "duration_ms": 12497,
+      "success": true
+    },
+    "markdown_update": {
+      "duration_ms": 19,
+      "success": true
+    },
+    "final_review": {
+      "duration_ms": 18,
+      "success": true
+    }
+  }
+}

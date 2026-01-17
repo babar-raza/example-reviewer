@@ -1,0 +1,71 @@
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\src\cli.py:422: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "generated_at": datetime.utcnow().isoformat(),
+[*] Starting validation for family: imaging
+[i] Using custom content root: D:\onedrive\Documents\GitHub\aspose.net\content
+[i] Run ID: 44
+[i] Artifacts directory: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_121306_44
+[*] Setting up .NET workspace...
+[OK] Workspace ready
+[*] Checking Ollama...
+[OK] Using Ollama model: qwen2.5-coder:latest
+[i] Limiting to 15 snippets
+[i] Found 15 unverified snippets
+
+[1/15] Validating snippet 2606 from content\blog.aspose.net\imaging\add-filters-to-images-dotnet-csharp\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[2/15] Validating snippet 2607 from content\blog.aspose.net\imaging\add-filters-to-images-dotnet-csharp\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[3/15] Validating snippet 2608 from content\blog.aspose.net\imaging\add-filters-to-images-dotnet-csharp\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[4/15] Validating snippet 2609 from content\blog.aspose.net\imaging\add-watermark-to-images-dotnet-csharp\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[5/15] Validating snippet 2610 from content\blog.aspose.net\imaging\add-watermark-to-images-dotnet-csharp\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[6/15] Validating snippet 2611 from content\blog.aspose.net\imaging\adding-dynamic-watermarks-to-animated-gifs-in-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[7/15] Validating snippet 2612 from content\blog.aspose.net\imaging\adding-dynamic-watermarks-to-animated-gifs-in-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[8/15] Validating snippet 2613 from content\blog.aspose.net\imaging\adding-dynamic-watermarks-to-animated-gifs-in-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[9/15] Validating snippet 2614 from content\blog.aspose.net\imaging\adding-dynamic-watermarks-to-animated-gifs-in-dotnet\index.md
+  [OK] Verified - Fixed after 2 iterations using qwen2.5-coder:latest
+
+[10/15] Validating snippet 2615 from content\blog.aspose.net\imaging\adding-dynamic-watermarks-to-animated-gifs-in-dotnet\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[11/15] Validating snippet 2616 from content\blog.aspose.net\imaging\adding-visual-effects-to-gif-animations-using-aspose-imaging\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[12/15] Validating snippet 2617 from content\blog.aspose.net\imaging\adding-visual-effects-to-gif-animations-using-aspose-imaging\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[13/15] Validating snippet 2618 from content\blog.aspose.net\imaging\adding-visual-effects-to-gif-animations-using-aspose-imaging\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[14/15] Validating snippet 2619 from content\blog.aspose.net\imaging\adding-visual-effects-to-gif-animations-using-aspose-imaging\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[15/15] Validating snippet 2620 from content\blog.aspose.net\imaging\adding-visual-effects-to-gif-animations-using-aspose-imaging\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[OK] Validation completed
+[i] Snippets processed: 15
+[i] Verified: 1
+[i] Needs fix: 14
+[i] Errors: 0
+[*] Generating validation report...
+[OK] Report saved to: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_121306_44\validation_report.json
+
+=== Validation Summary ===
+Total snippets: 498
+Verified: 1
+Needs fix: 14
+Unverified: 483

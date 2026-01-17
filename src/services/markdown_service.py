@@ -5,6 +5,7 @@ Implements Phase D: Markdown Update (Inline/Gist).
 
 import re
 import uuid
+import hashlib
 import difflib
 import logging
 from pathlib import Path
@@ -12,6 +13,13 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from ..core.models import ExampleRecord, ExampleStatus, MarkdownEdit, SourceType
 from ..core.database import Database
+
+# Import GistPublisher - optional dependency
+try:
+    from .gist_publisher import GistPublisher, GistPublishResult
+    GIST_PUBLISHER_AVAILABLE = True
+except ImportError:
+    GIST_PUBLISHER_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +34,26 @@ class MarkdownUpdateService:
         self,
         db: Database,
         artifacts_dir: Optional[Path] = None,
+        gist_publisher: Optional[Any] = None,
+        gist_upload_mode: str = "inline-only",
+        gist_target_account: str = "",
     ):
         """
         Initialize markdown update service.
-        
+
         Args:
             db: Database instance
             artifacts_dir: Directory for storing diff artifacts
+            gist_publisher: Optional GistPublisher instance for upload modes
+            gist_upload_mode: One of "inline-only", "upload-on-change", "upload-always"
+            gist_target_account: GitHub account for new gist shortcodes
         """
         self.db = db
         self.artifacts_dir = artifacts_dir or Path("artifacts/diffs")
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        self.gist_publisher = gist_publisher
+        self.gist_upload_mode = gist_upload_mode
+        self.gist_target_account = gist_target_account
     
     def update_markdown_file(
         self,
@@ -112,10 +129,11 @@ class MarkdownUpdateService:
                         edit_id=str(uuid.uuid4())[:8],
                         file_path=file_path,
                         example_id=example.example_id,
+                        family=example.family,
                         edit_type="inline_replace" if example.source_type == SourceType.INLINE else "gist_replace",
                         diff_ref=diff_ref,
                     )
-                    self.db.create_markdown_edit(edit)
+                    self.db.save_markdown_edit(edit)
                     
             except Exception as e:
                 logger.error(f"Failed to write {file_path}: {e}")
@@ -155,7 +173,7 @@ class MarkdownUpdateService:
         
         # Look forwards from end_line for closing fence
         for i in range(end_line, min(len(lines), end_line + 5)):
-            if lines[i].startswith('```') and i > fence_start:
+            if lines[i].startswith('```') and fence_start is not None and i > fence_start:
                 fence_end = i
                 break
         
@@ -197,37 +215,141 @@ class MarkdownUpdateService:
     ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         Update a gist reference in content.
-        
-        For gist examples, we may need to:
-        1. Keep the shortcode but update the gist ID if we uploaded new code
-        2. Replace the shortcode with inline code
+
+        Supports three modes based on gist_upload_mode:
+        - inline-only: Replace shortcode with inline code block (default)
+        - upload-on-change: Upload if code changed, update shortcode with new gist ID
+        - upload-always: Always upload new gist, update shortcode
+
+        Args:
+            content: Markdown content
+            example: ExampleRecord with verified code
+
+        Returns:
+            Tuple of (updated_content, change_info) or None if no update needed
         """
         if not example.gist:
             return None
-        
+
         # Find the gist shortcode
         pattern = re.compile(
-            r'\{\{<\s*gist\s+' + re.escape(example.gist.owner) + 
+            r'\{\{<\s*gist\s+' + re.escape(example.gist.owner) +
             r'\s+' + re.escape(example.gist.gist_id) +
-            r'(?:\s+["\']?[^"\'>\s]+["\']?)?\s*>\}\}',
+            r'(?:\s+["\']?([^"\'>\s]+)["\']?)?\s*>\}\}',
             re.IGNORECASE
         )
-        
+
         match = pattern.search(content)
         if not match:
             logger.warning(f"Could not find gist shortcode for {example.example_id}")
             return None
-        
-        # For now, replace with inline code block
-        # In production, you might upload to a new gist instead
+
+        # Extract filename from shortcode if present
+        filename = match.group(1) if match.group(1) else (example.gist.filename or f"{example.example_id}.cs")
+
+        # Determine update strategy based on mode
+        if self.gist_upload_mode == "inline-only" or not self.gist_publisher:
+            return self._convert_gist_to_inline(content, example, match)
+
+        # Check if publisher is available
+        if not self.gist_publisher.is_available():
+            logger.warning("Gist publisher not available, falling back to inline")
+            return self._convert_gist_to_inline(content, example, match)
+
+        # For upload modes, check if code has changed
+        if self.gist_upload_mode == "upload-on-change":
+            # Compare code hashes
+            original_hash = hashlib.sha256((example.original_code or "").encode()).hexdigest()[:16]
+            verified_hash = hashlib.sha256((example.verified_code or "").encode()).hexdigest()[:16]
+
+            if original_hash == verified_hash:
+                # No code change, keep original shortcode
+                return None
+
+        # Upload to gist
+        return self._upload_and_update_gist(content, example, match, filename)
+
+    def _convert_gist_to_inline(
+        self,
+        content: str,
+        example: ExampleRecord,
+        match: re.Match,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """
+        Convert gist shortcode to inline code block.
+
+        Args:
+            content: Original markdown content
+            example: ExampleRecord with verified code
+            match: Regex match for the gist shortcode
+
+        Returns:
+            Tuple of (updated_content, change_info)
+        """
         replacement = f"```csharp\n{example.verified_code}\n```"
-        
         result = content[:match.start()] + replacement + content[match.end():]
-        
+
         return result, {
             'example_id': example.example_id,
-            'type': 'gist_to_inline',
+            'edit_type': 'gist_to_inline',
             'original_gist': f"{example.gist.owner}/{example.gist.gist_id}",
+        }
+
+    def _upload_and_update_gist(
+        self,
+        content: str,
+        example: ExampleRecord,
+        match: re.Match,
+        filename: str,
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """
+        Upload code to gist and update shortcode with new gist ID.
+
+        Args:
+            content: Original markdown content
+            example: ExampleRecord with verified code
+            match: Regex match for the gist shortcode
+            filename: Filename for the gist
+
+        Returns:
+            Tuple of (updated_content, change_info) or falls back to inline on failure
+        """
+        # Build description
+        description = f"Verified example from {example.family} - {example.file_path}"
+
+        # Determine old_gist_id for update mode
+        old_gist_id = None
+        if self.gist_upload_mode == "upload-on-change":
+            old_gist_id = example.gist.gist_id
+
+        # Publish gist
+        result = self.gist_publisher.publish_gist(
+            code_content=example.verified_code,
+            filename=filename,
+            description=description,
+            old_gist_id=old_gist_id,
+        )
+
+        if not result.success:
+            logger.warning(f"Gist upload failed: {result.error}, falling back to inline")
+            return self._convert_gist_to_inline(content, example, match)
+
+        # Build new shortcode with updated gist ID
+        target_account = self.gist_target_account or example.gist.owner
+        new_shortcode = f'{{{{< gist {target_account} {result.gist_id} "{filename}" >}}}}'
+
+        updated_content = content[:match.start()] + new_shortcode + content[match.end():]
+
+        logger.info(
+            f"Gist uploaded for {example.example_id}: {result.html_url}"
+        )
+
+        return updated_content, {
+            'example_id': example.example_id,
+            'edit_type': 'gist_replace',
+            'old_gist_id': example.gist.gist_id,
+            'new_gist_id': result.gist_id,
+            'new_gist_url': result.html_url,
         }
     
     def _generate_diff(

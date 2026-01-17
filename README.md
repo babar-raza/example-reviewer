@@ -49,6 +49,7 @@ Comprehensive guides for using and maintaining the Example Reviewer:
 - **[Troubleshooting](docs/troubleshooting.md)** - Common issues and detailed solutions
 - **[API Reference](docs/api-reference.md)** - Code API documentation
 - **[Testing Guide](docs/testing-guide.md)** - Test suite and testing practices
+- **[Agent Instructions](AGENTS.md)** - Agent environment and workflow requirements
 
 ## Installation
 

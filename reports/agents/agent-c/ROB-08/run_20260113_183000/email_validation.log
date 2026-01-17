@@ -1,0 +1,71 @@
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\src\cli.py:428: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "generated_at": datetime.utcnow().isoformat(),
+[*] Starting validation for family: email
+[i] Using custom content root: D:\onedrive\Documents\GitHub\aspose.net\content
+[i] Run ID: 56
+[i] Artifacts directory: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_140546_56
+[*] Setting up .NET workspace...
+[OK] Workspace ready
+[*] Checking Ollama...
+[OK] Using Ollama model: qwen2.5-coder:latest
+[i] Limiting to 15 snippets
+[i] Found 15 unverified snippets
+
+[1/15] Validating snippet 2582 from content\docs.aspose.net\email\en\developer-guide\email-format-converter\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[2/15] Validating snippet 2583 from content\docs.aspose.net\email\en\developer-guide\email-format-converter\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[3/15] Validating snippet 2561 from content\docs.aspose.net\email\en\getting-started\metered-licensing\_index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[4/15] Validating snippet 2584 from content\kb.aspose.net\email\en\email-format-converter\how-to-build-an-email-conversion-web-api-asp-net-core.md
+  [!] Needs fix - Namespace policy violation: Namespace not allowed: Microsoft.AspNetCore.Mvc; Namespace not allowed: System.ComponentModel.DataAnnotations
+
+[5/15] Validating snippet 2585 from content\kb.aspose.net\email\en\email-format-converter\how-to-build-an-email-conversion-web-api-asp-net-core.md
+  [!] Needs fix - Could not verify after all attempts
+
+[6/15] Validating snippet 2586 from content\kb.aspose.net\email\en\email-format-converter\how-to-build-an-email-conversion-web-api-asp-net-core.md
+  [OK] Verified - Fixed after 9 iterations using qwen2.5-coder:7b
+
+[7/15] Validating snippet 2587 from content\kb.aspose.net\email\en\email-format-converter\how-to-build-an-email-conversion-web-api-asp-net-core.md
+  [!] Needs fix - Could not verify after all attempts
+
+[8/15] Validating snippet 2588 from content\kb.aspose.net\email\en\email-format-converter\how-to-build-an-email-conversion-web-api-asp-net-core.md
+  [!] Needs fix - Namespace policy violation: Namespace not allowed: EmailConverterApi.Services; Namespace not allowed: Microsoft.OpenApi.Models
+
+[9/15] Validating snippet 2589 from content\kb.aspose.net\email\en\email-format-converter\how-to-build-an-email-conversion-web-api-asp-net-core.md
+  [!] Needs fix - Namespace policy violation: Namespace not allowed: System.Net; Namespace not allowed: System.Text.Json
+
+[10/15] Validating snippet 2590 from content\kb.aspose.net\email\en\email-format-converter\how-to-build-an-email-conversion-web-api-asp-net-core.md
+  [!] Needs fix - Could not verify after all attempts
+
+[11/15] Validating snippet 2591 from content\kb.aspose.net\email\en\email-format-converter\how-to-convert-email-format-using-dotnet.md
+  [!] Needs fix - Namespace policy violation: Namespace not allowed: System.Threading.Tasks
+
+[12/15] Validating snippet 2592 from content\kb.aspose.net\email\en\email-format-converter\how-to-convert-email-format-using-dotnet.md
+  [!] Needs fix - Could not verify after all attempts
+
+[13/15] Validating snippet 2593 from content\kb.aspose.net\email\en\email-format-converter\how-to-convert-email-format-using-dotnet.md
+  [!] Needs fix - Could not verify after all attempts
+
+[14/15] Validating snippet 2594 from content\kb.aspose.net\email\en\email-format-converter\how-to-convert-email-format-using-dotnet.md
+  [!] Needs fix - Could not verify after all attempts
+
+[15/15] Validating snippet 2595 from content\kb.aspose.net\email\en\email-format-converter\how-to-convert-email-format-using-dotnet.md
+  [!] Needs fix - Could not verify after all attempts
+
+[OK] Validation completed
+[i] Snippets processed: 15
+[i] Verified: 1
+[i] Needs fix: 14
+[i] Errors: 0
+[*] Generating validation report...
+[OK] Report saved to: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_140546_56\validation_report.json
+
+=== Validation Summary ===
+Total snippets: 55
+Verified: 3
+Needs fix: 42
+Unverified: 10

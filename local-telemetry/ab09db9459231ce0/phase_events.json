@@ -1,0 +1,23 @@
+[
+  {
+    "phase": "discovery",
+    "duration_ms": 190,
+    "success": true,
+    "timestamp": "2026-01-16T15:48:29.068939",
+    "metadata": {}
+  },
+  {
+    "phase": "compilation",
+    "duration_ms": 11025,
+    "success": true,
+    "timestamp": "2026-01-16T15:48:29.281855",
+    "metadata": {}
+  },
+  {
+    "phase": "markdown_update",
+    "duration_ms": 6,
+    "success": true,
+    "timestamp": "2026-01-16T15:48:40.329201",
+    "metadata": {}
+  }
+]

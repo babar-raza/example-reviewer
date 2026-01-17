@@ -1,0 +1,67 @@
+2026-01-15 11:47:02,051 - src.core.database - INFO - Database initialized at data\example_reviewer.db
+2026-01-15 11:47:02,069 - src.pipeline.orchestrator - INFO - Phase A: Discovery for zip
+2026-01-15 11:47:02,076 - src.services.discovery_service - INFO - Processing 1 files for family zip
+2026-01-15 11:47:02,111 - src.pipeline.orchestrator - INFO - Phase B: Compilation verification for zip
+2026-01-15 11:47:06,398 - src.pipeline.orchestrator - INFO - Phase C: Runtime verification for zip
+2026-01-15 11:47:12,854 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-15 11:47:17,784 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-15 11:47:23,523 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-15 11:47:31,067 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-15 11:47:36,693 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-15 11:47:43,022 - httpx - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-15 11:47:44,818 - src.pipeline.orchestrator - INFO - Phase D: Markdown update for zip
+2026-01-15 11:47:44,824 - src.pipeline.orchestrator - INFO - Phase E: Final LLM review for zip
+2026-01-15 11:47:44,829 - src.pipeline.orchestrator - INFO - Phase F: Finalization for zip
+{
+  "success": true,
+  "data": {
+    "family": "zip",
+    "started_at": "2026-01-15T11:47:02.051325",
+    "phases": {
+      "discovery": {
+        "files_found": 1,
+        "files_processed": 1,
+        "examples_found": 2,
+        "inline_examples": 2,
+        "gist_examples": 0,
+        "errors": 0
+      },
+      "compilation": {
+        "total_processed": 2,
+        "compiled_first_try": 2,
+        "compiled_with_fix": 0,
+        "failed": 0,
+        "errors": 0,
+        "dotnet_version": "9.0.200",
+        "verified": 2
+      },
+      "runtime": {
+        "total_processed": 2,
+        "passed_first_try": 0,
+        "passed_with_fix": 0,
+        "failed": 2,
+        "errors": 0,
+        "llm_fix_attempts": 6,
+        "verified": 0
+      },
+      "markdown_update": {
+        "files_processed": 0,
+        "files_updated": 0,
+        "examples_updated": 0,
+        "errors": 0
+      },
+      "final_review": {
+        "files_reviewed": 0,
+        "approved": 0,
+        "issues_found": 0
+      },
+      "finalization": {
+        "committed": false,
+        "commit_hash": null
+      }
+    },
+    "success": true,
+    "run_id": "1b132a0792f27f0a",
+    "completed_at": "2026-01-15T11:47:44.856369"
+  }
+}

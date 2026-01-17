@@ -1,0 +1,170 @@
+{
+  "llm": {
+    "provider": "ollama",
+    "model": "qwen2.5:14b",
+    "temperature": 0.2,
+    "max_retries": 5,
+    "retry_backoff_seconds": 5,
+    "api_key_env_var": "OPENAI_API_KEY",
+    "base_url": "http://localhost:11434/v1",
+    "timeout_seconds": 120
+  },
+  "limits": {
+    "cpu_max_percent": 90,
+    "ram_max_mb": 0,
+    "vram_max_mb": 0
+  },
+  "resource_detection": {
+    "auto_detect_vram": true,
+    "prefer_gpu_when_available": true,
+    "fallback_to_cpu": true,
+    "telemetry_log_resource_decisions": true
+  },
+  "git": {
+    "enabled": false,
+    "commit_message_template": "chore({family}): verify {count} examples",
+    "commit_description_template": "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}",
+    "only_commit_touched_files": true
+  },
+  "gist": {
+    "enabled": true,
+    "target_account": "aspose-com-gists",
+    "auth": {
+      "method": "none",
+      "pat_env_var": "GIST_PAT"
+    },
+    "upload_mode": "inline-only",
+    "is_public": true,
+    "description_template": "Verified example from {family} - {file_path}"
+  },
+  "telemetry": {
+    "internal_enabled": true,
+    "local_telemetry_enabled": true,
+    "local_telemetry_path": "./local-telemetry",
+    "http_api_enabled": true,
+    "http_api_url": "http://localhost:8765",
+    "http_api_timeout_seconds": 10,
+    "http_api_retry_count": 3
+  },
+  "vector_db": {
+    "enabled": true,
+    "provider": "chromadb",
+    "embedding_model": "all-MiniLM-L6-v2",
+    "persist_directory": "./data/chroma",
+    "search_k": 3,
+    "min_similarity_threshold": 0.7
+  },
+  "backfill": {
+    "auto_enabled": false,
+    "targets": [
+      "test_data",
+      "api_reference",
+      "examples",
+      "gist_source_code"
+    ],
+    "github_timeout_seconds": 120,
+    "retry_on_failure": true
+  },
+  "discovery_patterns": {
+    "fence_patterns": [
+      "^```(\\w+|c#)\\s*\\n(.*?)^```"
+    ],
+    "validatable_languages": [
+      "cs",
+      "csharp",
+      "c#"
+    ],
+    "language_aliases": {
+      "csharp": [
+        "cs",
+        "c#",
+        "C#",
+        "csharp",
+        "CSharp"
+      ],
+      "python": [
+        "py",
+        "python",
+        "python3"
+      ]
+    },
+    "normalize_to_canonical": true,
+    "regex_timeout_seconds": 5.0,
+    "min_line_count": 5,
+    "max_line_count": 500,
+    "content_exclude_patterns": [
+      "^[\\s\\n]*\\{[\\s\\n]*[\"']",
+      "^\\s*<\\?xml",
+      "^\\s*Output:",
+      "^\\s*\\$\\s+(dotnet|npm|node|python|pip|git|cd|ls|mkdir)"
+    ],
+    "require_code_indicators": [
+      "\\bclass\\b",
+      "\\bpublic\\b",
+      "\\bvoid\\b",
+      "\\busing\\b",
+      "\\bnamespace\\b"
+    ],
+    "context_extraction": {
+      "enabled": true,
+      "max_paragraphs": 2,
+      "max_heading_distance": 50,
+      "include_file_header": false,
+      "context_window_lines": 20,
+      "min_context_length": 10
+    },
+    "gist_extraction": {
+      "enabled": true,
+      "shortcode_patterns": [
+        "\\{\\{<\\s*gist\\s+([^\\s]+)\\s+([^\\s]+)(?:\\s+[\"']?([^\"'>\\s]+)[\"']?)?\\s*>\\}\\}",
+        "\\[gist:([^/]+)/([^/]+)(?:/([^\\]]+))?\\]"
+      ],
+      "script_patterns": [
+        "<script\\s+src=[\"']https://gist\\.github\\.com/([^/]+)/([^.]+)\\.js(?:\\?file=([^\"']+))?[\"']",
+        "<script\\s+src=[\"']https://gitlab\\.com/([^/]+)/-/snippets/([^/]+)\\.js[\"']"
+      ],
+      "allowed_owners": [],
+      "blocked_owners": []
+    }
+  },
+  "final_review": {
+    "enabled": true,
+    "confidence_threshold": 0.7,
+    "model": "sonnet-4.5",
+    "timeout_seconds": 30,
+    "auto_remediation_enabled": false,
+    "max_review_attempts": 2,
+    "strict_mode": false,
+    "fail_on_critical": true,
+    "only_review_llm_fixed": true
+  },
+  "drift": {
+    "enabled": true,
+    "threshold": 0.3,
+    "fail_on_exceed": true,
+    "log_all_drift_scores": true
+  },
+  "artifact_store_path": "./artifacts",
+  "database_path": "./data/example_reviewer.db",
+  "content_url_patterns": {
+    "_comment": "URL patterns for different content sources - used for config reference",
+    "blog.aspose.net": {
+      "base_path": "content/blog.aspose.net/{product}",
+      "has_language_subfolder": false,
+      "english_pattern": "**/index.md",
+      "localized_pattern": "**/index.{lang}.md",
+      "notes": "blog.aspose.net does NOT have /en/ subfolder - English is index.md, other langs are index.{lang}.md"
+    },
+    "docs.aspose.net": {
+      "base_path": "content/docs.aspose.net/{product}",
+      "has_language_subfolder": true,
+      "english_pattern": "en/**/*.md",
+      "notes": "docs.aspose.net has /en/ subfolder for English content"
+    },
+    "kb.aspose.net": {
+      "base_path": "content/kb.aspose.net/{product}",
+      "has_language_subfolder": true,
+      "english_pattern": "en/**/*.md"
+    }
+  }
+}

@@ -1,32 +1,126 @@
 # Telemetry System Healing Plan
 
 ## Context
-Local telemetry implementation is 80% complete but has 4 critical blockers preventing production readiness:
-- Missing `record_timing()` method causing runtime crashes
-- Non-functional HTTP API secondary write path (API is documented at `docs/local-telemetry.md`)
-- Zero test coverage for telemetry module
-- Limited metric support (integer counters only)
 
-**Reference:** See [docs/local-telemetry.md](../docs/local-telemetry.md) for complete HTTP API specification (v2.1.0)
+⚠️ **CRITICAL CORRECTION**: This plan was originally written for a different telemetry implementation. **The actual implementation is split between two files**:
 
-## Gap → Taskcard Mapping
+**Current Reality**:
+- **`src/services/telemetry_service.py`** - `TelemetryService` class with HTTP API + SQLite dual-write
+  - `start_run()` method exists (line 106) - posts run to API
+  - `update_run()` method exists (line 139) - updates run via PATCH
+  - `associate_commit()` method exists (line 222) - associates commits with runs
+- **`src/core/telemetry.py`** - Utility functions and context managers
+  - `track_phase_timing()` context manager exists - records phase durations
+  - `export_run_telemetry()` function exists - exports telemetry to files
+- **No `TelemetryClient` class** - this was assumed incorrectly
+- **No NDJSON dual-write** - uses HTTP API + SQLite, not NDJSON files
+- **HTTP API already configured** - `TelemetryConfig` has `http_api_enabled`, `http_api_url`, timeouts, retries (config/global.json lines 40-48)
 
-| Gap/Blocker ID | Description | Taskcard ID(s) |
-|----------------|-------------|----------------|
-| TM-GAP-01 | Missing `record_timing()` method - `AttributeError` at runtime | TM-01 |
-| TM-GAP-02 | No HTTP API configuration - secondary write path non-functional | TM-02 |
-| TM-GAP-03 | No telemetry validation tests - zero coverage | TM-03 |
-| TM-GAP-04 | Incomplete metric support - integer counters only | TM-04 |
+**Actual Gaps** (refined from original assumptions):
+1. **Test coverage incomplete**: TelemetryService methods lack comprehensive tests
+2. **Schema compliance unverified**: No tests verifying HTTP API payload matches spec
+3. **Failure modes untested**: Need tests for graceful degradation when API unavailable
+4. **Commit association untested**: `associate_commit()` exists but lacks test coverage
+5. **Phase timing integration**: Verify `track_phase_timing()` covers all pipeline phases
+
+**Reference:** See [src/services/telemetry_service.py](../src/services/telemetry_service.py) and [src/core/telemetry.py](../src/core/telemetry.py)
+
+## Repo Reality Check
+
+**Purpose**: Verify telemetry implementation before making changes.
+
+### Validation Commands
+
+```bash
+# 1. Check if src/telemetry.py exists (plan assumes TelemetryClient here)
+[ -f src/telemetry.py ] && echo "EXISTS" || echo "MISSING: src/telemetry.py"
+
+# 2. Verify actual telemetry implementation files
+[ -f src/services/telemetry_service.py ] && echo "EXISTS: TelemetryService" || echo "MISSING"
+[ -f src/core/telemetry.py ] && echo "EXISTS: telemetry utilities" || echo "MISSING"
+
+# 3. Check for TelemetryClient class (plan assumes it exists)
+grep -rn "class TelemetryClient" src/ 2>/dev/null || echo "MISSING: TelemetryClient class"
+
+# 4. Check for TelemetryService class
+grep -n "class TelemetryService" src/services/telemetry_service.py
+
+# 5. Verify record_timing() method (plan says it's missing)
+grep -rn "def record_timing" src/ 2>/dev/null || echo "MISSING: record_timing()"
+
+# 6. Verify track_phase_timing() (actual timing implementation)
+grep -n "def track_phase_timing" src/core/telemetry.py
+
+# 7. Check HTTP API configuration
+grep -A 10 '"http_api' config/global.json
+
+# 8. Verify TelemetryService methods exist
+grep -n "def start_run\|def update_run\|def associate_commit" src/services/telemetry_service.py
+```
+
+### Reality Check Results
+
+| Assumption | Status | Evidence |
+|------------|--------|----------|
+| `TelemetryClient` in `src/telemetry.py` | ❌ **INCORRECT** | No such class - actual is `TelemetryService` |
+| NDJSON dual-write pattern | ❌ **INCORRECT** | Uses HTTP API + SQLite, not NDJSON files |
+| Missing `record_timing()` | ❌ **MISLEADING** | `track_phase_timing()` context manager exists and works |
+| No HTTP API configuration | ❌ **INCORRECT** | `TelemetryConfig` has full HTTP API settings in config |
+| Zero test coverage | ⚠️ **PARTIALLY CORRECT** | Some tests exist (tests/test_telemetry_*.py), but coverage incomplete |
+| `associate_commit()` missing | ❌ **INCORRECT** | Method exists at telemetry_service.py:222 |
+| `persistent_fix_service.py` exists | ❌ **INCORRECT** | No such file in repository |
+
+### Go/No-Go Decision
+
+⚠️ **RESCOPE REQUIRED** - Plan targets non-existent `TelemetryClient` and assumes NDJSON implementation.
+
+**Revised Scope**:
+- **TM-01**: ~~Implement record_timing()~~ → **OBSOLETE** - `track_phase_timing()` already works
+- **TM-02**: ~~Add HTTP API config~~ → **Add schema compliance tests for existing HTTP API**
+- **TM-03**: **Add comprehensive tests for TelemetryService** ← MOST VALUABLE (keep and expand)
+- **TM-04**: ~~Extend metric support~~ → **Verify telemetry exports include all needed metrics**
+
+**Estimated Reality Check Time**: 15 minutes
 
 ---
 
-## Taskcard TM-01: Implement record_timing() Method
+## Gap → Taskcard Mapping (REVISED)
 
-**Status:** Not Started
+| Gap/Blocker ID | Description | Taskcard ID(s) | Status |
+|----------------|-------------|----------------|--------|
+| TM-GAP-01 | ~~Missing `record_timing()`~~ | ~~TM-01~~ | ✅ **EXISTS** - `track_phase_timing()` works |
+| TM-GAP-02 | ~~No HTTP API configuration~~ | ~~TM-02~~ | ✅ **EXISTS** - Full config in global.json |
+| TM-GAP-03 | Incomplete test coverage for TelemetryService | TM-03 | ⚠️ **VALID** - Need comprehensive tests |
+| TM-GAP-04 | ~~Incomplete metric support~~ | ~~TM-04~~ | ✅ **ADEQUATE** - Metrics work, just verify |
+| TM-GAP-05 | Schema compliance unverified | TM-02 (revised) | ⚠️ **VALID** - Need API contract tests |
+| TM-GAP-06 | Failure modes untested (API down, timeout, etc) | TM-03 | ⚠️ **VALID** - Need degradation tests |
 
-**Gap Linkage:** Fixes TM-GAP-01 (Missing `record_timing()` method)
+---
 
-**Role:** Senior engineer delivering drop-in, production-ready timing metric support aligned with telemetry API schema.
+## Taskcard TM-01: ~~Implement record_timing()~~ → OBSOLETE
+
+⚠️ **STATUS: NOT NEEDED** - This taskcard is OBSOLETE. **`track_phase_timing()` context manager already exists** in src/core/telemetry.py.
+
+**Gap Linkage:** ~~Fixes TM-GAP-01 (Missing `record_timing()`)~~ - **Gap does not exist**
+
+**Priority:** ~~⚠️ CRITICAL~~ → ✅ **RESOLVED** - Timing already implemented
+
+**Role:** ~~Senior engineer delivering timing metric support~~ **NOT APPLICABLE**
+
+---
+
+**IMPORTANT:** The plan assumed a `TelemetryClient.record_timing()` method was missing and causing `AttributeError` crashes. **This is incorrect**:
+
+- ✅ `track_phase_timing()` context manager exists in `src/core/telemetry.py` (lines 20-93)
+- ✅ Used throughout orchestrator.py to wrap phase execution
+- ✅ Records duration_ms, success, metadata to database
+- ✅ No crashes - this functionality works correctly
+
+**This taskcard should be SKIPPED. No action required.**
+
+---
+
+### ~~Original Taskcard Details~~ (For Reference Only - DO NOT IMPLEMENT)
 
 ### Scope
 
@@ -164,133 +258,159 @@ cat artifacts/runs/run_*/events.ndjson | grep "timing_recorded"
 
 ---
 
-## Taskcard TM-02: Add HTTP API Configuration
+## Taskcard TM-02: ~~Add HTTP API Configuration~~ → Test Schema Compliance for Existing API
 
-**Status:** Not Started
+⚠️ **RESCOPED** - HTTP API configuration already exists (config/global.json lines 40-48). **TelemetryService** already implements HTTP API integration (lines 106-222 in telemetry_service.py). This taskcard now focuses on **testing schema compliance** with the API spec.
 
-**Gap Linkage:** Fixes TM-GAP-02 (No HTTP API configuration - secondary write path non-functional)
+**Status:** Not Started (Rescoped)
 
-**Role:** Senior engineer delivering production-ready HTTP telemetry configuration for local-telemetry-api v2.1.0.
+**Gap Linkage:** Fixes TM-GAP-05 (Schema compliance unverified)
+
+**Role:** Senior engineer delivering comprehensive schema compliance tests for existing TelemetryService HTTP API integration.
+
+---
+
+### ⚠️ CRITICAL: Test Existing API, Don't Rebuild It
+
+**TelemetryService already has**:
+- HTTP API configuration via `TelemetryConfig` (config/global.json lines 40-48)
+- `start_run()` method (line 106) - POST /api/v1/runs
+- `update_run()` method (line 139) - PATCH /api/v1/runs/{event_id}
+- `associate_commit()` method (line 222) - POST /api/v1/runs/{event_id}/associate-commit
+- Timeout and retry configuration
+- Auth token support (optional)
+
+**Work is to ADD**:
+1. Schema compliance tests verifying payloads match docs/local-telemetry.md spec
+2. Tests for idempotent behavior (duplicate event_id handling)
+3. Tests for graceful degradation (API unavailable, timeout, rate limiting)
+4. Integration tests with mock telemetry API server
+
+---
 
 ### Scope
 
 **Fix:**
-- Add environment variable support for `TELEMETRY_API_URL` (per `docs/local-telemetry.md` spec, default: `http://localhost:8765`)
-- Add support for `TELEMETRY_API_AUTH_ENABLED` and `TELEMETRY_API_AUTH_TOKEN` (optional auth)
-- Add timeout configuration via `TELEMETRY_API_TIMEOUT_MS` (default: 2000ms)
-- Update CLI initialization to read environment variables
-- Add optional CLI flag `--telemetry-url` to override environment variable
-- Implement proper telemetry API integration using POST `/api/v1/runs`, PATCH `/api/v1/runs/{event_id}` endpoints
-- Use `event_id` (UUID) for idempotency per API spec
-- Document configuration in `.env.example` with reference to `docs/local-telemetry.md`
+- Add comprehensive tests for `TelemetryService.start_run()` schema compliance
+- Add tests for `TelemetryService.update_run()` schema compliance
+- Add tests for `TelemetryService.associate_commit()` schema compliance
+- Test idempotent POST behavior (duplicate event_id returns 200 OK)
+- Test failure modes: API unavailable, timeout, 429 rate limiting, 5xx errors
+- Test graceful degradation: telemetry failures don't crash pipeline
+- Mock HTTP API server in tests using `responses` library
 
 **Allowed paths:**
-- `src/cli.py` - read environment variables, add CLI flag
-- `src/telemetry.py` - accept timeout and auth parameters, implement API integration
-- `.env.example` - document telemetry env vars
-- `test_telemetry_config.py` - new test file
+- `tests/test_telemetry_service.py` - comprehensive tests for TelemetryService (expand existing)
+- `tests/test_telemetry_schema_compliance.py` - new test file for schema validation
 
 **Forbidden:** Any other file/path
 
 ### Acceptance Checks
 
 **CLI:**
-- Run `export TELEMETRY_API_URL=http://localhost:8765 && python src/cli.py discover --family zip`
-- Verify HTTP POST requests sent to `localhost:8765/api/v1/runs` with proper schema (event_id, run_id, agent_name, job_type, start_time)
-- Run `python src/cli.py discover --family zip --telemetry-url http://localhost:9999`
-- Verify CLI flag overrides environment variable
-- Run with `TELEMETRY_API_TIMEOUT_MS=5000` to verify configurable timeout
-- Run with `TELEMETRY_API_AUTH_ENABLED=true TELEMETRY_API_AUTH_TOKEN=test123` to verify auth headers
+- N/A - This taskcard focuses on testing existing functionality, not CLI behavior
 
 **UI/Web/API:**
-- N/A (CLI-only feature)
+- N/A (CLI-only feature in production, but tests verify API contracts)
 
 **Tests:**
-- `pytest test_telemetry_config.py` passes
-- Test verifies TELEMETRY_API_URL environment variable used
-- Test verifies CLI flag overrides environment variable
-- Test verifies TELEMETRY_API_TIMEOUT_MS configurable
-- Test verifies auth headers sent when enabled
-- Test verifies default values when not configured
-- Test verifies idempotent POST behavior (same event_id returns 200 OK with "duplicate" status)
+- `pytest tests/test_telemetry_schema_compliance.py -v` passes
+- Test verifies `TelemetryService.start_run()` sends correct schema per docs/local-telemetry.md
+- Test verifies `TelemetryService.update_run()` sends correct PATCH schema
+- Test verifies `TelemetryService.associate_commit()` sends correct commit schema
+- Test verifies idempotent POST behavior (duplicate event_id returns 200 OK)
+- Test verifies 429 rate limiting handled gracefully (logs warning, doesn't crash)
+- Test verifies 500 server errors handled gracefully
+- Test verifies timeout handling (connection timeout, read timeout)
+- Test verifies API unavailable doesn't crash pipeline
 
 **Config respected end-to-end:**
-- HTTP API disabled when TELEMETRY_API_URL not set (NDJSON-only mode)
-- HTTP API enabled when TELEMETRY_API_URL set
-- Timeout respected in HTTP requests
-- Auth headers included when TELEMETRY_API_AUTH_ENABLED=true
+- HTTP API disabled when `telemetry.http_api_enabled = false` in config
+- HTTP API enabled when `telemetry.http_api_enabled = true`
+- Timeout respected per `telemetry.http_api_timeout_ms` config
+- Auth headers included when `telemetry.http_api_auth_token` configured
 
 **No mock data in production paths:**
-- Real HTTP requests sent in production
-- Mock HTTP server used only in tests
+- Tests use `responses` library to mock HTTP API
+- Production code makes real HTTP requests to configured API URL
 
 ### Deliverables
 
-1. **Updated `src/cli.py`:**
-   - Read `TELEMETRY_API_URL`, `TELEMETRY_API_TIMEOUT_MS`, `TELEMETRY_API_AUTH_ENABLED`, `TELEMETRY_API_AUTH_TOKEN` environment variables
-   - Add `--telemetry-url` CLI flag to `discover`, `validate`, `patch` commands
-   - Pass telemetry_url, timeout, and auth config to `TelemetryClient.__init__()`
-
-2. **Updated `src/telemetry.py`:**
-   - Accept `telemetry_url: Optional[str] = None`, `timeout_ms: int = 2000`, `auth_enabled: bool = False`, `auth_token: Optional[str] = None` in `__init__()`
-   - Generate `event_id` as UUID at run start (per API spec for idempotency)
-   - Implement `start_run()` to POST to `/api/v1/runs` with schema:
+1. **New test file `tests/test_telemetry_schema_compliance.py`:**
+   - Comprehensive schema validation tests for existing TelemetryService
+   - Test class `TestTelemetryAPISchemaCompliance`:
+     - `test_start_run_schema_matches_spec`
+     - `test_update_run_schema_matches_spec`
+     - `test_associate_commit_schema_matches_spec`
+     - `test_idempotent_post_duplicate_event_id`
+     - `test_rate_limiting_429_handled_gracefully`
+     - `test_server_error_500_doesnt_crash`
+     - `test_connection_timeout_handled`
+     - `test_api_unavailable_graceful_degradation`
+   - Use `responses` library to mock HTTP API:
      ```python
-     {
-       "event_id": "<uuid>",
-       "run_id": "<timestamp>-<run_type>-<unique_id>",
-       "agent_name": "example-reviewer",
-       "job_type": "<run_type>",  # discovery, validation, patching
-       "status": "running",
-       "start_time": "<iso8601_with_tz>",
-       "git_repo": "<from_git>",
-       "git_branch": "<from_git>"
-     }
+     import responses
+     from src.services.telemetry_service import TelemetryService
+
+     @responses.activate
+     def test_start_run_schema_matches_spec():
+         """Verify start_run() sends correct POST schema per docs/local-telemetry.md"""
+         responses.add(
+             responses.POST,
+             'http://localhost:8765/api/v1/runs',
+             json={'status': 'success', 'event_id': '...'},
+             status=200
+         )
+
+         telemetry = TelemetryService(config=telemetry_config, db=db)
+         result = telemetry.start_run(event)
+
+         # Verify request payload
+         assert len(responses.calls) == 1
+         request_body = responses.calls[0].request.body
+         assert 'event_id' in request_body
+         assert 'run_id' in request_body
+         assert 'agent_name' in request_body
+         # ... verify all required fields per spec
      ```
-   - Implement `finish_run()` to PATCH `/api/v1/runs/{event_id}` with:
+
+2. **Expanded `tests/test_telemetry_service.py` (existing file):**
+   - Add tests for graceful degradation when API fails
+   - Add tests for timeout handling
+   - Add tests for auth token in headers
+   - Test cases:
+     - `test_telemetry_continues_when_api_down`
+     - `test_telemetry_respects_timeout_config`
+     - `test_auth_header_included_when_configured`
+     - `test_no_auth_header_when_not_configured`
+
+3. **Schema validation helper (tests/helpers/telemetry_schema.py):**
+   - JSON schema definitions from docs/local-telemetry.md:
      ```python
-     {
-       "status": "success|failure",
-       "end_time": "<iso8601_with_tz>",
-       "duration_ms": <int>,
-       "error_summary": "<if_failed>",
-       "metrics_json": {"pages_scanned": 10, ...}
+     from jsonschema import validate
+
+     START_RUN_SCHEMA = {
+         "type": "object",
+         "required": ["event_id", "run_id", "agent_name", "status", "start_time"],
+         "properties": {
+             "event_id": {"type": "string", "format": "uuid"},
+             "run_id": {"type": "string"},
+             "agent_name": {"type": "string"},
+             "status": {"type": "string", "enum": ["running"]},
+             "start_time": {"type": "string", "format": "date-time"},
+             ...
+         }
      }
+
+     def validate_start_run_payload(payload):
+         """Validate start_run payload against API spec."""
+         validate(instance=payload, schema=START_RUN_SCHEMA)
      ```
-   - Include `Authorization: Bearer <token>` header when auth_enabled=True
-   - Use timeout in HTTP requests: `requests.post(..., timeout=timeout_ms/1000.0)`
-   - Handle idempotent responses (200 OK with "duplicate" status)
-   - Handle 429 rate limiting gracefully (log warning, don't crash)
 
-3. **Updated `.env.example`:**
-   ```
-   # Optional: Local Telemetry API endpoint (see docs/local-telemetry.md)
-   # Default: http://localhost:8765 (local-telemetry-api v2.1.0)
-   TELEMETRY_API_URL=http://localhost:8765
-
-   # Optional: HTTP request timeout in milliseconds (default: 2000)
-   TELEMETRY_API_TIMEOUT_MS=5000
-
-   # Optional: Enable API authentication (default: false)
-   TELEMETRY_API_AUTH_ENABLED=false
-   TELEMETRY_API_AUTH_TOKEN=your-secret-token-here
-
-   # See full API documentation: docs/local-telemetry.md
-   ```
-
-4. **New test file `test_telemetry_config.py`:**
-   - Test environment variable TELEMETRY_API_URL used
-   - Test CLI flag --telemetry-url overrides environment
-   - Test TELEMETRY_API_TIMEOUT_MS configurable
-   - Test auth headers sent when enabled
-   - Test default behavior (no HTTP API) when not configured
-   - Test HTTP requests respect timeout
-   - Test idempotent POST behavior (duplicate event_id)
-   - Test 429 rate limiting handling
-
-5. **Forward-compatible migration:**
-   - Existing code without environment variables continues to work (NDJSON-only mode)
-   - CLI runs without --telemetry-url flag use environment variable
+4. **Forward-compatible migration:**
+   - Tests validate existing TelemetryService implementation
+   - No changes to production code required (unless tests reveal bugs)
+   - Tests serve as regression protection for future changes
 
 ### Hard Rules
 
@@ -389,109 +509,117 @@ python src/cli.py discover --family zip --max-pages 1
 
 ---
 
-## Taskcard TM-03: Create Telemetry Validation Tests
+## Taskcard TM-03: Add Comprehensive Tests for TelemetryService
 
-**Status:** Not Started
+⚠️ **RESCOPED** - Test target is **TelemetryService** (src/services/telemetry_service.py), not fictional TelemetryClient. Some tests already exist (tests/test_telemetry_*.py), but coverage is incomplete.
 
-**Gap Linkage:** Fixes TM-GAP-03 (No telemetry validation tests - zero coverage)
+**Status:** Not Started (Rescoped)
 
-**Role:** Senior engineer delivering comprehensive test coverage for telemetry module with API v2.1.0 compliance validation.
+**Gap Linkage:** Fixes TM-GAP-03 (Incomplete test coverage), TM-GAP-06 (Failure modes untested)
+
+**Role:** Senior engineer delivering comprehensive test coverage for TelemetryService with HTTP API integration validation.
+
+---
+
+### ⚠️ CRITICAL: Test Existing TelemetryService, Not Fictional TelemetryClient
+
+**Target for testing**:
+- **src/services/telemetry_service.py** - TelemetryService class (not TelemetryClient)
+- **src/core/telemetry.py** - track_phase_timing() context manager
+
+**Some tests already exist**:
+- `tests/test_telemetry_config.py` - telemetry configuration tests
+- `tests/test_telemetry_metrics.py` - metric tracking tests
+- `tests/test_telemetry_timing.py` - timing tests
+
+**Work is to ADD**:
+1. Comprehensive tests for TelemetryService.start_run(), update_run(), associate_commit()
+2. Tests for graceful degradation (API down, timeout, rate limiting)
+3. Tests for commit association workflow
+4. Integration tests with mock HTTP API server
+
+---
 
 ### Scope
 
 **Fix:**
-- Create comprehensive test suite for `src/telemetry.py` (target: 95%+ coverage)
-- Test all 6 context manager decorators (`track_page`, `track_snippet`, `track_validation`, `track_compilation`, `track_fix`, `track_patch`)
-- Test run lifecycle (start_run, finish_run) with HTTP API integration
-- Test event logging (NDJSON + HTTP API)
-- Test metric management (increment, get, save)
-- Test error handling and failure modes
-- Test artifacts directory creation and file writing
-- **NEW:** Test telemetry API v2.1.0 schema compliance (POST /api/v1/runs, PATCH /api/v1/runs/{event_id})
-- **NEW:** Test idempotency (duplicate event_id), auth headers, rate limiting (429), error responses
+- Add comprehensive test suite for `src/services/telemetry_service.py` (target: 90%+ coverage)
+- Test TelemetryService methods: start_run(), update_run(), associate_commit()
+- Test track_phase_timing() context manager from src/core/telemetry.py
+- Test error handling and graceful degradation (API unavailable, timeout, 429, 5xx errors)
+- Test HTTP API integration with mocked server
+- Test database persistence of telemetry events
+- Test commit association workflow end-to-end
 
 **Allowed paths:**
-- `tests/test_telemetry.py` - new comprehensive test file
-- `tests/fixtures/` - test fixtures if needed
-- `tests/conftest.py` - pytest fixtures if needed
+- `tests/test_telemetry_service_comprehensive.py` - new comprehensive test file
+- `tests/test_telemetry_integration.py` - new integration test file
 
-**Forbidden:** Any other file/path (no changes to src/telemetry.py itself)
+**Forbidden:** Any other file/path (no changes to src/services/telemetry_service.py itself)
 
 ### Acceptance Checks
 
 **CLI:**
-- Run `pytest tests/test_telemetry.py -v --cov=src/telemetry --cov-report=term-missing`
-- Coverage ≥ 95% for `src/telemetry.py`
+- Run `pytest tests/test_telemetry_service_comprehensive.py -v --cov=src/services/telemetry_service --cov-report=term-missing`
+- Coverage ≥ 90% for `src/services/telemetry_service.py`
 - All tests pass
+- Run `pytest tests/test_telemetry_integration.py -v` - integration tests pass
 
 **UI/Web/API:**
 - N/A (test-only taskcard)
 
 **Tests:**
-- Test happy path: run lifecycle creates artifacts directory and files
-- Test happy path: event logging writes to NDJSON
-- Test happy path: HTTP API POST /api/v1/runs receives correct schema
-- Test happy path: HTTP API PATCH /api/v1/runs/{event_id} updates run
-- Test failure path: HTTP API timeout doesn't crash event logging
-- Test failure path: invalid artifact directory doesn't crash initialization
-- Test edge case: multiple metrics with same name accumulate correctly
-- Test edge case: finish_run without start_run raises error
-- Test all 6 context manager decorators
-- Test NDJSON parsing: verify events can be read back
-- Test metrics.json: verify JSON structure matches schema
-- **NEW:** Test API schema compliance: verify all required fields present (event_id, run_id, agent_name, job_type, start_time)
-- **NEW:** Test idempotency: duplicate event_id POST returns 200 OK with "duplicate" status
-- **NEW:** Test auth: verify Authorization header sent when auth_enabled=True
-- **NEW:** Test rate limiting: verify 429 response handled gracefully
-- **NEW:** Test timestamps: verify ISO8601 with timezone format
+- Test happy path: `start_run()` creates run in database and posts to HTTP API
+- Test happy path: `update_run()` updates run in database and patches HTTP API
+- Test happy path: `associate_commit()` associates commit with run via HTTP API
+- Test failure path: HTTP API timeout doesn't crash TelemetryService methods
+- Test failure path: API unavailable (connection refused) handled gracefully
+- Test failure path: 429 rate limiting logged as warning, doesn't crash
+- Test failure path: 5xx server errors logged as warning, doesn't crash
+- Test edge case: `update_run()` without `start_run()` handles gracefully
+- Test edge case: multiple calls to `start_run()` with same event_id (idempotency)
+- Test `track_phase_timing()` context manager records timing to database
+- Test `track_phase_timing()` handles exceptions in wrapped code
+- Test database persistence: telemetry events saved correctly
+- Test commit association: workflow integrates with Phase F correctly
 
 **Config respected end-to-end:**
-- Tests verify NDJSON works without HTTP API configured
-- Tests verify HTTP API optional and failures graceful
+- Tests verify HTTP API disabled when `http_api_enabled = false`
+- Tests verify HTTP API enabled when `http_api_enabled = true`
+- Tests verify timeout respected per config
+- Tests verify auth token included in headers when configured
 
 **No mock data in production paths:**
-- Tests use temporary directories for artifacts (no pollution)
-- Tests use mock HTTP server (no real network calls)
+- Tests use temporary databases (SQLite :memory:)
+- Tests use `responses` library to mock HTTP API
 
 ### Deliverables
 
-1. **New test file `tests/test_telemetry.py` (600+ lines):**
-   - Pytest fixtures for TelemetryClient with temp directories
-   - Test class `TestTelemetryRunLifecycle`:
-     - `test_start_run_creates_directories`
-     - `test_start_run_writes_metadata`
-     - `test_start_run_posts_to_api` (NEW - validates API schema)
-     - `test_finish_run_saves_metrics`
-     - `test_finish_run_patches_api` (NEW - validates PATCH schema)
-     - `test_finish_run_without_start_raises_error`
-   - Test class `TestTelemetryEventLogging`:
-     - `test_log_event_writes_ndjson`
-     - `test_log_event_sends_http_api` (mocked)
-     - `test_log_event_http_failure_graceful`
-     - `test_log_event_ndjson_parseable`
-   - Test class `TestTelemetryContextManagers`:
-     - `test_track_page_success`
-     - `test_track_page_failure`
-     - `test_track_snippet_success`
-     - `test_track_validation_success`
-     - `test_track_compilation_success`
-     - `test_track_fix_success`
-     - `test_track_patch_success`
-   - Test class `TestTelemetryMetrics`:
-     - `test_increment_metric`
-     - `test_get_metrics`
-     - `test_save_metrics_json_structure`
-     - `test_metrics_accumulate_correctly`
-     - `test_metrics_json_sent_to_api` (NEW)
-   - Test class `TestTelemetryArtifacts`:
-     - `test_artifacts_directory_created`
-     - `test_ndjson_file_appends`
-     - `test_metadata_json_structure`
-   - **NEW Test class `TestTelemetryAPIIntegration`:**
-     - `test_api_schema_compliance_post_runs`
-     - `test_api_schema_compliance_patch_runs`
+1. **New test file `tests/test_telemetry_service_comprehensive.py` (400+ lines):**
+   - Pytest fixtures for TelemetryService with temp database and mock HTTP API
+   - Test class `TestTelemetryServiceRunLifecycle`:
+     - `test_start_run_saves_to_database`
+     - `test_start_run_posts_to_http_api`
+     - `test_update_run_updates_database`
+     - `test_update_run_patches_http_api`
+     - `test_associate_commit_posts_to_api`
+     - `test_associate_commit_updates_database`
+   - Test class `TestTelemetryServiceGracefulDegradation`:
+     - `test_start_run_api_unavailable_doesnt_crash`
+     - `test_update_run_timeout_doesnt_crash`
+     - `test_associate_commit_429_rate_limit_logs_warning`
+     - `test_api_500_error_handled_gracefully`
+     - `test_connection_refused_doesnt_crash`
+   - Test class `TestTelemetryServiceHTTPAPIIntegration`:
+     - `test_auth_token_included_in_headers`
+     - `test_timeout_respected_in_requests`
      - `test_idempotent_post_duplicate_event_id`
-     - `test_auth_headers_sent_when_enabled`
+     - `test_http_api_disabled_skips_requests`
+   - Test class `TestTrackPhaseTimingContextManager`:
+     - `test_track_phase_timing_records_duration`
+     - `test_track_phase_timing_handles_exceptions`
+     - `test_track_phase_timing_saves_to_database`
+     - `test_track_phase_timing_calculates_duration_correctly`
      - `test_auth_headers_not_sent_when_disabled`
      - `test_rate_limiting_429_handled_gracefully`
      - `test_timestamps_iso8601_with_timezone`
@@ -612,130 +740,118 @@ pytest tests/ -v
 
 ---
 
-## Taskcard TM-04: Extend Metric Support
+## Taskcard TM-04: ~~Extend Metric Support~~ → Verify Telemetry Exports Include All Metrics
 
-**Status:** Not Started
+✅ **RESCOPED** - Existing metrics are adequate for current needs. This taskcard now focuses on **verifying** that all metrics are exported correctly to the telemetry API and local files.
 
-**Gap Linkage:** Fixes TM-GAP-04 (Incomplete metric support - integer counters only)
+**Status:** Not Started (Rescoped)
 
-**Role:** Senior engineer delivering production-ready metric system with timing, histograms, and percentiles, aligned with telemetry API v2.1.0 `metrics_json` field.
+**Gap Linkage:** Fixes TM-GAP-04 (Verify metrics completeness)
+
+**Role:** Senior engineer verifying comprehensive metric export coverage for existing telemetry implementation.
+
+---
+
+### ⚠️ NOTE: Verify Existing Metrics, Don't Extend Yet
+
+**Current metric implementation**:
+- TelemetryService tracks metrics via database (src/core/models.py)
+- `track_phase_timing()` context manager records phase durations
+- Phase metrics stored in telemetry_events table
+- Metrics exported to `metrics_json` field in HTTP API
+
+**Work is to ADD**:
+1. Verification tests that all pipeline metrics are captured
+2. Tests that metrics are exported to API correctly
+3. Documentation of which metrics are tracked by each pipeline phase
+4. Audit of metric completeness (are we tracking everything we need?)
+
+---
 
 ### Scope
 
 **Fix:**
-- Extend `TelemetryClient` to support metric types: Counter, Gauge, Timing, Histogram
-- Implement histogram bucketing for distribution metrics (e.g., compilation times)
-- Calculate percentiles (p50, p90, p95, p99) for timing metrics
-- Maintain backward compatibility with existing `increment_metric()` calls (counters)
-- Update `save_metrics()` to serialize all metric types
-- Add `record_gauge(name, value)` for point-in-time measurements
-- Add `record_histogram(name, value)` for distribution tracking
-- **NEW:** Ensure all metrics serializable to `metrics_json` field for telemetry API compatibility (JSON serializable dict)
+- Verify all pipeline phases record their metrics correctly
+- Test that all metrics are exported to HTTP API `metrics_json` field
+- Document which metrics are tracked by each phase (discovery, compilation, runtime, etc.)
+- Audit metric completeness: identify any missing metrics that should be tracked
+- Test metric aggregation for family-level and global-level rollups
+- Verify metrics are queryable via telemetry API
 
 **Allowed paths:**
-- `src/telemetry.py` - extend metric support
-- `test_telemetry_metrics.py` - new test file for advanced metrics
+- `tests/test_telemetry_metrics_export.py` - new test file verifying metric exports
+- `docs/TELEMETRY_METRICS.md` - new documentation of tracked metrics (if needed)
 
-**Forbidden:** Any other file/path (no changes to call sites yet)
+**Forbidden:** Any other file/path (no changes to production code unless bugs found)
 
 ### Acceptance Checks
 
 **CLI:**
-- Run `python src/cli.py validate --family zip`
-- Verify `metrics.json` includes histogram buckets and percentiles
-- Example structure:
-  ```json
-  {
-    "counters": {"pages_scanned": 10, "snippets_found": 25},
-    "timings": {
-      "compilation_duration": {
-        "count": 25,
-        "sum": 45000,
-        "min": 500,
-        "max": 5000,
-        "avg": 1800,
-        "p50": 1500,
-        "p90": 3000,
-        "p95": 4000,
-        "p99": 4800
-      }
-    },
-    "histograms": {
-      "snippet_length": {
-        "buckets": {"10": 5, "50": 15, "100": 3, "500": 2},
-        "count": 25,
-        "sum": 1250
-      }
-    },
-    "gauges": {
-      "memory_usage_mb": 256
-    }
-  }
-  ```
-- If HTTP API configured, verify `metrics_json` field sent to PATCH `/api/v1/runs/{event_id}` contains all metric types
+- Run `python -m src.cli.main run --family zip` with telemetry enabled
+- Verify telemetry database has events for all pipeline phases (discovery, compilation, runtime, finalization)
+- Run `pytest tests/test_telemetry_metrics_export.py -v` - all tests pass
+- Verify metrics are exported to HTTP API `metrics_json` field when configured
 
 **UI/Web/API:**
-- N/A (internal metric system)
+- N/A (verification/testing taskcard)
 
 **Tests:**
-- `pytest test_telemetry_metrics.py -v` passes
-- Test counter: increment multiple times, verify sum
-- Test timing: record multiple values, verify min/max/avg/percentiles
-- Test histogram: record values, verify bucket distribution
-- Test gauge: record value, verify latest value stored
-- Test backward compatibility: existing increment_metric() calls still work
-- Test metrics_json serialization: all metric types JSON serializable
+- `pytest tests/test_telemetry_metrics_export.py -v` passes
+- Test all pipeline phases record metrics to database
+- Test metrics exported correctly to HTTP API `metrics_json` field
+- Test metric aggregation for family-level rollups
+- Test metric queryability via telemetry API
+- Test completeness: all expected metrics are tracked
 
 **Config respected end-to-end:**
-- Histogram bucket boundaries configurable (optional, default buckets fine)
-- Percentiles always calculated for timing metrics
+- Metrics tracked when telemetry enabled
+- Metrics skipped when telemetry disabled
+- HTTP API export optional (works without API)
 
 **No mock data in production paths:**
-- Real metric values used in production
-- Mock values only in tests
+- Tests use mock HTTP API server
+- Tests verify actual database metric storage
 
 ### Deliverables
 
-1. **Updated `src/telemetry.py`:**
-   - Add metric type enum or constants: COUNTER, TIMING, HISTOGRAM, GAUGE
-   - Separate storage dicts: `_counters`, `_timings`, `_histograms`, `_gauges`
-   - Keep `increment_metric()` unchanged (backward compatible, uses `_counters`)
-   - Add `record_timing(name, duration_ms)` - stores in `_timings[name] = []`
-   - Add `record_histogram(name, value, buckets=None)` - stores in `_histograms[name]`
-   - Add `record_gauge(name, value)` - stores in `_gauges[name] = value`
-   - Update `save_metrics()` to serialize all metric types with aggregations
-   - Calculate percentiles using manual implementation (avoid numpy dependency):
-     ```python
-     def _percentile(values, p):
-         sorted_values = sorted(values)
-         index = int(len(values) * p / 100.0)
-         return sorted_values[min(index, len(values) - 1)]
-     ```
-   - Ensure metrics JSON serializable for telemetry API `metrics_json` field
+1. **New test file `tests/test_telemetry_metrics_export.py`:**
+   - Test class `TestMetricCompleteness`:
+     - `test_all_phases_record_metrics`
+     - `test_discovery_phase_metrics_tracked`
+     - `test_compilation_phase_metrics_tracked`
+     - `test_runtime_phase_metrics_tracked`
+     - `test_finalization_phase_metrics_tracked`
+   - Test class `TestMetricExport`:
+     - `test_metrics_exported_to_api_metrics_json_field`
+     - `test_metrics_queryable_via_api`
+     - `test_family_level_metric_aggregation`
+     - `test_global_level_metric_aggregation`
+   - Test class `TestMetricAudit`:
+     - `test_phase_timing_durations_tracked`
+     - `test_example_counts_tracked`
+     - `test_failure_counts_tracked`
+     - `test_no_missing_critical_metrics`
 
-2. **Updated `save_metrics()` method:**
-   - Aggregate counters: sum
-   - Aggregate timings: count, sum, min, max, avg, p50, p90, p95, p99
-   - Aggregate histograms: bucket counts, total count, sum
-   - Aggregate gauges: latest value
-   - Write structured JSON with sections: counters, timings, histograms, gauges
-   - Format compatible with telemetry API `metrics_json` field (flat dict or nested dict, must be JSON serializable)
-
-3. **Updated HTTP API integration in `finish_run()`:**
-   - Include all aggregated metrics in `metrics_json` field when calling PATCH `/api/v1/runs/{event_id}`
+2. **Optional: Documentation file `docs/TELEMETRY_METRICS.md` (if gaps found):**
+   - List all metrics tracked by each pipeline phase
+   - Document metric names and their meanings
    - Example:
-     ```python
-     {
-       "status": "success",
-       "end_time": "...",
-       "duration_ms": 5000,
-       "metrics_json": {
-         "counters": {"pages_scanned": 10},
-         "timings": {"compilation_duration_avg": 1800},
-         "histograms": {"snippet_length_count": 25},
-         "gauges": {"memory_usage_mb": 256}
-       }
-     }
+     ```markdown
+     ## Discovery Phase Metrics
+     - `discovery_duration_ms`: Time spent in discovery phase
+     - `examples_discovered`: Number of code examples found
+     - `markdown_files_scanned`: Number of markdown files processed
+
+     ## Compilation Phase Metrics
+     - `compilation_duration_ms`: Time spent compiling examples
+     - `compilation_attempts`: Number of compilation attempts
+     - `compilation_failures`: Number of compilation errors
+     ```
+
+3. **Audit report of metric completeness:**
+   - Document which metrics are currently tracked
+   - Identify any missing metrics that should be added in future
+   - Prioritize missing metrics (critical vs nice-to-have)
      ```
 
 4. **New test file `test_telemetry_metrics.py`:**

@@ -1,32 +1,121 @@
 # Auto-Commit of Touched Files Healing Plan
 
 ## Context
-File patching infrastructure is fully functional (tracks modified files, writes patches, supports dry-run), but git integration is completely missing. Users must manually run `git add` and `git commit` after patching operations. This creates friction and risk of forgetting to commit verified changes.
 
-**Telemetry Integration:** Git commits should be associated with telemetry runs via the local-telemetry-api v2.1.0 endpoint `POST /api/v1/runs/{event_id}/associate-commit` (see `docs/local-telemetry.md` lines 695-719).
+⚠️ **CRITICAL CORRECTION**: This plan was originally written assuming git integration was "completely missing", but **Phase F in `src/pipeline/orchestrator.py` already implements git commit functionality** (lines 1211-1349).
 
-**Reference:** See [docs/local-telemetry.md](../docs/local-telemetry.md) for git commit tracking API
+**Current Reality**:
+- Phase F stages and commits touched files when `global_config.git.enabled = true` and not `dry_run`
+- Commit message templating already exists via `global_config.git.commit_message_template`
+- Git root finding, file staging (`git add`), and commit creation are fully implemented
+- Commit hash is captured but not yet associated with telemetry runs
+- Co-author tag is hardcoded in Phase F (lines 1309+)
 
-## Gap → Taskcard Mapping
+**Actual Gaps** (refined from original assumptions):
+1. **Config hierarchy unclear**: No explicit precedence between CLI flag, family config, and global config
+2. **Family-level templating missing**: Cannot override commit message per family
+3. **Telemetry association incomplete**: Commit hash not sent to telemetry API after successful commit
+4. **Rollback mechanism missing**: No safety net for undoing automated commits
+5. **Testing incomplete**: Phase F commit behavior lacks comprehensive tests
 
-| Gap/Blocker ID | Description | Taskcard ID(s) |
-|----------------|-------------|----------------|
-| AC-GAP-01 | No git commit automation - manual git commands required | AC-01 |
-| AC-GAP-02 | No git staging (git add) automation - files not tracked | AC-01 |
-| AC-GAP-03 | No configuration for auto-commit behavior - always manual | AC-02 |
-| AC-GAP-04 | No git commit message generation - user must craft messages | AC-03 |
-| AC-GAP-05 | No rollback mechanism - manual git reset required | AC-04 |
-| AC-GAP-06 | No telemetry API commit association - commits not tracked in telemetry | AC-03 |
+**Telemetry Integration:** Git commits should be associated with telemetry runs via TelemetryService `POST /api/v1/runs/{event_id}/associate-commit`.
+
+**Reference:** See [src/pipeline/orchestrator.py:1211-1349](../src/pipeline/orchestrator.py) for existing Phase F implementation
+
+## Repo Reality Check
+
+**Purpose**: Verify assumptions about git integration before making changes.
+
+### Validation Commands
+
+```bash
+# 1. Verify Phase F git commit implementation exists
+grep -n "def _run_finalization_phase" src/pipeline/orchestrator.py
+grep -n "git.enabled" src/pipeline/orchestrator.py
+grep -A 80 "# Attempt git commit" src/pipeline/orchestrator.py | head -100
+
+# 2. Check if patching_service.py exists (plan assumes it does)
+[ -f src/patching_service.py ] && echo "EXISTS" || echo "MISSING: src/patching_service.py"
+[ -f src/services/patching_service.py ] && echo "EXISTS" || echo "MISSING: src/services/patching_service.py"
+
+# 3. Verify CLI entry point
+[ -f src/cli.py ] && echo "EXISTS" || echo "MISSING: src/cli.py"
+[ -f src/cli/main.py ] && echo "EXISTS: src/cli/main.py" || echo "MISSING"
+
+# 4. Check git config in global.json
+grep -A 10 '"git"' config/global.json
+
+# 5. Verify telemetry service exists
+[ -f src/services/telemetry_service.py ] && echo "EXISTS: TelemetryService" || echo "MISSING"
+
+# 6. Check commit message template
+grep "commit_message_template" config/global.json
+```
+
+### Reality Check Results
+
+| Assumption | Status | Evidence |
+|------------|--------|----------|
+| Git integration missing | ❌ **INCORRECT** | Phase F lines 1241-1349 implement full git commit |
+| No git staging | ❌ **INCORRECT** | Phase F lines 1283-1297 stage files with `git add` |
+| `src/patching_service.py` exists | ❌ **INCORRECT** | No patching service - Phase F handles file updates |
+| `src/cli.py` exists | ❌ **INCORRECT** | Actual is `src/cli/main.py` |
+| No commit message template | ❌ **INCORRECT** | `global_config.git.commit_message_template` exists at config line 25 |
+| No telemetry association | ✅ **PARTIALLY CORRECT** | Commit hash captured but not sent to telemetry API |
+| No rollback mechanism | ✅ **CORRECT** | No safety net for automated commits |
+| No family-level config | ✅ **CORRECT** | No `family_config.commit_message_template` override |
+
+### Go/No-Go Decision
+
+⚠️ **RESCOPE REQUIRED** - Original plan assumes non-existent files and duplicate functionality.
+
+**Revised Scope**:
+- **AC-01**: ~~Implement git commit from scratch~~ → **Add CLI flag for commit control & comprehensive tests for Phase F**
+- **AC-02**: ~~Add git config~~ → **Enhance existing config with family-level overrides & precedence rules**
+- **AC-03**: ~~Implement commit messages~~ → **Add telemetry association to Phase F existing commits**
+- **AC-04**: **Keep rollback mechanism** (valid new feature)
+
+**Estimated Reality Check Time**: 15 minutes
 
 ---
 
-## Taskcard AC-01: Implement Auto-Commit Core Functionality
+## Gap → Taskcard Mapping (REVISED)
 
-**Status:** Not Started
+| Gap/Blocker ID | Description | Taskcard ID(s) | Status |
+|----------------|-------------|----------------|--------|
+| AC-GAP-01 | ~~No git commit automation~~ | ~~AC-01~~ | ✅ **EXISTS** - Phase F implements this |
+| AC-GAP-02 | ~~No git staging automation~~ | ~~AC-01~~ | ✅ **EXISTS** - Phase F implements this |
+| AC-GAP-03 | Config hierarchy unclear (CLI > family > global) | AC-02 | ⚠️ Needs clarification & testing |
+| AC-GAP-04 | No family-level commit message template override | AC-02 | ⚠️ Needs addition |
+| AC-GAP-05 | No rollback mechanism - manual git reset required | AC-04 | ⚠️ Needs implementation |
+| AC-GAP-06 | Commit hash not sent to telemetry API | AC-03 | ⚠️ Needs telemetry call in Phase F |
+| AC-GAP-07 | Phase F commit logic lacks tests | AC-01 | ⚠️ Needs comprehensive tests |
 
-**Gap Linkage:** Fixes AC-GAP-01 (No git commit automation), AC-GAP-02 (No git staging)
+---
 
-**Role:** Senior engineer delivering drop-in, production-ready auto-commit functionality for patching operations.
+## Taskcard AC-01: ~~Implement Auto-Commit Core~~ → Add Tests & CLI Flags for Phase F
+
+⚠️ **RESCOPED** - This taskcard originally assumed git commit was missing. **Phase F already implements git commit** (orchestrator.py:1211-1349).
+
+**New Focus**: Add CLI flags to control Phase F git behavior and comprehensive tests for existing functionality.
+
+**Status:** Not Started (Rescoped)
+
+**Gap Linkage:** Fixes AC-GAP-07 (Phase F lacks tests), partial AC-GAP-03 (CLI flag control)
+
+**Role:** Senior engineer delivering comprehensive tests and CLI control for existing Phase F git functionality.
+
+---
+
+### ⚠️ CRITICAL: Use Existing Phase F Implementation
+
+**DO NOT** implement git commit from scratch in a hypothetical `PatchingService`. **Instead**:
+1. Phase F already stages files (lines 1283-1297)
+2. Phase F already commits (lines 1299-1330)
+3. Phase F already captures commit hash (line 1334)
+4. Work is to **enhance** Phase F, not rebuild it
+
+---
 
 ### Scope
 
@@ -80,80 +169,57 @@ File patching infrastructure is fully functional (tracks modified files, writes 
 
 ### Deliverables
 
-1. **Updated `src/patching_service.py`:**
-   - Add `auto_commit: bool = False` parameter to `patch_verified_snippets()`
-   - After patching completes successfully (no errors), check if `auto_commit` and `modified_files`:
-     ```python
-     if auto_commit and results['modified_files'] and results['errors'] == 0 and not dry_run:
-         commit_sha = self._git_commit_changes(results['modified_files'], results, family)
-         results['commit_sha'] = commit_sha  # Store for telemetry integration
-     ```
-   - Implement `_git_commit_changes()` private method:
-     ```python
-     def _git_commit_changes(self, modified_files: set, results: dict, family: str) -> str:
-         """Stage and commit modified files. Returns commit SHA."""
-         import subprocess
-
-         # 1. Check git available
-         subprocess.run(['git', '--version'], check=True, capture_output=True)
-
-         # 2. Stage files
-         subprocess.run(['git', 'add'] + list(modified_files), check=True, cwd=self.content_root)
-
-         # 3. Generate commit message (basic for now, enhanced in AC-03)
-         message = f"Apply {results['patches_applied']} verified patches to {family} family"
-
-         # 4. Commit
-         subprocess.run(['git', 'commit', '-m', message], check=True, cwd=self.content_root)
-
-         # 5. Get commit SHA
-         result = subprocess.run(['git', 'rev-parse', 'HEAD'],
-                                  capture_output=True, text=True, check=True, cwd=self.content_root)
-         commit_sha = result.stdout.strip()
-
-         print(f"Created git commit: {commit_sha}")
-         return commit_sha
-     ```
-   - Error handling: catch `subprocess.CalledProcessError`, log warning, don't crash
-
-2. **Updated `src/cli.py`:**
-   - Add `--auto-commit` flag to `patch` command:
-     ```python
-     parser.add_argument('--auto-commit', action='store_true',
-                         help='Automatically commit patched files to git')
-     ```
-   - Pass flag to PatchingService:
-     ```python
-     results = patcher.patch_verified_snippets(
-         family=family,
-         dry_run=args.dry_run,
-         auto_commit=args.auto_commit,
-         ...
-     )
-
-     # Log commit SHA if auto-commit succeeded
-     if 'commit_sha' in results:
-         print(f"Auto-commit created: {results['commit_sha']}")
-     ```
-
-3. **New test file `test_patching_auto_commit.py`:**
-   - Use temporary git repository for tests (initialize with `git init`)
-   - Test class `TestPatchingAutoCommit`:
-     - `test_auto_commit_creates_commit`
-     - `test_auto_commit_returns_commit_sha`
-     - `test_auto_commit_stages_all_modified_files`
-     - `test_dry_run_disables_auto_commit`
-     - `test_auto_commit_skipped_on_errors`
-     - `test_auto_commit_skipped_when_no_files_modified`
+1. **New test file `tests/test_phase_f_git_integration.py`:**
+   - Comprehensive tests for existing Phase F git functionality
+   - Test class `TestPhaseFGitCommit`:
+     - `test_phase_f_creates_commit_when_git_enabled`
+     - `test_phase_f_skips_commit_when_git_disabled`
+     - `test_phase_f_returns_commit_sha`
+     - `test_phase_f_stages_all_touched_files`
+     - `test_phase_f_uses_commit_message_template`
+     - `test_dry_run_disables_commit`
+     - `test_commit_skipped_when_no_files_touched`
      - `test_git_not_available_graceful_error`
+   - Use temporary git repository for tests (initialize with `git init`)
    - Mock subprocess calls or use real git in temp directory
-   - Verify git log shows commit after patching
+   - Verify git log shows commit after Phase F
    - Verify commit SHA is valid 40-character hex string
+   - Verify commit message matches template
 
-4. **Forward-compatible migration:**
-   - Existing CLI calls without `--auto-commit` flag behave exactly as before
-   - New parameter `auto_commit` has safe default (`False`)
-   - Commit SHA stored in results dict for optional telemetry integration (AC-03)
+2. **Updated `src/cli/main.py` - add CLI flags for Phase F git control:**
+   - Add flags to `run` command:
+     ```python
+     parser_run.add_argument('--enable-git-commit', action='store_true',
+                             dest='enable_git_commit',
+                             help='Force enable git commit in Phase F (overrides config)')
+     parser_run.add_argument('--disable-git-commit', action='store_false',
+                             dest='enable_git_commit',
+                             help='Force disable git commit in Phase F (overrides config)')
+     parser_run.set_default(enable_git_commit=None)  # None = use config
+     ```
+   - Pass flag to orchestrator's `run_family()` method
+   - Log commit SHA if Phase F creates commit:
+     ```python
+     stats = orchestrator.run_family(...)
+     if 'commit_sha' in stats:
+         logger.info(f"Phase F created commit: {stats['commit_sha']}")
+     ```
+
+3. **Updated `src/pipeline/orchestrator.py` - expose CLI control:**
+   - Accept `enable_git_commit: Optional[bool] = None` parameter in `run_family()`
+   - Pass parameter to `_run_finalization_phase()`
+   - Phase F already has git implementation - just needs parameter plumbing
+
+4. **Integration test script `tests/integration/test_phase_f_cli_flags.sh`:**
+   - Test `--enable-git-commit` flag forces commit
+   - Test `--disable-git-commit` flag prevents commit
+   - Test flags override config settings
+   - Verify commit SHA captured and logged
+
+5. **Forward-compatible migration:**
+   - Existing CLI calls without flags behave exactly as before
+   - Phase F existing git behavior unchanged
+   - CLI flags provide explicit control when needed
 
 ### Hard Rules
 
@@ -179,40 +245,23 @@ File patching infrastructure is fully functional (tracks modified files, writes 
 ### Now (Runbook)
 
 ```bash
-# 1. Read existing patching service
-grep -A 50 "def patch_verified_snippets" src/patching_service.py
+# 1. Verify Phase F git implementation exists
+grep -A 100 "def _run_finalization_phase" src/pipeline/orchestrator.py | grep -A 50 "Attempt git commit"
+# Result: Lines 1251-1334 show full git implementation
 
-# 2. Add auto_commit parameter to patch_verified_snippets()
-# Add: auto_commit: bool = False
-
-# 3. Implement _git_commit_changes() method
-# Add after existing helper methods around line 1100
-# Must return commit SHA for telemetry integration
-
-# 4. Call _git_commit_changes() at end of patch_verified_snippets()
-# Add before return statement:
-#   if auto_commit and results['modified_files'] and results['errors'] == 0 and not dry_run:
-#       commit_sha = self._git_commit_changes(results['modified_files'], results, family)
-#       results['commit_sha'] = commit_sha
-
-# 5. Update CLI patch command
-grep -A 20 "def patch" src/cli.py
-# Add --auto-commit flag to parser.add_argument()
-
-# 6. Pass auto_commit to patching service and log commit SHA
-# Update call: patcher.patch_verified_snippets(..., auto_commit=args.auto_commit)
-# Log: if 'commit_sha' in results: print(f"Auto-commit: {results['commit_sha']}")
-
-# 7. Create test file
-cat > test_patching_auto_commit.py << 'EOF'
+# 2. Create comprehensive test file for Phase F git functionality
+cat > tests/test_phase_f_git_integration.py << 'EOF'
 import pytest
 import tempfile
 import subprocess
 from pathlib import Path
-from src.patching_service import PatchingService
+from src.pipeline.orchestrator import Orchestrator
+from src.core.database import Database
+from src.core.config import load_config
 
 @pytest.fixture
 def temp_git_repo():
+    """Create temporary git repository for testing."""
     with tempfile.TemporaryDirectory() as tmpdir:
         repo_path = Path(tmpdir)
         subprocess.run(['git', 'init'], cwd=repo_path, check=True)
@@ -220,85 +269,122 @@ def temp_git_repo():
         subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=repo_path, check=True)
         yield repo_path
 
-# Tests...
+class TestPhaseFGitCommit:
+    def test_phase_f_creates_commit_when_git_enabled(self, temp_git_repo):
+        # Test Phase F creates commit when global_config.git.enabled = true
+        pass
+
+    def test_phase_f_returns_commit_sha(self, temp_git_repo):
+        # Test Phase F returns commit SHA in stats dict
+        pass
+
+    # More tests...
 EOF
 
-# 8. Implement tests
-# Test cases: auto-commit creates commit, returns SHA, dry-run disables, errors skip, etc.
+# 3. Implement all test cases
+# Test: Phase F creates commit, skips when disabled, dry-run behavior, etc.
 
-# 9. Run tests
-pytest test_patching_auto_commit.py -v
+# 4. Run tests
+pytest tests/test_phase_f_git_integration.py -v
 
-# 10. Integration test with real CLI
-# Initialize temp git repo
-cd /tmp/test-auto-commit
-git init
-git config user.name "Test User"
-git config user.email "test@example.com"
+# 5. Add CLI flags to src/cli/main.py
+# Read existing run command
+grep -A 30 "parser_run = subparsers.add_parser('run'" src/cli/main.py
 
-# Run patch with auto-commit
-python src/cli.py patch --family zip --auto-commit
+# Add --enable-git-commit and --disable-git-commit flags
+# Update orchestrator.run_family() call to pass enable_git_commit parameter
+
+# 6. Update orchestrator to accept CLI override
+# Add enable_git_commit parameter to run_family() and _run_finalization_phase()
+
+# 7. Integration test with real CLI
+# With git enabled in config
+python -m src.cli.main run --family zip --max-examples 1
 
 # Verify commit created
 git log -1
 
-# Verify commit SHA captured
-git log -1 --format=%H
+# With git disabled via CLI flag
+python -m src.cli.main run --family zip --max-examples 1 --disable-git-commit
 
-# Verify all modified files staged and committed
-git status  # Should show: nothing to commit, working tree clean
+# Verify no commit created
+git log -1  # Should show previous commit, not new one
+
+# With git enabled via CLI flag (overriding config)
+python -m src.cli.main run --family zip --max-examples 1 --enable-git-commit
+
+# Verify commit created even if config says disabled
+git log -1
 ```
 
 ---
 
-## Taskcard AC-02: Add Auto-Commit Configuration
+## Taskcard AC-02: ~~Add Auto-Commit Configuration~~ → Enhance Phase F Config Hierarchy
 
-**Status:** Not Started
+⚠️ **RESCOPED** - Global git config already exists (config/global.json lines 23-28). This taskcard now focuses on adding **family-level overrides** and **CLI flags** for Phase F.
 
-**Gap Linkage:** Fixes AC-GAP-03 (No configuration for auto-commit behavior)
+**Status:** Not Started (Rescoped)
 
-**Role:** Senior engineer delivering production-ready configuration system for auto-commit.
+**Gap Linkage:** Fixes AC-GAP-03 (Config hierarchy unclear), AC-GAP-04 (No family-level commit message template override)
+
+**Role:** Senior engineer enhancing Phase F configuration with family-level overrides and CLI control.
+
+---
+
+### ⚠️ CRITICAL: Enhance Existing Phase F Config, Don't Duplicate
+
+**Phase F already has**:
+- `global_config.git.enabled` (line 1241 in orchestrator.py)
+- `global_config.git.commit_message_template` (line 1306 in orchestrator.py)
+- Git staging and commit implementation (lines 1283-1330)
+
+**Work is to ADD**:
+1. Family-level overrides in `config/families/*.json`
+2. CLI flags `--enable-git-commit` / `--disable-git-commit` in `src/cli/main.py`
+3. Config hierarchy: CLI flag > family config > global config
+
+---
 
 ### Scope
 
 **Fix:**
-- Add `auto_commit` boolean to family configuration files (`config/families/*.json`)
-- Read `auto_commit` config in CLI and apply as default (can be overridden by CLI flag)
-- Add environment variable `AUTO_COMMIT_ENABLED` for global default
-- Support three-level configuration hierarchy: CLI flag > family config > environment variable > default (False)
-- Add validation: warn if auto-commit enabled but git not available
+- Add `git.enabled` and `git.commit_message_template` to family configuration schema (`config/families/*.json`)
+- Enhance Phase F to check family config before global config
+- Add CLI flags `--enable-git-commit` and `--disable-git-commit` to `src/cli/main.py`
+- Document config precedence: CLI flag > family config > global config > default (False)
+- Add tests for config hierarchy resolution
 
 **Allowed paths:**
-- `src/cli.py` - read config and environment variable
-- `config/families/zip.json` - example configuration
-- `.env.example` - document AUTO_COMMIT_ENABLED
-- `test_auto_commit_config.py` - new test file
+- `src/pipeline/orchestrator.py` - enhance Phase F config resolution
+- `src/cli/main.py` - add CLI flags for git commit control
+- `config/families/zip.json` - example family-level git configuration
+- `tests/test_auto_commit_config.py` - new test file
 
 **Forbidden:** Any other file/path
 
 ### Acceptance Checks
 
 **CLI:**
-- Add `"auto_commit": true` to `config/families/zip.json`
-- Run `python src/cli.py patch --family zip` (without --auto-commit flag)
-- Verify git commit created (config enables it)
-- Run `python src/cli.py patch --family zip --no-auto-commit` (new flag to disable)
-- Verify no git commit created (CLI flag overrides config)
-- Run `export AUTO_COMMIT_ENABLED=true && python src/cli.py patch --family pdf`
-- Verify git commit created if pdf config doesn't disable it
+- Add `"git": {"enabled": true}` to `config/families/zip.json`
+- Run `python -m src.cli.main run --family zip` (without CLI flag)
+- Verify git commit created by Phase F (family config enables it)
+- Run `python -m src.cli.main run --family zip --disable-git-commit`
+- Verify no git commit created (CLI flag overrides family config)
+- Set `"git": {"enabled": false}` in global config, `"git": {"enabled": true}` in zip family config
+- Run `python -m src.cli.main run --family zip` - verify commit created (family overrides global)
 
 **UI/Web/API:**
 - N/A (CLI-only feature)
 
 **Tests:**
-- `pytest test_auto_commit_config.py -v` passes
-- Test family config enables auto-commit
+- `pytest tests/test_auto_commit_config.py -v` passes
+- Test family config enables git commit in Phase F
 - Test CLI flag overrides family config
-- Test environment variable used as fallback
-- Test hierarchy: CLI flag > family config > env var > default
+- Test global config used as fallback
+- Test hierarchy: CLI flag > family config > global config > default
 
 **Config respected end-to-end:**
-- All three configuration levels work correctly
+- All three configuration levels work correctly (CLI > family > global)
 - CLI flag has highest precedence
 - Default remains False (opt-in, not opt-out)
 
@@ -308,53 +394,86 @@ git status  # Should show: nothing to commit, working tree clean
 
 ### Deliverables
 
-1. **Updated `src/cli.py`:**
-   - Read family config: `family_config.get('auto_commit', False)`
-   - Read environment variable: `os.getenv('AUTO_COMMIT_ENABLED', 'false').lower() == 'true'`
-   - Determine effective auto_commit:
+1. **Updated `src/pipeline/orchestrator.py` - enhance Phase F config resolution:**
+   - Modify `_run_finalization_phase()` to check config hierarchy:
      ```python
-     # CLI flag > family config > env var > default
-     if args.auto_commit is not None:  # Explicitly set via --auto-commit or --no-auto-commit
-         auto_commit = args.auto_commit
-     elif 'auto_commit' in family_config:
-         auto_commit = family_config['auto_commit']
-     else:
-         auto_commit = os.getenv('AUTO_COMMIT_ENABLED', 'false').lower() == 'true'
+     def _run_finalization_phase(
+         self,
+         family: str,
+         run_id: str,
+         dry_run: bool,
+         enable_git_commit: Optional[bool] = None,  # NEW: CLI override
+     ) -> Dict[str, Any]:
+         # Determine git.enabled from hierarchy
+         if enable_git_commit is not None:
+             git_enabled = enable_git_commit  # CLI flag wins
+         elif family in self.family_configs and 'git' in self.family_configs[family]:
+             git_enabled = self.family_configs[family]['git'].get('enabled', self.global_config.git.enabled)
+         else:
+             git_enabled = self.global_config.git.enabled  # Global fallback
+
+         if dry_run or not git_enabled:
+             return stats
+
+         # ... rest of Phase F git commit logic ...
      ```
-   - Add `--no-auto-commit` flag to explicitly disable:
+   - Add family-level commit message template resolution:
      ```python
-     parser.add_argument('--auto-commit', action='store_true', default=None, dest='auto_commit')
-     parser.add_argument('--no-auto-commit', action='store_false', dest='auto_commit')
+     # Get commit message template (family overrides global)
+     if family in self.family_configs and 'git' in self.family_configs[family]:
+         commit_template = self.family_configs[family]['git'].get(
+             'commit_message_template',
+             self.global_config.git.commit_message_template
+         )
+     else:
+         commit_template = self.global_config.git.commit_message_template
      ```
 
-2. **Updated `config/families/zip.json`:**
-   - Add optional field:
+2. **Updated `src/cli/main.py` - add CLI flags:**
+   - Add git commit control flags to `run` command:
+     ```python
+     parser_run.add_argument('--enable-git-commit', action='store_true', dest='enable_git_commit',
+                             help='Enable git commit in Phase F (overrides config)')
+     parser_run.add_argument('--disable-git-commit', action='store_false', dest='enable_git_commit',
+                             help='Disable git commit in Phase F (overrides config)')
+     parser_run.set_default(enable_git_commit=None)  # None means use config
+     ```
+   - Pass CLI flag to orchestrator:
+     ```python
+     orchestrator.run_family(
+         family=args.family,
+         dry_run=args.dry_run,
+         enable_git_commit=args.enable_git_commit,  # NEW: Pass CLI override
+         ...
+     )
+     ```
+
+3. **Updated `config/families/zip.json` - add family-level git config:**
+   - Add optional git configuration:
      ```json
      {
        "family": "zip",
-       "auto_commit": false,
+       "git": {
+         "enabled": true,
+         "commit_message_template": "fix(zip): apply {patch_count} patches\n\n{details}"
+       },
        ...
      }
      ```
-   - Document in comments: `// auto_commit: Enable automatic git commits after patching (default: false)`
+   - Document: `// git: Family-level git configuration (overrides global config)`
 
-3. **Updated `.env.example`:**
-   ```
-   # Optional: Enable auto-commit by default for all families (default: false)
-   AUTO_COMMIT_ENABLED=false
-   ```
-
-4. **New test file `test_auto_commit_config.py`:**
-   - `test_family_config_enables_auto_commit`
+4. **New test file `tests/test_auto_commit_config.py`:**
+   - `test_family_config_overrides_global`
    - `test_cli_flag_overrides_family_config`
-   - `test_env_var_used_as_fallback`
+   - `test_global_config_used_as_fallback`
    - `test_config_hierarchy_correct`
+   - `test_family_commit_message_template`
    - `test_default_is_false_opt_in`
-   - `test_no_auto_commit_flag_disables`
 
 5. **Forward-compatible migration:**
-   - Existing family configs without `auto_commit` field work (default False)
+   - Existing family configs without `git` field use global config (backward compatible)
    - Existing CLI calls without flags work unchanged
+   - Phase F existing behavior preserved when configs not present
 
 ### Hard Rules
 
@@ -416,235 +535,173 @@ pytest test_auto_commit_config.py -v
 
 ---
 
-## Taskcard AC-03: Implement Smart Commit Message Generation with Telemetry Integration
+## Taskcard AC-03: ~~Implement Commit Message Generation~~ → Add Telemetry Association to Phase F
 
-**Status:** Not Started
+⚠️ **RESCOPED** - Phase F already generates commit messages (line 1306 in orchestrator.py). **TelemetryService.associate_commit()** already exists (line 222 in telemetry_service.py). This taskcard now focuses on **calling** the existing telemetry method from Phase F.
 
-**Gap Linkage:** Fixes AC-GAP-04 (No git commit message generation), AC-GAP-06 (No telemetry API commit association)
+**Status:** Not Started (Rescoped)
 
-**Role:** Senior engineer delivering intelligent commit message generation and telemetry API integration for commit tracking.
+**Gap Linkage:** Fixes AC-GAP-06 (Commit hash not sent to telemetry API)
+
+**Role:** Senior engineer integrating Phase F git commits with existing TelemetryService for traceability.
+
+---
+
+### ⚠️ CRITICAL: Use Existing TelemetryService, Don't Create New Implementation
+
+**Phase F already has**:
+- Commit message generation with template (line 1306 in orchestrator.py)
+- Commit hash capture (line 1334: `commit_hash = commit_result.stdout.strip()`)
+- Co-author tag injection (lines 1309-1311)
+
+**TelemetryService already has**:
+- `associate_commit(event_id, commit_hash, ...)` method (line 222 in services/telemetry_service.py)
+- HTTP API integration with POST /api/v1/runs/{event_id}/associate-commit
+
+**Work is to ADD**:
+1. Call `TelemetryService.associate_commit()` from Phase F after successful commit
+2. Pass commit metadata (hash, source=llm, author, timestamp) to existing method
+3. Add tests verifying telemetry association happens
+
+---
 
 ### Scope
 
 **Fix:**
-- Generate detailed commit messages with patch statistics
-- Include family name, patch count, file count, error count
-- List modified files in commit body (up to 10, then summarize)
-- Add snippet IDs and issue types to commit message
-- Support custom commit message template via config
-- Follow conventional commit format (e.g., `fix:`, `chore:`, `docs:`)
-- **NEW:** Integrate with telemetry API v2.1.0 endpoint `POST /api/v1/runs/{event_id}/associate-commit`
-- **NEW:** Send commit metadata to telemetry API: commit_hash, commit_source=llm, commit_author, commit_timestamp
-- **NEW:** Include commit SHA in telemetry metrics for traceability
+- Call `TelemetryService.associate_commit()` from Phase F after git commit succeeds
+- Extract commit metadata (author, timestamp) from git log
+- Handle telemetry API failures gracefully (don't block commits)
+- Add tests verifying telemetry association called with correct parameters
+- Update Phase F to accept TelemetryService instance
 
 **Allowed paths:**
-- `src/patching_service.py` - enhance _git_commit_changes() method, add telemetry integration
-- `src/cli.py` - pass telemetry client to patching service
-- `config/families/zip.json` - example commit message template
-- `test_commit_message_generation.py` - new test file
+- `src/pipeline/orchestrator.py` - add TelemetryService.associate_commit() call in Phase F
+- `src/cli/main.py` - pass TelemetryService to orchestrator
+- `tests/test_commit_message_generation.py` - new test file (renamed to test_phase_f_telemetry_integration.py)
 
 **Forbidden:** Any other file/path
 
 ### Acceptance Checks
 
 **CLI:**
-- Run `python src/cli.py patch --family zip --auto-commit`
-- Run `git log -1 --format="%s%n%n%b"` to see commit message
-- Verify message format (conventional commit with details)
-- If telemetry API configured (`TELEMETRY_API_URL` set), verify commit associated:
+- Run `python -m src.cli.main run --family zip` with git enabled
+- Run `git log -1` to get commit SHA
+- Verify telemetry API received commit association:
   ```bash
-  curl "http://localhost:8765/api/v1/runs?agent_name=example-reviewer&limit=1" | jq '.[0].git_commit_hash'
-  # Should show commit SHA
+  curl "http://localhost:8765/api/v1/runs?limit=1" | jq '.[0].git_commit_hash'
+  # Should show commit SHA from Phase F
+  ```
+- Verify commit metadata sent correctly:
+  ```bash
+  curl "http://localhost:8765/api/v1/runs/{run_id}" | jq '.git_commit_source'
+  # Should show "llm"
   ```
 
 **UI/Web/API:**
 - N/A (CLI-only feature)
-- Telemetry API: Verify `POST /api/v1/runs/{event_id}/associate-commit` called with correct schema
+- Telemetry API: Verify `POST /api/v1/runs/{event_id}/associate-commit` called by Phase F
+- Verify schema: `{"commit_hash": "abc123...", "commit_source": "llm", "commit_author": "...", "commit_timestamp": "..."}`
 
 **Tests:**
-- `pytest test_commit_message_generation.py -v` passes
-- Test commit message includes patch count, file count
-- Test commit message lists modified files (up to 10)
-- Test commit message truncates file list when >10 files
-- Test commit message includes snippet IDs
-- Test custom commit message template from config
-- **NEW:** Test telemetry API commit association called (mocked)
-- **NEW:** Test commit metadata sent: commit_hash, commit_source, commit_author, commit_timestamp
-- **NEW:** Test telemetry API failure doesn't block commit
+- `pytest tests/test_phase_f_telemetry_integration.py -v` passes
+- Test Phase F calls `TelemetryService.associate_commit()` after successful commit
+- Test commit metadata extracted correctly from git log
+- Test telemetry API failure doesn't crash Phase F
+- Test commit association skipped when telemetry disabled
+- Test commit_source="llm" sent correctly
 
 **Config respected end-to-end:**
-- Default commit message template used when not configured
-- Custom template from family config overrides default
 - Telemetry API integration optional (works without API configured)
+- Commit association gracefully skipped when telemetry disabled
 
 **No mock data in production paths:**
-- Real patch results used for commit messages
-- Mock patch results and HTTP API in tests
+- Real git commits from Phase F
+- Mock TelemetryService calls in tests
 
 ### Deliverables
 
-1. **Updated `src/patching_service.py`:**
-   - Accept `telemetry_client: Optional[TelemetryClient] = None` parameter in `__init__()`
-   - Enhance `_generate_commit_message()` method:
+1. **Updated `src/pipeline/orchestrator.py` - add telemetry association to Phase F:**
+   - Accept `telemetry_service: Optional[TelemetryService]` parameter in `__init__()`:
      ```python
-     def _generate_commit_message(self, modified_files: set, results: dict, family: str) -> str:
-         """Generate detailed commit message for patched files."""
-         patch_count = results['patches_applied']
-         file_count = len(modified_files)
-
-         # Commit subject (conventional commit format)
-         subject = f"fix({family}): apply {patch_count} verified patches to {file_count} file(s)"
-
-         # Commit body with statistics and file list
-         body_parts = [
-             "",
-             "Applied verified code patches from validation:",
-             self._summarize_fixes(results['patches']),
-             "",
-             "Modified files:",
-         ]
-
-         # Add file list (truncate if >10)
-         file_list = sorted(modified_files)
-         if len(file_list) <= 10:
-             body_parts.extend([f"- {fp}" for fp in file_list])
-         else:
-             body_parts.extend([f"- {fp}" for fp in file_list[:10]])
-             body_parts.append(f"... and {len(file_list) - 10} more files")
-
-         # Add snippet IDs
-         snippet_ids = [p.get('snippet_id') for p in results['patches'] if p.get('success')]
-         if snippet_ids:
-             body_parts.append("")
-             body_parts.append(f"Snippets: {', '.join(f'#{sid}' for sid in snippet_ids)}")
-
-         return subject + '\n'.join(body_parts)
+     def __init__(
+         self,
+         db: Database,
+         global_config: Config,
+         family_configs: Dict[str, Dict[str, Any]],
+         telemetry_service: Optional[TelemetryService] = None,  # NEW
+         ...
+     ):
+         self.telemetry_service = telemetry_service
      ```
-   - **NEW:** Implement `_associate_commit_with_telemetry()` method:
+   - After successful commit in Phase F (after line 1334), add telemetry association:
      ```python
-     def _associate_commit_with_telemetry(self, commit_sha: str) -> None:
-         """Associate git commit with telemetry run via API."""
-         if not self.telemetry_client or not self.telemetry_client.event_id:
-             return  # Telemetry not configured
+     # Line 1334: commit_hash = commit_result.stdout.strip()
+     logger.info(f"Created commit: {commit_hash}")
 
-         from datetime import datetime, timezone
-         import subprocess
-
+     # NEW: Associate commit with telemetry if service available
+     if self.telemetry_service and run_id:
          try:
-             # Get commit author and timestamp from git
-             result = subprocess.run(
-                 ['git', 'log', '-1', '--format=%an <%ae>%n%aI', commit_sha],
-                 capture_output=True, text=True, check=True, cwd=self.content_root
+             # Extract commit metadata from git
+             author_result = subprocess.run(
+                 ['git', 'log', '-1', '--format=%an <%ae>', commit_hash],
+                 capture_output=True, text=True, check=True, cwd=git_root
              )
-             lines = result.stdout.strip().split('\n')
-             commit_author = lines[0] if len(lines) > 0 else "Unknown <unknown@example.com>"
-             commit_timestamp = lines[1] if len(lines) > 1 else datetime.now(timezone.utc).isoformat()
+             commit_author = author_result.stdout.strip()
 
-             # Send to telemetry API
-             self.telemetry_client.associate_commit(
-                 commit_hash=commit_sha,
-                 commit_source="llm",  # LLM-generated commit (example-reviewer)
+             timestamp_result = subprocess.run(
+                 ['git', 'log', '-1', '--format=%aI', commit_hash],
+                 capture_output=True, text=True, check=True, cwd=git_root
+             )
+             commit_timestamp = timestamp_result.stdout.strip()
+
+             # Call existing TelemetryService.associate_commit()
+             self.telemetry_service.associate_commit(
+                 event_id=run_id,
+                 commit_hash=commit_hash,
+                 commit_source="llm",  # LLM-generated commit
                  commit_author=commit_author,
                  commit_timestamp=commit_timestamp
              )
-             print(f"Associated commit {commit_sha} with telemetry run")
+             logger.info(f"Associated commit {commit_hash} with telemetry run {run_id}")
          except Exception as e:
-             # Don't crash on telemetry failure
-             print(f"Warning: Failed to associate commit with telemetry: {e}")
-     ```
-   - Update `_git_commit_changes()` to call telemetry integration:
-     ```python
-     commit_sha = result.stdout.strip()
-     print(f"Created git commit: {commit_sha}")
-
-     # Associate with telemetry if configured
-     self._associate_commit_with_telemetry(commit_sha)
-
-     return commit_sha
+             # Don't crash Phase F on telemetry failure
+             logger.warning(f"Failed to associate commit with telemetry: {e}")
      ```
 
-2. **NEW: Updated `src/telemetry.py`:**
-   - Implement `associate_commit()` method:
+2. **Updated `src/cli/main.py` - pass TelemetryService to orchestrator:**
+   - Initialize TelemetryService and pass to Orchestrator:
      ```python
-     def associate_commit(self, commit_hash: str, commit_source: str,
-                          commit_author: str, commit_timestamp: str) -> None:
-         """Associate git commit with telemetry run via API.
+     # Initialize telemetry service if configured
+     from src.services.telemetry_service import TelemetryService
+     telemetry_service = None
+     if global_config.telemetry.enabled:
+         telemetry_service = TelemetryService(
+             config=global_config.telemetry,
+             db=db
+         )
 
-         Calls POST /api/v1/runs/{event_id}/associate-commit per docs/local-telemetry.md.
-
-         Args:
-             commit_hash: Git commit SHA (7-40 characters)
-             commit_source: One of: manual, llm, ci
-             commit_author: Commit author (e.g., "Name <email>")
-             commit_timestamp: ISO8601 timestamp with timezone
-         """
-         if not self.telemetry_url or not self.event_id:
-             return  # Telemetry API not configured
-
-         try:
-             import requests
-
-             url = f"{self.telemetry_url}/api/v1/runs/{self.event_id}/associate-commit"
-             payload = {
-                 "commit_hash": commit_hash,
-                 "commit_source": commit_source,
-                 "commit_author": commit_author,
-                 "commit_timestamp": commit_timestamp
-             }
-
-             headers = {"Content-Type": "application/json"}
-             if self.auth_enabled and self.auth_token:
-                 headers["Authorization"] = f"Bearer {self.auth_token}"
-
-             response = requests.post(url, json=payload, headers=headers,
-                                       timeout=self.timeout_ms/1000.0)
-             response.raise_for_status()
-
-             # Log event to NDJSON
-             self.log_event("commit_associated", "info",
-                            f"Associated commit {commit_hash} with run",
-                            {"commit_hash": commit_hash, "commit_source": commit_source})
-         except Exception as e:
-             # Log but don't crash
-             self.log_event("commit_association_failed", "warning",
-                            f"Failed to associate commit: {e}",
-                            {"error": str(e)})
-     ```
-
-3. **Updated `src/cli.py`:**
-   - Pass telemetry_client to PatchingService:
-     ```python
-     patcher = PatchingService(
+     # Create orchestrator with telemetry service
+     orchestrator = Orchestrator(
          db=db,
-         content_root=args.content_root,
-         telemetry_client=telemetry  # Pass telemetry client
+         global_config=global_config,
+         family_configs=family_configs,
+         telemetry_service=telemetry_service,  # NEW: Pass telemetry service
+         ...
      )
      ```
 
-4. **Updated `config/families/zip.json` (optional):**
-   ```json
-   {
-     "family": "zip",
-     "commit_message_template": "fix(zip): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
-     ...
-   }
-   ```
+3. **New test file `tests/test_phase_f_telemetry_integration.py`:**
+   - `test_phase_f_calls_associate_commit_after_git_commit`
+   - `test_commit_metadata_extracted_correctly`
+   - `test_commit_source_is_llm`
+   - `test_telemetry_api_failure_doesnt_crash_phase_f`
+   - `test_commit_association_skipped_when_telemetry_disabled`
+   - `test_commit_hash_sent_correctly`
 
-5. **New test file `test_commit_message_generation.py`:**
-   - `test_commit_message_includes_patch_count`
-   - `test_commit_message_includes_file_count`
-   - `test_commit_message_lists_files_up_to_10`
-   - `test_commit_message_truncates_long_file_list`
-   - `test_commit_message_includes_snippet_ids`
-   - `test_commit_message_conventional_format`
-   - **NEW:** `test_telemetry_api_associate_commit_called`
-   - **NEW:** `test_commit_metadata_correct_schema`
-   - **NEW:** `test_telemetry_api_failure_doesnt_block_commit`
-   - **NEW:** `test_commit_source_is_llm`
-
-6. **Forward-compatible migration:**
-   - Telemetry integration optional (works without telemetry configured)
-   - Existing auto-commit code enhanced with telemetry tracking
+4. **Forward-compatible migration:**
+   - Telemetry integration optional (Phase F works without telemetry service)
+   - Existing Phase F git behavior unchanged
+   - TelemetryService.associate_commit() method already exists (no changes needed)
 
 ### Hard Rules
 
@@ -715,56 +772,76 @@ curl "http://localhost:8765/api/v1/runs/{event_id}/commit-url"
 
 ## Taskcard AC-04: Add Rollback Mechanism
 
+✅ **VALIDATED** - This is a genuinely new feature. Phase F has no rollback mechanism (Reality Check confirmed).
+
 **Status:** Not Started
 
-**Gap Linkage:** Fixes AC-GAP-05 (No rollback mechanism)
+**Gap Linkage:** Fixes AC-GAP-05 (No rollback mechanism - manual git reset required)
 
-**Role:** Senior engineer delivering production-ready rollback functionality for patching operations.
+**Role:** Senior engineer delivering production-ready rollback functionality for Phase F git commits.
+
+---
+
+### ⚠️ NOTE: This is a New Feature, Not a Fix
+
+**Current Reality**:
+- Phase F creates git commits but provides no rollback mechanism
+- Users must manually run `git reset --hard` to undo automated commits
+- No safety net for reviewing commits before they're pushed
+
+**Work is to ADD**:
+1. CLI command `python -m src.cli.main rollback` to undo Phase F commits
+2. Rollback metadata storage in SQLite database
+3. Safety checks: confirmation prompts, diff previews
+4. Selective file rollback support
+
+---
 
 ### Scope
 
 **Fix:**
-- Add `--create-backup` flag to create git stash or branch before patching
-- Add `rollback` CLI command to undo last patching operation
-- Store rollback metadata (commit SHA, modified files) in SQLite database
+- Add `rollback` CLI command to `src/cli/main.py` to undo Phase F git commits
+- Store rollback metadata (commit SHA, modified files, timestamp) in SQLite database
 - Implement `git reset --hard` rollback to previous commit
-- Implement selective file rollback (checkout specific files)
+- Implement selective file rollback (checkout specific files from previous commit)
 - Add safety checks: confirm before rollback, show diff preview
+- Support `--list` flag to show rollback history
 
 **Allowed paths:**
-- `src/cli.py` - add rollback command, --create-backup flag
-- `src/patching_service.py` - store rollback metadata
-- `src/database.py` - add rollback metadata table (if needed)
+- `src/cli/main.py` - add rollback command
+- `src/core/database.py` - add rollback metadata storage
+- `src/pipeline/orchestrator.py` - store rollback metadata after Phase F commit
 - `schema.sql` - add rollback_history table (if needed)
-- `test_patching_rollback.py` - new test file
+- `tests/test_patching_rollback.py` - new test file
 
 **Forbidden:** Any other file/path
 
 ### Acceptance Checks
 
 **CLI:**
-- Run `python src/cli.py patch --family zip --auto-commit --create-backup`
-- Verify backup created (git branch or stash)
-- Run `python src/cli.py rollback --last`
+- Run `python -m src.cli.main run --family zip` (with git enabled) to create Phase F commit
+- Capture commit SHA from Phase F output
+- Run `python -m src.cli.main rollback --last` to undo Phase F commit
 - Verify files restored to previous state
-- Run `git log` to see rollback commit
-- Run `python src/cli.py rollback --list` to see rollback history
-- Run `python src/cli.py rollback --file content/blog.aspose.net/zip/create-zip/index.md` for selective rollback
+- Run `git log` to verify rollback (should show previous commit as HEAD)
+- Run `python -m src.cli.main rollback --list` to see rollback history
+- Run `python -m src.cli.main rollback --file test-content/zip/example.md` for selective rollback
 
 **UI/Web/API:**
 - N/A (CLI-only feature)
 
 **Tests:**
-- `pytest test_patching_rollback.py -v` passes
-- Test happy path: rollback restores files to previous state
+- `pytest tests/test_patching_rollback.py -v` passes
+- Test happy path: rollback restores files to previous state after Phase F commit
 - Test selective rollback: only specified file restored
-- Test rollback history: list shows previous operations
+- Test rollback history: list shows previous Phase F commits
 - Test safety: rollback requires confirmation (unless --force)
-- Test edge case: rollback with no previous operation shows error
+- Test edge case: rollback with no previous commit shows error
+- Test edge case: rollback metadata stored correctly after Phase F commit
 
 **Config respected end-to-end:**
-- Backup created only when `--create-backup` flag present
-- Rollback works regardless of auto-commit setting
+- Rollback works for any Phase F git commit
+- Rollback metadata stored in database automatically
 
 **No mock data in production paths:**
 - Real git operations (branch, reset, checkout)
@@ -772,50 +849,57 @@ curl "http://localhost:8765/api/v1/runs/{event_id}/commit-url"
 
 ### Deliverables
 
-1. **Updated `src/cli.py` - add `rollback` command:**
+1. **Updated `src/cli/main.py` - add `rollback` command:**
    ```python
    def rollback(args):
-       """Rollback patching operation."""
-       from src.patching_service import PatchingService
+       """Rollback Phase F git commit operation."""
+       from src.core.database import Database
 
-       patcher = PatchingService(db=db, content_root=args.content_root)
+       db = Database(args.db_path)
 
        if args.list:
-           # Show rollback history
-           history = patcher.get_rollback_history()
+           # Show rollback history from database
+           history = db.get_rollback_history()
            for entry in history:
-               print(f"{entry['timestamp']}: {entry['description']}")
+               print(f"{entry['timestamp']}: {entry['commit_sha'][:8]} - {entry['description']}")
        elif args.last:
-           # Rollback last operation
+           # Rollback last Phase F commit
            if not args.force:
-               confirm = input("Are you sure you want to rollback? (y/N): ")
+               confirm = input("Are you sure you want to rollback the last commit? (y/N): ")
                if confirm.lower() != 'y':
                    print("Rollback cancelled.")
                    return
-           patcher.rollback_last_operation()
+           rollback_last_commit(db, git_root=Path.cwd())
        elif args.file:
            # Selective file rollback
-           patcher.rollback_file(args.file)
+           rollback_file(db, args.file, git_root=Path.cwd())
 
    # Add to CLI parser
-   parser_rollback = subparsers.add_parser('rollback', help='Rollback patching operations')
-   parser_rollback.add_argument('--last', action='store_true', help='Rollback last operation')
+   parser_rollback = subparsers.add_parser('rollback', help='Rollback Phase F git commits')
+   parser_rollback.add_argument('--last', action='store_true', help='Rollback last Phase F commit')
    parser_rollback.add_argument('--list', action='store_true', help='List rollback history')
    parser_rollback.add_argument('--file', type=str, help='Rollback specific file')
    parser_rollback.add_argument('--force', action='store_true', help='Skip confirmation')
    parser_rollback.set_defaults(func=rollback)
    ```
 
-2. **Updated `src/cli.py` - add `--create-backup` flag:**
-   ```python
-   # In patch command
-   parser_patch.add_argument('--create-backup', action='store_true',
-                             help='Create git backup before patching')
-   ```
+2. **Updated `src/core/database.py` - add rollback metadata storage:**
+   - Add methods:
+     - `save_rollback_metadata(commit_sha, family, modified_files)` - called by Phase F after commit
+     - `get_rollback_history()` - retrieves history for `--list` command
+     - `get_last_rollback_entry()` - retrieves last commit for rollback
 
-3. **Updated `src/patching_service.py`:**
-   - Implement `create_backup()`, `rollback_last_operation()`, `rollback_file()`, `get_rollback_history()` methods
-   - Store rollback metadata in database
+3. **Updated `src/pipeline/orchestrator.py` - store rollback metadata after Phase F commit:**
+   ```python
+   # After line 1334 (commit_hash captured)
+   # Store rollback metadata in database
+   self.db.save_rollback_metadata(
+       commit_sha=commit_hash,
+       family=family,
+       modified_files=touched_files,  # List of files in commit
+       description=f"Phase F commit for {family} family"
+   )
+   ```
 
 4. **Updated `schema.sql` (if needed):**
    ```sql
@@ -823,18 +907,23 @@ curl "http://localhost:8765/api/v1/runs/{event_id}/commit-url"
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        timestamp TEXT NOT NULL,
        commit_sha TEXT NOT NULL,
-       backup_branch TEXT,
        family TEXT,
        description TEXT,
        modified_files TEXT  -- JSON array of file paths
    );
    ```
 
-5. **New test file `test_patching_rollback.py`:**
-   - Test backup creation, rollback, selective rollback, history listing
+5. **New test file `tests/test_patching_rollback.py`:**
+   - `test_rollback_restores_previous_state`
+   - `test_selective_file_rollback`
+   - `test_rollback_history_listing`
+   - `test_rollback_metadata_stored_after_phase_f`
+   - `test_rollback_requires_confirmation`
+   - `test_rollback_with_no_history_shows_error`
 
 6. **Forward-compatible migration:**
-   - Rollback command optional (doesn't affect normal workflow)
+   - Rollback command optional (doesn't affect normal Phase F workflow)
+   - Rollback metadata automatically stored by Phase F when git commits happen
 
 ### Hard Rules
 

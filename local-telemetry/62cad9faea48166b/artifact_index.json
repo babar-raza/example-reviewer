@@ -1,0 +1,1435 @@
+{
+  "run_id": "62cad9faea48166b",
+  "family": "zip",
+  "compiler_logs": [
+    {
+      "attempt_id": "7bc6fa38",
+      "example_id": "94a463352d7dce5f",
+      "ref": "artifacts\\compile\\7bc6fa38_log.txt"
+    },
+    {
+      "attempt_id": "6e548070",
+      "example_id": "6bd0e20aeffba58f",
+      "ref": "artifacts\\compile\\6e548070_log.txt"
+    },
+    {
+      "attempt_id": "fdf08d41",
+      "example_id": "3414549c4bdf052a",
+      "ref": "artifacts\\compile\\fdf08d41_log.txt"
+    },
+    {
+      "attempt_id": "15783532",
+      "example_id": "49a43f7b412e1f0b",
+      "ref": "artifacts\\compile\\15783532_log.txt"
+    },
+    {
+      "attempt_id": "b922d166",
+      "example_id": "5f07cbbd241c0d2d",
+      "ref": "artifacts\\compile\\b922d166_log.txt"
+    },
+    {
+      "attempt_id": "6d1e5c2d",
+      "example_id": "eb5f6c4f3cc336fd",
+      "ref": "artifacts\\compile\\6d1e5c2d_log.txt"
+    },
+    {
+      "attempt_id": "738df18a",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\738df18a_log.txt"
+    },
+    {
+      "attempt_id": "1d55828f",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\1d55828f_log.txt"
+    },
+    {
+      "attempt_id": "eb1ab517",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\eb1ab517_log.txt"
+    },
+    {
+      "attempt_id": "e08eabe3",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\e08eabe3_log.txt"
+    },
+    {
+      "attempt_id": "5606ad27",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\5606ad27_log.txt"
+    },
+    {
+      "attempt_id": "dd0a06b4",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\dd0a06b4_log.txt"
+    },
+    {
+      "attempt_id": "464f9db0",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\464f9db0_log.txt"
+    },
+    {
+      "attempt_id": "07f206bf",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\07f206bf_log.txt"
+    },
+    {
+      "attempt_id": "96d6d7f3",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\96d6d7f3_log.txt"
+    },
+    {
+      "attempt_id": "75faabfc",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\75faabfc_log.txt"
+    },
+    {
+      "attempt_id": "7266f4ba",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\7266f4ba_log.txt"
+    },
+    {
+      "attempt_id": "08512304",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\08512304_log.txt"
+    },
+    {
+      "attempt_id": "645cb2e3",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\645cb2e3_log.txt"
+    },
+    {
+      "attempt_id": "940496fd",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\940496fd_log.txt"
+    },
+    {
+      "attempt_id": "721fc892",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\721fc892_log.txt"
+    },
+    {
+      "attempt_id": "968ef999",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\968ef999_log.txt"
+    },
+    {
+      "attempt_id": "d237a48d",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\d237a48d_log.txt"
+    },
+    {
+      "attempt_id": "667a6d26",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\667a6d26_log.txt"
+    },
+    {
+      "attempt_id": "8109597e",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\8109597e_log.txt"
+    },
+    {
+      "attempt_id": "f93f2a26",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\f93f2a26_log.txt"
+    },
+    {
+      "attempt_id": "67cea271",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\67cea271_log.txt"
+    },
+    {
+      "attempt_id": "7046973c",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\7046973c_log.txt"
+    },
+    {
+      "attempt_id": "f4fd9d13",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\f4fd9d13_log.txt"
+    },
+    {
+      "attempt_id": "7f4423e8",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\7f4423e8_log.txt"
+    },
+    {
+      "attempt_id": "5fc78612",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\5fc78612_log.txt"
+    },
+    {
+      "attempt_id": "dc9fff3d",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\dc9fff3d_log.txt"
+    },
+    {
+      "attempt_id": "fcdcd20a",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\fcdcd20a_log.txt"
+    },
+    {
+      "attempt_id": "6b5f6ba3",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\6b5f6ba3_log.txt"
+    },
+    {
+      "attempt_id": "502b31d6",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\502b31d6_log.txt"
+    },
+    {
+      "attempt_id": "5d455b02",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\5d455b02_log.txt"
+    },
+    {
+      "attempt_id": "5ff92faf",
+      "example_id": "49a43f7b412e1f0b",
+      "ref": "artifacts\\compile\\5ff92faf_log.txt"
+    },
+    {
+      "attempt_id": "63f4773d",
+      "example_id": "49a43f7b412e1f0b",
+      "ref": "artifacts\\compile\\63f4773d_log.txt"
+    },
+    {
+      "attempt_id": "cdc28a3b",
+      "example_id": "5f07cbbd241c0d2d",
+      "ref": "artifacts\\compile\\cdc28a3b_log.txt"
+    },
+    {
+      "attempt_id": "27e5aa09",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\27e5aa09_log.txt"
+    },
+    {
+      "attempt_id": "5f50591b",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\5f50591b_log.txt"
+    },
+    {
+      "attempt_id": "90cb83ed",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\90cb83ed_log.txt"
+    },
+    {
+      "attempt_id": "ebe639fd",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\ebe639fd_log.txt"
+    },
+    {
+      "attempt_id": "59b5cb07",
+      "example_id": "5707970e00a9f0e2",
+      "ref": "artifacts\\compile\\59b5cb07_log.txt"
+    },
+    {
+      "attempt_id": "56854ac4",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\56854ac4_log.txt"
+    },
+    {
+      "attempt_id": "a46fa59d",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\a46fa59d_log.txt"
+    },
+    {
+      "attempt_id": "84933623",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\84933623_log.txt"
+    },
+    {
+      "attempt_id": "76c2d62b",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\76c2d62b_log.txt"
+    },
+    {
+      "attempt_id": "a42a77d4",
+      "example_id": "9d556118e6063c54",
+      "ref": "artifacts\\compile\\a42a77d4_log.txt"
+    },
+    {
+      "attempt_id": "de373e19",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\de373e19_log.txt"
+    },
+    {
+      "attempt_id": "b267acfe",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\b267acfe_log.txt"
+    },
+    {
+      "attempt_id": "939e6662",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\939e6662_log.txt"
+    },
+    {
+      "attempt_id": "034a0450",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\034a0450_log.txt"
+    },
+    {
+      "attempt_id": "2292442a",
+      "example_id": "1a67c64482727938",
+      "ref": "artifacts\\compile\\2292442a_log.txt"
+    },
+    {
+      "attempt_id": "ad4423ea",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\ad4423ea_log.txt"
+    },
+    {
+      "attempt_id": "fd0fe768",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\fd0fe768_log.txt"
+    },
+    {
+      "attempt_id": "5c667f5b",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\5c667f5b_log.txt"
+    },
+    {
+      "attempt_id": "53232d45",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\53232d45_log.txt"
+    },
+    {
+      "attempt_id": "2091f6f4",
+      "example_id": "603983d0dadbfec6",
+      "ref": "artifacts\\compile\\2091f6f4_log.txt"
+    },
+    {
+      "attempt_id": "3df1fe94",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\3df1fe94_log.txt"
+    },
+    {
+      "attempt_id": "16c87bb7",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\16c87bb7_log.txt"
+    },
+    {
+      "attempt_id": "8f83d642",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\8f83d642_log.txt"
+    },
+    {
+      "attempt_id": "cfe640df",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\cfe640df_log.txt"
+    },
+    {
+      "attempt_id": "c897ac53",
+      "example_id": "98026ca264a750da",
+      "ref": "artifacts\\compile\\c897ac53_log.txt"
+    },
+    {
+      "attempt_id": "1b6866f0",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\1b6866f0_log.txt"
+    },
+    {
+      "attempt_id": "b6ae4f0d",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\b6ae4f0d_log.txt"
+    },
+    {
+      "attempt_id": "d28954a6",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\d28954a6_log.txt"
+    },
+    {
+      "attempt_id": "54f5cd01",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\54f5cd01_log.txt"
+    },
+    {
+      "attempt_id": "85bd5f65",
+      "example_id": "a1bff9ce1a8b7dae",
+      "ref": "artifacts\\compile\\85bd5f65_log.txt"
+    }
+  ],
+  "runtime_logs": [],
+  "llm_requests": [
+    {
+      "phase": "compilation",
+      "attempt_id": "7bc6fa38",
+      "ref": "artifacts\\compile\\7bc6fa38_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "6e548070",
+      "ref": "artifacts\\compile\\6e548070_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "fdf08d41",
+      "ref": "artifacts\\compile\\fdf08d41_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "15783532",
+      "ref": "artifacts\\compile\\15783532_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "b922d166",
+      "ref": "artifacts\\compile\\b922d166_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "6d1e5c2d",
+      "ref": "artifacts\\compile\\6d1e5c2d_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "738df18a",
+      "ref": "artifacts\\compile\\738df18a_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "1d55828f",
+      "ref": "artifacts\\compile\\1d55828f_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "eb1ab517",
+      "ref": "artifacts\\compile\\eb1ab517_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "e08eabe3",
+      "ref": "artifacts\\compile\\e08eabe3_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5606ad27",
+      "ref": "artifacts\\compile\\5606ad27_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "dd0a06b4",
+      "ref": "artifacts\\compile\\dd0a06b4_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "464f9db0",
+      "ref": "artifacts\\compile\\464f9db0_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "07f206bf",
+      "ref": "artifacts\\compile\\07f206bf_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "96d6d7f3",
+      "ref": "artifacts\\compile\\96d6d7f3_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "75faabfc",
+      "ref": "artifacts\\compile\\75faabfc_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "7266f4ba",
+      "ref": "artifacts\\compile\\7266f4ba_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "08512304",
+      "ref": "artifacts\\compile\\08512304_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "645cb2e3",
+      "ref": "artifacts\\compile\\645cb2e3_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "940496fd",
+      "ref": "artifacts\\compile\\940496fd_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "721fc892",
+      "ref": "artifacts\\compile\\721fc892_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "968ef999",
+      "ref": "artifacts\\compile\\968ef999_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "d237a48d",
+      "ref": "artifacts\\compile\\d237a48d_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "667a6d26",
+      "ref": "artifacts\\compile\\667a6d26_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "8109597e",
+      "ref": "artifacts\\compile\\8109597e_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "f93f2a26",
+      "ref": "artifacts\\compile\\f93f2a26_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "67cea271",
+      "ref": "artifacts\\compile\\67cea271_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "7046973c",
+      "ref": "artifacts\\compile\\7046973c_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "f4fd9d13",
+      "ref": "artifacts\\compile\\f4fd9d13_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "7f4423e8",
+      "ref": "artifacts\\compile\\7f4423e8_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5fc78612",
+      "ref": "artifacts\\compile\\5fc78612_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "dc9fff3d",
+      "ref": "artifacts\\compile\\dc9fff3d_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "fcdcd20a",
+      "ref": "artifacts\\compile\\fcdcd20a_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "6b5f6ba3",
+      "ref": "artifacts\\compile\\6b5f6ba3_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "502b31d6",
+      "ref": "artifacts\\compile\\502b31d6_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5d455b02",
+      "ref": "artifacts\\compile\\5d455b02_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5ff92faf",
+      "ref": "artifacts\\compile\\5ff92faf_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "63f4773d",
+      "ref": "artifacts\\compile\\63f4773d_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "cdc28a3b",
+      "ref": "artifacts\\compile\\cdc28a3b_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "27e5aa09",
+      "ref": "artifacts\\compile\\27e5aa09_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5f50591b",
+      "ref": "artifacts\\compile\\5f50591b_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "90cb83ed",
+      "ref": "artifacts\\compile\\90cb83ed_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "ebe639fd",
+      "ref": "artifacts\\compile\\ebe639fd_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "59b5cb07",
+      "ref": "artifacts\\compile\\59b5cb07_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "56854ac4",
+      "ref": "artifacts\\compile\\56854ac4_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "a46fa59d",
+      "ref": "artifacts\\compile\\a46fa59d_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "84933623",
+      "ref": "artifacts\\compile\\84933623_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "76c2d62b",
+      "ref": "artifacts\\compile\\76c2d62b_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "a42a77d4",
+      "ref": "artifacts\\compile\\a42a77d4_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "de373e19",
+      "ref": "artifacts\\compile\\de373e19_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "b267acfe",
+      "ref": "artifacts\\compile\\b267acfe_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "939e6662",
+      "ref": "artifacts\\compile\\939e6662_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "034a0450",
+      "ref": "artifacts\\compile\\034a0450_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "2292442a",
+      "ref": "artifacts\\compile\\2292442a_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "ad4423ea",
+      "ref": "artifacts\\compile\\ad4423ea_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "fd0fe768",
+      "ref": "artifacts\\compile\\fd0fe768_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5c667f5b",
+      "ref": "artifacts\\compile\\5c667f5b_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "53232d45",
+      "ref": "artifacts\\compile\\53232d45_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "2091f6f4",
+      "ref": "artifacts\\compile\\2091f6f4_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "3df1fe94",
+      "ref": "artifacts\\compile\\3df1fe94_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "16c87bb7",
+      "ref": "artifacts\\compile\\16c87bb7_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "8f83d642",
+      "ref": "artifacts\\compile\\8f83d642_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "cfe640df",
+      "ref": "artifacts\\compile\\cfe640df_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "c897ac53",
+      "ref": "artifacts\\compile\\c897ac53_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "1b6866f0",
+      "ref": "artifacts\\compile\\1b6866f0_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "b6ae4f0d",
+      "ref": "artifacts\\compile\\b6ae4f0d_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "d28954a6",
+      "ref": "artifacts\\compile\\d28954a6_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "54f5cd01",
+      "ref": "artifacts\\compile\\54f5cd01_llm_req.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "85bd5f65",
+      "ref": "artifacts\\compile\\85bd5f65_llm_req.txt"
+    }
+  ],
+  "llm_responses": [
+    {
+      "phase": "compilation",
+      "attempt_id": "7bc6fa38",
+      "ref": "artifacts\\compile\\7bc6fa38_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "6e548070",
+      "ref": "artifacts\\compile\\6e548070_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "fdf08d41",
+      "ref": "artifacts\\compile\\fdf08d41_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "15783532",
+      "ref": "artifacts\\compile\\15783532_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "b922d166",
+      "ref": "artifacts\\compile\\b922d166_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "6d1e5c2d",
+      "ref": "artifacts\\compile\\6d1e5c2d_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "738df18a",
+      "ref": "artifacts\\compile\\738df18a_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "1d55828f",
+      "ref": "artifacts\\compile\\1d55828f_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "eb1ab517",
+      "ref": "artifacts\\compile\\eb1ab517_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "e08eabe3",
+      "ref": "artifacts\\compile\\e08eabe3_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5606ad27",
+      "ref": "artifacts\\compile\\5606ad27_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "dd0a06b4",
+      "ref": "artifacts\\compile\\dd0a06b4_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "464f9db0",
+      "ref": "artifacts\\compile\\464f9db0_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "07f206bf",
+      "ref": "artifacts\\compile\\07f206bf_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "96d6d7f3",
+      "ref": "artifacts\\compile\\96d6d7f3_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "75faabfc",
+      "ref": "artifacts\\compile\\75faabfc_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "7266f4ba",
+      "ref": "artifacts\\compile\\7266f4ba_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "08512304",
+      "ref": "artifacts\\compile\\08512304_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "645cb2e3",
+      "ref": "artifacts\\compile\\645cb2e3_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "940496fd",
+      "ref": "artifacts\\compile\\940496fd_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "721fc892",
+      "ref": "artifacts\\compile\\721fc892_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "968ef999",
+      "ref": "artifacts\\compile\\968ef999_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "d237a48d",
+      "ref": "artifacts\\compile\\d237a48d_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "667a6d26",
+      "ref": "artifacts\\compile\\667a6d26_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "8109597e",
+      "ref": "artifacts\\compile\\8109597e_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "f93f2a26",
+      "ref": "artifacts\\compile\\f93f2a26_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "67cea271",
+      "ref": "artifacts\\compile\\67cea271_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "7046973c",
+      "ref": "artifacts\\compile\\7046973c_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "f4fd9d13",
+      "ref": "artifacts\\compile\\f4fd9d13_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "7f4423e8",
+      "ref": "artifacts\\compile\\7f4423e8_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5fc78612",
+      "ref": "artifacts\\compile\\5fc78612_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "dc9fff3d",
+      "ref": "artifacts\\compile\\dc9fff3d_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "fcdcd20a",
+      "ref": "artifacts\\compile\\fcdcd20a_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "6b5f6ba3",
+      "ref": "artifacts\\compile\\6b5f6ba3_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "502b31d6",
+      "ref": "artifacts\\compile\\502b31d6_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5d455b02",
+      "ref": "artifacts\\compile\\5d455b02_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5ff92faf",
+      "ref": "artifacts\\compile\\5ff92faf_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "63f4773d",
+      "ref": "artifacts\\compile\\63f4773d_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "cdc28a3b",
+      "ref": "artifacts\\compile\\cdc28a3b_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "27e5aa09",
+      "ref": "artifacts\\compile\\27e5aa09_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5f50591b",
+      "ref": "artifacts\\compile\\5f50591b_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "90cb83ed",
+      "ref": "artifacts\\compile\\90cb83ed_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "ebe639fd",
+      "ref": "artifacts\\compile\\ebe639fd_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "59b5cb07",
+      "ref": "artifacts\\compile\\59b5cb07_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "56854ac4",
+      "ref": "artifacts\\compile\\56854ac4_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "a46fa59d",
+      "ref": "artifacts\\compile\\a46fa59d_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "84933623",
+      "ref": "artifacts\\compile\\84933623_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "76c2d62b",
+      "ref": "artifacts\\compile\\76c2d62b_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "a42a77d4",
+      "ref": "artifacts\\compile\\a42a77d4_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "de373e19",
+      "ref": "artifacts\\compile\\de373e19_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "b267acfe",
+      "ref": "artifacts\\compile\\b267acfe_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "939e6662",
+      "ref": "artifacts\\compile\\939e6662_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "034a0450",
+      "ref": "artifacts\\compile\\034a0450_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "2292442a",
+      "ref": "artifacts\\compile\\2292442a_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "ad4423ea",
+      "ref": "artifacts\\compile\\ad4423ea_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "fd0fe768",
+      "ref": "artifacts\\compile\\fd0fe768_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "5c667f5b",
+      "ref": "artifacts\\compile\\5c667f5b_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "53232d45",
+      "ref": "artifacts\\compile\\53232d45_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "2091f6f4",
+      "ref": "artifacts\\compile\\2091f6f4_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "3df1fe94",
+      "ref": "artifacts\\compile\\3df1fe94_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "16c87bb7",
+      "ref": "artifacts\\compile\\16c87bb7_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "8f83d642",
+      "ref": "artifacts\\compile\\8f83d642_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "cfe640df",
+      "ref": "artifacts\\compile\\cfe640df_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "c897ac53",
+      "ref": "artifacts\\compile\\c897ac53_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "1b6866f0",
+      "ref": "artifacts\\compile\\1b6866f0_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "b6ae4f0d",
+      "ref": "artifacts\\compile\\b6ae4f0d_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "d28954a6",
+      "ref": "artifacts\\compile\\d28954a6_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "54f5cd01",
+      "ref": "artifacts\\compile\\54f5cd01_llm_resp.txt"
+    },
+    {
+      "phase": "compilation",
+      "attempt_id": "85bd5f65",
+      "ref": "artifacts\\compile\\85bd5f65_llm_resp.txt"
+    }
+  ],
+  "md_diffs": [],
+  "code_artifacts": [
+    {
+      "type": "input_code",
+      "attempt_id": "7bc6fa38",
+      "ref": "artifacts\\compile\\7bc6fa38_input.cs"
+    },
+    {
+      "type": "output_code",
+      "attempt_id": "7bc6fa38",
+      "ref": "artifacts\\compile\\7bc6fa38_output.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "6e548070",
+      "ref": "artifacts\\compile\\6e548070_input.cs"
+    },
+    {
+      "type": "output_code",
+      "attempt_id": "6e548070",
+      "ref": "artifacts\\compile\\6e548070_output.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "fdf08d41",
+      "ref": "artifacts\\compile\\fdf08d41_input.cs"
+    },
+    {
+      "type": "output_code",
+      "attempt_id": "fdf08d41",
+      "ref": "artifacts\\compile\\fdf08d41_output.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "15783532",
+      "ref": "artifacts\\compile\\15783532_input.cs"
+    },
+    {
+      "type": "output_code",
+      "attempt_id": "15783532",
+      "ref": "artifacts\\compile\\15783532_output.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "b922d166",
+      "ref": "artifacts\\compile\\b922d166_input.cs"
+    },
+    {
+      "type": "output_code",
+      "attempt_id": "b922d166",
+      "ref": "artifacts\\compile\\b922d166_output.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "6d1e5c2d",
+      "ref": "artifacts\\compile\\6d1e5c2d_input.cs"
+    },
+    {
+      "type": "output_code",
+      "attempt_id": "6d1e5c2d",
+      "ref": "artifacts\\compile\\6d1e5c2d_output.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "738df18a",
+      "ref": "artifacts\\compile\\738df18a_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "1d55828f",
+      "ref": "artifacts\\compile\\1d55828f_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "eb1ab517",
+      "ref": "artifacts\\compile\\eb1ab517_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "e08eabe3",
+      "ref": "artifacts\\compile\\e08eabe3_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "5606ad27",
+      "ref": "artifacts\\compile\\5606ad27_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "dd0a06b4",
+      "ref": "artifacts\\compile\\dd0a06b4_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "464f9db0",
+      "ref": "artifacts\\compile\\464f9db0_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "07f206bf",
+      "ref": "artifacts\\compile\\07f206bf_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "96d6d7f3",
+      "ref": "artifacts\\compile\\96d6d7f3_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "75faabfc",
+      "ref": "artifacts\\compile\\75faabfc_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "7266f4ba",
+      "ref": "artifacts\\compile\\7266f4ba_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "08512304",
+      "ref": "artifacts\\compile\\08512304_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "645cb2e3",
+      "ref": "artifacts\\compile\\645cb2e3_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "940496fd",
+      "ref": "artifacts\\compile\\940496fd_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "721fc892",
+      "ref": "artifacts\\compile\\721fc892_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "968ef999",
+      "ref": "artifacts\\compile\\968ef999_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "d237a48d",
+      "ref": "artifacts\\compile\\d237a48d_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "667a6d26",
+      "ref": "artifacts\\compile\\667a6d26_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "8109597e",
+      "ref": "artifacts\\compile\\8109597e_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "f93f2a26",
+      "ref": "artifacts\\compile\\f93f2a26_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "67cea271",
+      "ref": "artifacts\\compile\\67cea271_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "7046973c",
+      "ref": "artifacts\\compile\\7046973c_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "f4fd9d13",
+      "ref": "artifacts\\compile\\f4fd9d13_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "7f4423e8",
+      "ref": "artifacts\\compile\\7f4423e8_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "5fc78612",
+      "ref": "artifacts\\compile\\5fc78612_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "dc9fff3d",
+      "ref": "artifacts\\compile\\dc9fff3d_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "fcdcd20a",
+      "ref": "artifacts\\compile\\fcdcd20a_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "6b5f6ba3",
+      "ref": "artifacts\\compile\\6b5f6ba3_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "502b31d6",
+      "ref": "artifacts\\compile\\502b31d6_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "5d455b02",
+      "ref": "artifacts\\compile\\5d455b02_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "5ff92faf",
+      "ref": "artifacts\\compile\\5ff92faf_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "63f4773d",
+      "ref": "artifacts\\compile\\63f4773d_input.cs"
+    },
+    {
+      "type": "output_code",
+      "attempt_id": "63f4773d",
+      "ref": "artifacts\\compile\\63f4773d_output.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "cdc28a3b",
+      "ref": "artifacts\\compile\\cdc28a3b_input.cs"
+    },
+    {
+      "type": "output_code",
+      "attempt_id": "cdc28a3b",
+      "ref": "artifacts\\compile\\cdc28a3b_output.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "27e5aa09",
+      "ref": "artifacts\\compile\\27e5aa09_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "5f50591b",
+      "ref": "artifacts\\compile\\5f50591b_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "90cb83ed",
+      "ref": "artifacts\\compile\\90cb83ed_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "ebe639fd",
+      "ref": "artifacts\\compile\\ebe639fd_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "59b5cb07",
+      "ref": "artifacts\\compile\\59b5cb07_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "56854ac4",
+      "ref": "artifacts\\compile\\56854ac4_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "a46fa59d",
+      "ref": "artifacts\\compile\\a46fa59d_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "84933623",
+      "ref": "artifacts\\compile\\84933623_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "76c2d62b",
+      "ref": "artifacts\\compile\\76c2d62b_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "a42a77d4",
+      "ref": "artifacts\\compile\\a42a77d4_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "de373e19",
+      "ref": "artifacts\\compile\\de373e19_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "b267acfe",
+      "ref": "artifacts\\compile\\b267acfe_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "939e6662",
+      "ref": "artifacts\\compile\\939e6662_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "034a0450",
+      "ref": "artifacts\\compile\\034a0450_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "2292442a",
+      "ref": "artifacts\\compile\\2292442a_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "ad4423ea",
+      "ref": "artifacts\\compile\\ad4423ea_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "fd0fe768",
+      "ref": "artifacts\\compile\\fd0fe768_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "5c667f5b",
+      "ref": "artifacts\\compile\\5c667f5b_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "53232d45",
+      "ref": "artifacts\\compile\\53232d45_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "2091f6f4",
+      "ref": "artifacts\\compile\\2091f6f4_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "3df1fe94",
+      "ref": "artifacts\\compile\\3df1fe94_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "16c87bb7",
+      "ref": "artifacts\\compile\\16c87bb7_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "8f83d642",
+      "ref": "artifacts\\compile\\8f83d642_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "cfe640df",
+      "ref": "artifacts\\compile\\cfe640df_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "c897ac53",
+      "ref": "artifacts\\compile\\c897ac53_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "1b6866f0",
+      "ref": "artifacts\\compile\\1b6866f0_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "b6ae4f0d",
+      "ref": "artifacts\\compile\\b6ae4f0d_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "d28954a6",
+      "ref": "artifacts\\compile\\d28954a6_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "54f5cd01",
+      "ref": "artifacts\\compile\\54f5cd01_input.cs"
+    },
+    {
+      "type": "input_code",
+      "attempt_id": "85bd5f65",
+      "ref": "artifacts\\compile\\85bd5f65_input.cs"
+    }
+  ],
+  "total_artifacts": 284
+}

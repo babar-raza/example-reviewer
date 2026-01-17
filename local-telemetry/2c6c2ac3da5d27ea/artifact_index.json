@@ -1,0 +1,22 @@
+{
+  "run_id": "2c6c2ac3da5d27ea",
+  "family": "zip",
+  "compiler_logs": [],
+  "runtime_logs": [
+    {
+      "attempt_id": "d854adb1",
+      "example_id": "497b4af1759e08cf",
+      "ref": "artifacts\\runtime\\d854adb1_runtime.log"
+    },
+    {
+      "attempt_id": "0b247209",
+      "example_id": "5fa319239ef49f75",
+      "ref": "artifacts\\runtime\\0b247209_runtime.log"
+    }
+  ],
+  "llm_requests": [],
+  "llm_responses": [],
+  "md_diffs": [],
+  "code_artifacts": [],
+  "total_artifacts": 2
+}

@@ -1,0 +1,105 @@
+On branch main
+Your branch is ahead of 'origin/main' by 12 commits.
+  (use "git push" to publish your local commits)
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	renamed:    src/config_utils.py -> src/core/config_utils.py
+	renamed:    src/database.py -> src/core/database.py
+	renamed:    src/telemetry.py -> src/core/telemetry.py
+	renamed:    src/discovery_service.py -> src/discovery/discovery_service.py
+	renamed:    src/gist_service.py -> src/discovery/gist_service.py
+	renamed:    src/page_scanner.py -> src/discovery/page_scanner.py
+	renamed:    src/snippet_locator.py -> src/discovery/snippet_locator.py
+	renamed:    src/example_fixer.py -> src/legacy/example_fixer.py
+	renamed:    src/review_inmemory_blog.py -> src/legacy/review_inmemory_blog.py
+	renamed:    src/review_orchestrator.py -> src/legacy/review_orchestrator.py
+	renamed:    src/ollama_integration.py -> src/llm/ollama_integration.py
+	renamed:    src/gist_publisher.py -> src/patching/gist_publisher.py
+	renamed:    src/patching_service.py -> src/patching/patching_service.py
+	renamed:    src/placeholder_patcher.py -> src/patching/placeholder_patcher.py
+	renamed:    src/pattern_registry.py -> src/validation/analysis/pattern_registry.py
+	renamed:    src/validation_orchestrator.py -> src/validation/orchestrator.py
+	renamed:    src/workspace_manager.py -> src/validation/workspace/workspace_manager.py
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .env.example
+	modified:   config/families/zip.json
+	modified:   docs/architecture.md
+	modified:   reports/STATUS.md
+	modified:   reports/TASK_BACKLOG.md
+	modified:   schema.sql
+	modified:   src/cli.py
+	modified:   src/core/database.py
+	modified:   src/core/telemetry.py
+	modified:   src/discovery/discovery_service.py
+	modified:   src/discovery/gist_service.py
+	modified:   src/legacy/review_inmemory_blog.py
+	modified:   src/legacy/review_orchestrator.py
+	modified:   src/llm/ollama_integration.py
+	modified:   src/patching/gist_publisher.py
+	modified:   src/patching/patching_service.py
+	modified:   src/validation/orchestrator.py
+	modified:   src/validation/workspace/workspace_manager.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.coverage
+	API_REFERENCE_ENHANCEMENT_RESULTS.md
+	MULTI_FAMILY_VERIFICATION_RESULTS.md
+	VALIDATION_FAILURE_ANALYSIS.md
+	check_api_index.py
+	config/families/cells.json
+	config/families/email.json
+	config/families/imaging.json
+	config/families/pdf.json
+	config/families/slides.json
+	config/families/words.json
+	config/global.json
+	docs/local-telemetry.md
+	manual_test_namespace_validator.py
+	migrations/
+	nul
+	plans/from_chat/20260112_134500_fix_remaining_snippets.md
+	plans/healing/
+	run_validation.py
+	src/api_reference/
+	src/core/__init__.py
+	src/discovery/__init__.py
+	src/legacy/__init__.py
+	src/llm/__init__.py
+	src/patching/__init__.py
+	src/setup/
+	src/validation/__init__.py
+	src/validation/analysis/__init__.py
+	src/validation/analysis/code_pattern_detector.py
+	src/validation/analysis/namespace_validator.py
+	src/validation/fixing/
+	src/validation/workspace/__init__.py
+	test_api_service.py
+	test_auto_commit_config.py
+	test_cells_family.py
+	test_code_pattern_detector.py
+	test_commit_message_generation.py
+	test_cross_domain_namespace.py
+	test_integration_pattern_detector.py
+	test_namespace_validator.py
+	test_parser.py
+	test_patching_auto_commit.py
+	test_patching_rollback.py
+	test_pattern_detector_standalone.py
+	test_pattern_loading.py
+	test_pdf_api_service.py
+	test_pdf_family.py
+	test_snippet_138_fix.cs
+	test_telemetry_config.py
+	test_telemetry_metrics.py
+	test_telemetry_timing.py
+	tests/test_context_inference.py
+	tests/test_telemetry.py
+	validation_output.log
+	validation_run_27.log
+	verify_multi_family.py
+

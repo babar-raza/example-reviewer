@@ -1,0 +1,71 @@
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\src\cli.py:428: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+  "generated_at": datetime.utcnow().isoformat(),
+[*] Starting validation for family: cells
+[i] Using custom content root: D:\onedrive\Documents\GitHub\aspose.net\content
+[i] Run ID: 54
+[i] Artifacts directory: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_135944_54
+[*] Setting up .NET workspace...
+[OK] Workspace ready
+[*] Checking Ollama...
+[OK] Using Ollama model: qwen2.5-coder:latest
+[i] Limiting to 15 snippets
+[i] Found 15 unverified snippets
+
+[1/15] Validating snippet 831 from content\blog.aspose.net\cells\aspose-cells-lowcode-plugins-excel-automation-simplified\index.md
+  [OK] Verified - Fixed after 3 iterations using qwen2.5-coder:latest
+
+[2/15] Validating snippet 832 from content\blog.aspose.net\cells\aspose-cells-lowcode-plugins-excel-automation-simplified\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[3/15] Validating snippet 833 from content\blog.aspose.net\cells\automate-batch-excel-to-pdf-conversion-in-net-with-aspose-cells\index.md
+  [OK] Verified - Original code compiles successfully
+
+[4/15] Validating snippet 834 from content\blog.aspose.net\cells\automate-batch-excel-to-pdf-conversion-in-net-with-aspose-cells\index.md
+  [OK] Verified - Original code compiles successfully
+
+[5/15] Validating snippet 835 from content\blog.aspose.net\cells\automate-batch-excel-to-pdf-conversion-in-net-with-aspose-cells\index.md
+  [OK] Verified - Fixed after 2 iterations using qwen2.5-coder:latest
+
+[6/15] Validating snippet 836 from content\blog.aspose.net\cells\boost-net-apps-with-aspose-cells-plugins-excel-to-pdf-json-and-more\index.md
+  [OK] Verified - Fixed after 4 iterations using qwen2.5-coder:latest
+
+[7/15] Validating snippet 837 from content\blog.aspose.net\cells\boost-net-apps-with-aspose-cells-plugins-excel-to-pdf-json-and-more\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[8/15] Validating snippet 838 from content\blog.aspose.net\cells\boost-net-apps-with-aspose-cells-plugins-excel-to-pdf-json-and-more\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[9/15] Validating snippet 839 from content\blog.aspose.net\cells\boost-net-apps-with-aspose-cells-plugins-excel-to-pdf-json-and-more\index.md
+  [OK] Verified - Original code compiles successfully
+
+[10/15] Validating snippet 840 from content\blog.aspose.net\cells\boost-net-apps-with-aspose-cells-plugins-excel-to-pdf-json-and-more\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[11/15] Validating snippet 841 from content\blog.aspose.net\cells\convert-a-single-excel-cell-to-image-in-c-with-aspose-cells\index.md
+  [OK] Verified - Original code compiles successfully
+
+[12/15] Validating snippet 842 from content\blog.aspose.net\cells\convert-a-single-excel-cell-to-image-in-c-with-aspose-cells\index.md
+  [OK] Verified - Original code compiles successfully
+
+[13/15] Validating snippet 843 from content\blog.aspose.net\cells\convert-a-single-excel-cell-to-image-in-c-with-aspose-cells\index.md
+  [OK] Verified - Fixed after 7 iterations using qwen2.5-coder:latest
+
+[14/15] Validating snippet 844 from content\blog.aspose.net\cells\convert-a-single-excel-cell-to-image-in-c-with-aspose-cells\index.md
+  [!] Needs fix - Could not verify after all attempts
+
+[15/15] Validating snippet 845 from content\blog.aspose.net\cells\convert-csv-to-json-csharp\index.md
+  [OK] Verified - Original code compiles successfully
+
+[OK] Validation completed
+[i] Snippets processed: 15
+[i] Verified: 10
+[i] Needs fix: 5
+[i] Errors: 0
+[*] Generating validation report...
+[OK] Report saved to: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\artifacts\runs\run_20260113_135944_54\validation_report.json
+
+=== Validation Summary ===
+Total snippets: 507
+Verified: 17
+Needs fix: 28
+Unverified: 462

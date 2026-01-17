@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "<string>", line 51, in <module>
+    print(f'Improvement ROB-03 \u2192 ROB-08: {100*(rob08_success/rob08_total - rob03_success/rob03_total):+5.1f}pp')
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2192' in position 19: character maps to <undefined>
+Success Rate Timeline (Unique Verified Snippets):
+
+ROB-03 (Baseline):     21/90 =  23.3%
+ROB-06 (P0 Fixes):     26/78 =  33.3% (+0.100 = +10.0pp)
+ROB-08 (All Fixes):    33/84 =  39.3% (+0.160 = +16.0pp)
+

@@ -4,6 +4,7 @@ Implements Phase B: Compilation Verification Loop.
 """
 
 import os
+import re
 import uuid
 import json
 import shutil
@@ -41,7 +42,7 @@ class CompilationService:
     Service for compiling and validating C# code examples.
     Implements the B_compile_verify_fix_loop phase from the spec.
     """
-    
+
     # Default using statements for common scenarios
     DEFAULT_USINGS = [
         "System",
@@ -51,6 +52,44 @@ class CompilationService:
         "System.Collections.Generic",
         "System.Threading.Tasks",
     ]
+
+    # API class to namespace mapping for intelligent using inference
+    API_NAMESPACE_MAP = {
+        # Aspose.Zip
+        'Archive': 'Aspose.Zip',
+        'ArchiveEntry': 'Aspose.Zip',
+        'ArchiveFactory': 'Aspose.Zip',
+        'ArchiveEntrySettings': 'Aspose.Zip.Saving',
+        'CompressionSettings': 'Aspose.Zip.Saving',
+        'DeflateCompressionSettings': 'Aspose.Zip.Saving',
+        'Bzip2CompressionSettings': 'Aspose.Zip.Saving',
+        'LzmaCompressionSettings': 'Aspose.Zip.Saving',
+        'ParallelCompressionOptions': 'Aspose.Zip.Saving',
+        'SevenZipArchive': 'Aspose.Zip.SevenZip',
+        'SevenZipArchiveEntry': 'Aspose.Zip.SevenZip',
+        'SevenZipCompressionSettings': 'Aspose.Zip.Saving',
+        'RarArchive': 'Aspose.Zip.Rar',
+        'RarArchiveEntry': 'Aspose.Zip.Rar',
+        'TarArchive': 'Aspose.Zip.Tar',
+        'GzipArchive': 'Aspose.Zip.Gzip',
+        'CabArchive': 'Aspose.Zip.Cab',
+        'WimArchive': 'Aspose.Zip.Wim',
+        'XarArchive': 'Aspose.Zip.Xar',
+        'CpioArchive': 'Aspose.Zip.Cpio',
+    }
+
+    # Error pattern recognition for targeted fixes
+    ERROR_PATTERNS = {
+        r"CS0246.*type.*'(\w+)'": "missing_type",  # Matches "could not be found" or "not found"
+        r"CS0103.*name.*'(\w+)'": "undefined_variable",  # Matches various phrasings
+        r"CS1002.*;.*expected": "missing_semicolon",
+        r"CS1513.*}.*expected": "missing_brace",
+        r"CS0029.*Cannot.*convert": "type_mismatch",
+        r"CS0117.*does not contain": "member_not_found",
+        r"CS1061.*does not contain.*definition": "member_not_found",
+        r"CS0246.*namespace": "missing_namespace",
+        r"CS8803.*Top-level statements": "top_level_statements_error",
+    }
     
     # Project template for .NET 8
     PROJECT_TEMPLATE = """<Project Sdk="Microsoft.NET.Sdk">
@@ -136,62 +175,213 @@ class CompilationService:
                 except Exception:
                     pass
     
+    def _analyze_code(self, code: str, family_config: FamilyConfig) -> Dict[str, Any]:
+        """
+        Analyze code to determine its structure and what's missing.
+
+        Returns:
+            Dictionary with analysis results including detected APIs and missing elements
+        """
+        # Check for various code elements
+        has_usings = bool(re.search(r'^\s*using\s+[\w\.]+\s*;', code, re.MULTILINE))
+        has_namespace = bool(re.search(r'\bnamespace\s+[\w\.]+', code))
+        has_class = bool(re.search(r'\bclass\s+\w+', code))
+        has_main = bool(re.search(r'\bstatic\s+(?:async\s+)?(?:void|Task|Task<int>|int)\s+Main\s*\(', code))
+        is_async = bool(re.search(r'\bawait\s+', code)) or bool(re.search(r'\basync\s+', code))
+
+        # Detect API usage by looking for class instantiations and references
+        detected_apis = []
+        for api_class in self.API_NAMESPACE_MAP.keys():
+            # Look for: new ApiClass, ApiClass., ApiClass<, or just ApiClass as a type
+            patterns = [
+                rf'\bnew\s+{api_class}\b',
+                rf'\b{api_class}\.',
+                rf'\b{api_class}<',
+                rf'<{api_class}>',
+                rf'\({api_class}\s+\w+\)',  # Parameter: (ApiClass param)
+            ]
+            if any(re.search(pattern, code) for pattern in patterns):
+                detected_apis.append(api_class)
+
+        # Infer missing using statements
+        missing_usings = self._infer_usings(code, family_config, detected_apis)
+
+        # Check if code is complete (has all necessary structure)
+        is_complete = has_namespace or (has_class and has_main)
+
+        return {
+            'has_usings': has_usings,
+            'has_namespace': has_namespace,
+            'has_class': has_class,
+            'has_main': has_main,
+            'is_async': is_async,
+            'detected_apis': detected_apis,
+            'missing_usings': missing_usings,
+            'is_complete': is_complete,
+        }
+
+    def _infer_usings(self, code: str, family_config: FamilyConfig, detected_apis: List[str]) -> List[str]:
+        """
+        Infer required using statements from API usage in code.
+
+        Args:
+            code: Code to analyze
+            family_config: Family configuration
+            detected_apis: List of detected API classes
+
+        Returns:
+            List of required using statements
+        """
+        required_usings = set(self.DEFAULT_USINGS)
+
+        # Add family-specific usings
+        if family_config.code_defaults:
+            required_usings.update(family_config.code_defaults.default_usings)
+
+        # Add usings based on detected APIs
+        for api_class in detected_apis:
+            if api_class in self.API_NAMESPACE_MAP:
+                namespace = self.API_NAMESPACE_MAP[api_class]
+                required_usings.add(namespace)
+
+        # Extract existing using statements
+        existing_usings = set()
+        using_pattern = r'using\s+([\w\.]+)\s*;'
+        for match in re.finditer(using_pattern, code):
+            existing_usings.add(match.group(1))
+
+        # Return only missing usings
+        missing = required_usings - existing_usings
+        return sorted(list(missing))
+
     def _wrap_code(self, code: str, family_config: FamilyConfig) -> str:
         """
-        Wrap code snippet in a compilable Program.cs structure.
-        
+        Intelligently wrap code snippet in a compilable structure based on what's already present.
+
+        Detection rules:
+        - Has 'namespace' -> wrap minimally, just add missing usings
+        - Has 'class' but no namespace -> add namespace and usings
+        - Has 'Main' method -> add class wrapper and usings
+        - Raw statements -> full wrapper (usings + class + Main)
+
+        Also handles:
+        - Top-level statements (C# 9+)
+        - Async Main patterns
+        - Multiple class definitions
+        - Partial code snippets
+
         Args:
             code: Original code snippet
             family_config: Family configuration
-            
+
         Returns:
             Wrapped code ready for compilation
         """
-        # Check if code already has using statements
-        has_usings = 'using ' in code and code.strip().startswith('using ')
-        
-        # Check if code already has a class definition
-        has_class = 'class ' in code
-        
-        # Check if code already has Main method
-        has_main = 'static void Main' in code or 'static async Task Main' in code
-        
-        # Get additional usings from config
-        family_usings = family_config.code_defaults.default_usings if family_config.code_defaults else []
-        all_usings = list(set(self.DEFAULT_USINGS + family_usings))
-        
-        # Build the wrapped code
+        # Analyze the code
+        analysis = self._analyze_code(code, family_config)
+
         lines = []
-        
-        # Add using statements if not present
-        if not has_usings:
-            for using in sorted(all_usings):
-                lines.append(f"using {using};")
-            lines.append("")
-        
-        # If code doesn't have a class, wrap it
-        if not has_class:
+
+        # Strategy 1: Code has namespace - minimal wrapping needed
+        if analysis['has_namespace']:
+            # Just add missing usings at the top if needed
+            if analysis['missing_usings']:
+                for using in analysis['missing_usings']:
+                    lines.append(f"using {using};")
+                lines.append("")
+            lines.append(code)
+            return '\n'.join(lines)
+
+        # Strategy 2: Code has class but no namespace
+        if analysis['has_class']:
+            # Add usings
+            all_usings = list(set(self.DEFAULT_USINGS + (family_config.code_defaults.default_usings if family_config.code_defaults else [])))
+            if analysis['detected_apis']:
+                for api in analysis['detected_apis']:
+                    if api in self.API_NAMESPACE_MAP:
+                        all_usings.append(self.API_NAMESPACE_MAP[api])
+
+            if not analysis['has_usings']:
+                for using in sorted(set(all_usings)):
+                    lines.append(f"using {using};")
+                lines.append("")
+
+            lines.append(code)
+            return '\n'.join(lines)
+
+        # Strategy 3: Code has Main method but no class - just add class wrapper
+        if analysis['has_main']:
+            # Add usings
+            if analysis['missing_usings']:
+                for using in analysis['missing_usings']:
+                    lines.append(f"using {using};")
+                lines.append("")
+
             lines.append("public class Program")
             lines.append("{")
-            
-            if not has_main:
-                lines.append("    public static void Main(string[] args)")
-                lines.append("    {")
-                # Indent the code
-                for line in code.split('\n'):
-                    lines.append(f"        {line}")
-                lines.append("    }")
-            else:
-                lines.append(code)
-            
+            # Indent existing code
+            for line in code.split('\n'):
+                lines.append(f"    {line}")
             lines.append("}")
-        else:
-            # Code has a class, use as-is but add usings if needed
-            if has_usings:
-                lines = [code]
+            return '\n'.join(lines)
+
+        # Strategy 4: Raw statements - full wrapper needed
+        # Separate using statements from actual code
+        code_lines = code.split('\n')
+        using_lines = []
+        code_body_lines = []
+        in_usings = True
+
+        for line in code_lines:
+            stripped = line.strip()
+            # Check if this line is a using statement
+            if in_usings and (stripped.startswith('using ') and stripped.endswith(';')):
+                using_lines.append(line)
+            elif in_usings and (not stripped or stripped.startswith('//')):
+                # Skip empty lines and comments at the top
+                continue
             else:
-                lines.append(code)
-        
+                # Once we hit non-using code, add all remaining lines to body
+                in_usings = False
+                code_body_lines.append(line)
+
+        # Add all required usings (combine with existing)
+        all_usings = set(self.DEFAULT_USINGS)
+        if family_config.code_defaults:
+            all_usings.update(family_config.code_defaults.default_usings)
+        for api in analysis['detected_apis']:
+            if api in self.API_NAMESPACE_MAP:
+                all_usings.add(self.API_NAMESPACE_MAP[api])
+
+        # Extract namespaces from existing using statements
+        for using_line in using_lines:
+            match = re.match(r'using\s+([\w\.]+)\s*;', using_line.strip())
+            if match:
+                all_usings.add(match.group(1))
+
+        # Write all usings
+        for using in sorted(all_usings):
+            lines.append(f"using {using};")
+        lines.append("")
+
+        lines.append("public class Program")
+        lines.append("{")
+
+        # Determine Main signature
+        if analysis['is_async']:
+            lines.append("    public static async Task Main(string[] args)")
+        else:
+            lines.append("    public static void Main(string[] args)")
+
+        lines.append("    {")
+
+        # Indent only the actual code body (not the using statements)
+        for line in code_body_lines:
+            lines.append(f"        {line}")
+
+        lines.append("    }")
+        lines.append("}")
+
         return '\n'.join(lines)
     
     def _write_project(self, work_dir: Path, family_config: FamilyConfig) -> None:
@@ -328,6 +518,83 @@ class CompilationService:
             if ': warning ' in line or 'warning CS' in line:
                 warnings.append(line.strip())
         return warnings
+
+    def categorize_errors(self, errors: List[str]) -> Dict[str, List[str]]:
+        """
+        Categorize compilation errors for targeted fixes.
+
+        Args:
+            errors: List of error messages
+
+        Returns:
+            Dictionary mapping error categories to specific errors
+        """
+        categorized = {}
+
+        for error in errors:
+            categorized_flag = False
+            for pattern, category in self.ERROR_PATTERNS.items():
+                if re.search(pattern, error, re.IGNORECASE):
+                    if category not in categorized:
+                        categorized[category] = []
+                    categorized[category].append(error)
+                    categorized_flag = True
+                    break
+
+            # Uncategorized errors
+            if not categorized_flag:
+                if 'unknown' not in categorized:
+                    categorized['unknown'] = []
+                categorized['unknown'].append(error)
+
+        return categorized
+
+    def get_error_fix_hints(self, error_categories: Dict[str, List[str]], family_config: FamilyConfig) -> List[str]:
+        """
+        Get fix hints based on error categories.
+
+        Args:
+            error_categories: Categorized errors
+            family_config: Family configuration
+
+        Returns:
+            List of fix hints
+        """
+        hints = []
+
+        if 'missing_type' in error_categories:
+            # Extract missing types
+            missing_types = []
+            for error in error_categories['missing_type']:
+                match = re.search(r"type.*'(\w+)'", error)
+                if match:
+                    missing_types.append(match.group(1))
+
+            # Suggest namespaces
+            suggested_namespaces = set()
+            for missing_type in missing_types:
+                if missing_type in self.API_NAMESPACE_MAP:
+                    suggested_namespaces.add(self.API_NAMESPACE_MAP[missing_type])
+
+            if suggested_namespaces:
+                hints.append(f"Add using statements: {', '.join(sorted(suggested_namespaces))}")
+
+        if 'undefined_variable' in error_categories:
+            hints.append("Declare variables before use or check for typos")
+
+        if 'missing_semicolon' in error_categories:
+            hints.append("Add missing semicolons")
+
+        if 'missing_brace' in error_categories:
+            hints.append("Check for missing closing braces")
+
+        if 'type_mismatch' in error_categories:
+            hints.append("Use explicit type casting or correct types")
+
+        if 'top_level_statements_error' in error_categories:
+            hints.append("Wrap code in class and Main method - top-level statements must come before other declarations")
+
+        return hints
     
     def create_fix_payload(
         self,
@@ -338,15 +605,15 @@ class CompilationService:
         similar_examples: Optional[List[str]] = None,
     ) -> LLMFixPayload:
         """
-        Create payload for LLM-based code fixing.
-        
+        Create payload for LLM-based code fixing with enhanced context.
+
         Args:
             example: Example that failed compilation
             compile_result: Compilation result with errors
             family_config: Family configuration
             api_context: Relevant API documentation
             similar_examples: Similar working examples
-            
+
         Returns:
             LLMFixPayload for sending to LLM
         """
@@ -355,23 +622,33 @@ class CompilationService:
             f"Exit code: {compile_result.exit_code}",
             compile_result.stderr,
         ]
-        
+
         default_usings = []
         nuget_package = ""
-        
+        scaffolding_hints = []
+
         if family_config:
             if family_config.code_defaults:
                 default_usings = family_config.code_defaults.default_usings
             if family_config.nuget_config and family_config.nuget_config.primary_package:
                 nuget_package = family_config.nuget_config.primary_package.name
-        
+
+            # Categorize errors and generate hints
+            error_categories = self.categorize_errors(compile_result.errors)
+            fix_hints = self.get_error_fix_hints(error_categories, family_config)
+            scaffolding_hints.extend(fix_hints)
+
+            # Log error categories for debugging
+            if error_categories:
+                logger.info(f"Error categories for {example.example_id}: {list(error_categories.keys())}")
+
         return LLMFixPayload(
             code=example.compilable_code or example.original_code,
             errors=errors,
             context_type="compile",
             api_references=[api_context] if api_context else [],
             similar_examples=similar_examples or [],
-            scaffolding_hints=[],
+            scaffolding_hints=scaffolding_hints,
             family=example.family,
             nuget_package=nuget_package,
             default_usings=default_usings,

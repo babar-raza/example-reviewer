@@ -8,6 +8,9 @@ pydantic-settings>=2.1.0
 # OpenAI for LLM integration
 openai>=1.0.0
 
+# Instructor for structured LLM outputs
+instructor>=1.5.0
+
 # HTTP
 requests>=2.31.0
 
@@ -28,3 +31,11 @@ jinja2>=3.1.0
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
 pytest-mock>=3.12.0
+
+# Backfill dependencies
+gitpython>=3.1.40
+
+# Vector DB dependencies (optional)
+# Install with: pip install chromadb sentence-transformers
+# chromadb>=0.4.20
+# sentence-transformers>=2.2.0

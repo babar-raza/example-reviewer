@@ -266,29 +266,63 @@ class ExampleReviewerTools:
     ) -> ToolResult:
         """
         Execute examples and verify runtime behavior.
-        
+
         Maps to CLI command: runtime_verify
-        Maps to phase: C_runtime_verify_fix_loop
-        
+        Maps to phase: C_runtime_verify_fix_loop (without LLM fixes)
+
         Args:
             family: Family identifier
             max_examples: Maximum examples to verify
-            
+
         Returns:
             ToolResult with runtime statistics
         """
         try:
             family_config = self.orchestrator.config_manager.load_family_config(family)
-            
+
             stats = self.orchestrator._run_runtime_phase(
                 family, family_config, max_examples, skip_llm_fixes=True
             )
-            
+
             return ToolResult(success=True, data=stats)
-            
+
         except Exception as e:
             return ToolResult(success=False, error=str(e))
-    
+
+    # =========================================================================
+    # RUNTIME_FIX TOOL (CLI command: runtime_fix)
+    # =========================================================================
+
+    def runtime_fix(
+        self,
+        family: str,
+        max_examples: Optional[int] = None,
+    ) -> ToolResult:
+        """
+        Fix runtime errors using LLM.
+
+        Maps to CLI command: runtime_fix
+        Maps to phase: C_runtime_verify_fix_loop (with LLM fixes)
+
+        Args:
+            family: Family identifier
+            max_examples: Maximum examples to fix
+
+        Returns:
+            ToolResult with fix statistics
+        """
+        try:
+            family_config = self.orchestrator.config_manager.load_family_config(family)
+
+            stats = self.orchestrator._run_runtime_phase(
+                family, family_config, max_examples, skip_llm_fixes=False
+            )
+
+            return ToolResult(success=True, data=stats)
+
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
     # =========================================================================
     # MD_UPDATE TOOL (CLI command: md_update)
     # =========================================================================
@@ -381,40 +415,111 @@ class ExampleReviewerTools:
         self,
         family: str,
         targets: Optional[List[str]] = None,
+        force: bool = False,
     ) -> ToolResult:
         """
         Backfill missing context (API refs, test data, examples).
-        
+
         Maps to CLI command: backfill
-        
+
         Args:
             family: Family identifier
             targets: What to backfill (api_reference, test_data, examples)
-            
+            force: Force re-download even if data exists
+
         Returns:
             ToolResult with backfill statistics
         """
         try:
-            # For now, just return config info
-            family_config = self.orchestrator.config_manager.load_family_config(family)
-            
+            from ..services.backfill_service import BackfillService
+
+            # Create backfill service
+            global_config = self.orchestrator.config_manager.load_global_config()
+            backfill_service = BackfillService(
+                config_manager=self.orchestrator.config_manager,
+                timeout_seconds=global_config.backfill.github_timeout_seconds
+            )
+
+            # Determine targets
+            if targets is None:
+                targets = global_config.backfill.targets
+
+            results = {}
+
+            # Execute backfill for each target
+            for target in targets:
+                if target == "test_data":
+                    result = backfill_service.backfill_test_data(family=family, force=force)
+                    results['test_data'] = {
+                        'success': result.success,
+                        'files_copied': result.files_copied,
+                        'skipped': result.skipped,
+                        'skip_reason': result.skip_reason,
+                        'error': result.error,
+                        'duration_seconds': result.duration_seconds
+                    }
+
+                elif target == "api_reference":
+                    result = backfill_service.backfill_api_reference(family=family, force=force)
+                    results['api_reference'] = {
+                        'success': result.success,
+                        'files_copied': result.files_copied,
+                        'skipped': result.skipped,
+                        'skip_reason': result.skip_reason,
+                        'error': result.error,
+                        'duration_seconds': result.duration_seconds
+                    }
+
+                elif target == "examples":
+                    # Get vector service if available
+                    vector_service = self.orchestrator.vector_db_service
+                    result = backfill_service.backfill_examples_to_vector_db(
+                        family=family,
+                        vector_service=vector_service,
+                        force=force
+                    )
+                    results['examples'] = {
+                        'success': result.success,
+                        'files_copied': result.files_copied,
+                        'skipped': result.skipped,
+                        'skip_reason': result.skip_reason,
+                        'error': result.error,
+                        'duration_seconds': result.duration_seconds
+                    }
+
+                elif target == "gist_source_code":
+                    result = backfill_service.backfill_gist_source_code(
+                        family=family,
+                        force=force
+                    )
+                    results['gist_source_code'] = {
+                        'success': result.success,
+                        'items_processed': result.items_processed,
+                        'items_downloaded': result.items_downloaded,
+                        'items_failed': result.items_failed,
+                        'skipped': result.skipped,
+                        'skip_reason': result.skip_reason,
+                        'error': result.error,
+                        'duration_seconds': result.duration_seconds
+                    }
+
+                else:
+                    results[target] = {
+                        'success': False,
+                        'error': f'Unknown backfill target: {target}'
+                    }
+
+            # Determine overall success
+            overall_success = all(r.get('success', False) or r.get('skipped', False) for r in results.values())
+
             return ToolResult(
-                success=True,
+                success=overall_success,
                 data={
                     'family': family,
-                    'targets': targets or ['api_reference', 'test_data', 'examples'],
-                    'example_repo': {
-                        'url': family_config.example_repo.url,
-                        'ref': family_config.example_repo.ref,
-                    },
-                    'test_data': {
-                        'path': family_config.test_data.local_path,
-                        'download_if_missing': family_config.test_data.download_if_missing,
-                    },
-                    'status': 'not_implemented',
+                    'results': results,
                 }
             )
-            
+
         except Exception as e:
             return ToolResult(success=False, error=str(e))
     

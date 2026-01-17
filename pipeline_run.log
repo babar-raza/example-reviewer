@@ -1,0 +1,200 @@
+2026-01-14 23:00:00,504 - src.core.database - INFO - Database initialized at data\example_reviewer.db
+2026-01-14 23:00:00,525 - src.pipeline.orchestrator - INFO - Phase A: Discovery for zip
+2026-01-14 23:00:00,547 - src.services.discovery_service - INFO - Processing 12 files for family zip
+2026-01-14 23:00:01,542 - src.pipeline.orchestrator - INFO - Phase B: Compilation verification for zip
+2026-01-14 23:00:20,826 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:00:24,318 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:00:27,688 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:00:34,177 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:00:38,376 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:00:42,626 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:00:48,798 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:00:52,256 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:00:55,544 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:01,923 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:08,711 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:12,357 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:16,144 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:22,552 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:26,743 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:30,368 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:44,775 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:51,607 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:01:58,695 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:05,535 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:10,407 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:19,866 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:24,447 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:29,158 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:36,317 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:40,862 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:45,338 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:51,472 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:54,931 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:02:58,687 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:05,453 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:09,302 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:12,986 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:19,468 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:26,145 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:29,907 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:33,267 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:41,487 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:45,349 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:49,510 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:03:57,509 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:05,009 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:08,980 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:12,401 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:17,587 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:24,608 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:28,767 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:32,833 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:38,195 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:41,403 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:44,602 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:52,789 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:55,761 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:04:59,004 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:05:04,562 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:05:10,529 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:05:26,077 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:05:30,793 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:05:36,354 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:05:45,048 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:05:47,925 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:05:50,697 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:00,618 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:04,484 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:08,257 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:15,080 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:18,532 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:21,994 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:27,863 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:31,179 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:34,107 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:43,163 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:45,921 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:49,287 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:55,536 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:06:58,511 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:01,669 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:07,346 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:10,253 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:13,336 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:18,249 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:20,778 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:23,558 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:28,993 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:31,867 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:34,657 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:43,628 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:46,774 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:49,987 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:55,945 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:07:58,959 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:02,580 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:14,534 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:19,234 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:22,998 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:28,515 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:31,304 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:34,326 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:40,161 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:43,606 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:46,802 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:55,077 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:08:59,005 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:02,552 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:07,941 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:10,614 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:13,249 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:19,144 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:22,372 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:25,637 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:36,519 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:40,917 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:45,698 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-14 23:09:48,306 - src.pipeline.orchestrator - INFO - Phase C: Runtime verification for zip
+2026-01-14 23:09:48,319 - src.pipeline.orchestrator - ERROR - Error running f40b5028ff0bb2ec: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,321 - src.pipeline.orchestrator - ERROR - Error running c90d7c58adff06cc: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,322 - src.pipeline.orchestrator - ERROR - Error running 130ba19f50b48008: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,323 - src.pipeline.orchestrator - ERROR - Error running 878e5638ba86e142: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,324 - src.pipeline.orchestrator - ERROR - Error running 8c5eee68f8ac8250: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,324 - src.pipeline.orchestrator - ERROR - Error running dcf35e25207d688b: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,325 - src.pipeline.orchestrator - ERROR - Error running 1358bb92d0e2ee1e: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,326 - src.pipeline.orchestrator - ERROR - Error running 1d21ed72880f3d7b: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,328 - src.pipeline.orchestrator - ERROR - Error running 6edab3e724ec84ea: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,329 - src.pipeline.orchestrator - ERROR - Error running ce58a7aeed525fbe: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,330 - src.pipeline.orchestrator - ERROR - Error running 932995e7f87b750e: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,331 - src.pipeline.orchestrator - ERROR - Error running aa72026638e0c5a3: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,332 - src.pipeline.orchestrator - ERROR - Error running e03124d22beafb8f: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,333 - src.pipeline.orchestrator - ERROR - Error running 7fddc4231fe805f9: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,334 - src.pipeline.orchestrator - ERROR - Error running 9c2bbb9a29c56d13: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,335 - src.pipeline.orchestrator - ERROR - Error running bb09d58bba4c00ab: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,336 - src.pipeline.orchestrator - ERROR - Error running 4e1c4be0900d03d8: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,337 - src.pipeline.orchestrator - ERROR - Error running 72b62ef8de018dfd: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,338 - src.pipeline.orchestrator - ERROR - Error running ec3d45d7bde501e2: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,339 - src.pipeline.orchestrator - ERROR - Error running 422f0b28e8b28d97: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,339 - src.pipeline.orchestrator - ERROR - Error running 069ae29d2c7af818: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,341 - src.pipeline.orchestrator - ERROR - Error running 0da3f6aa9499e84d: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,342 - src.pipeline.orchestrator - ERROR - Error running e461539f069e5158: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,342 - src.pipeline.orchestrator - ERROR - Error running 870987db76a34f16: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,343 - src.pipeline.orchestrator - ERROR - Error running d174600c0a520425: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,345 - src.pipeline.orchestrator - ERROR - Error running 3df746f585126fee: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,346 - src.pipeline.orchestrator - ERROR - Error running e2293b439f36dddc: cannot access local variable 'result' where it is not associated with a value
+2026-01-14 23:09:48,346 - src.pipeline.orchestrator - INFO - Phase D: Markdown update for zip
+2026-01-14 23:09:48,354 - src.pipeline.orchestrator - INFO - Phase E: Final LLM review for zip
+2026-01-14 23:09:48,361 - src.pipeline.orchestrator - INFO - Phase F: Finalization for zip
+{
+  "success": true,
+  "data": {
+    "family": "zip",
+    "started_at": "2026-01-14T23:00:00.504468",
+    "phases": {
+      "discovery": {
+        "files_found": 42,
+        "files_processed": 12,
+        "examples_found": 46,
+        "inline_examples": 21,
+        "gist_examples": 25,
+        "errors": 0
+      },
+      "compilation": {
+        "total_processed": 60,
+        "compiled_first_try": 18,
+        "compiled_with_fix": 9,
+        "failed": 33,
+        "errors": 0,
+        "dotnet_version": "9.0.200",
+        "verified": 27
+      },
+      "runtime": {
+        "total_processed": 27,
+        "passed_first_try": 0,
+        "passed_with_fix": 0,
+        "failed": 0,
+        "errors": 27,
+        "verified": 0
+      },
+      "markdown_update": {
+        "files_processed": 0,
+        "files_updated": 0,
+        "examples_updated": 0,
+        "errors": 0
+      },
+      "final_review": {
+        "files_reviewed": 0,
+        "approved": 0,
+        "issues_found": 0
+      },
+      "finalization": {
+        "committed": false,
+        "commit_hash": null
+      }
+    },
+    "success": true,
+    "run_id": "ca84e2933d398e52",
+    "completed_at": "2026-01-14T23:09:48.380714"
+  }
+}

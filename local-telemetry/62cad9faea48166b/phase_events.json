@@ -1,0 +1,37 @@
+[
+  {
+    "phase": "discovery",
+    "duration_ms": 1347,
+    "success": true,
+    "timestamp": "2026-01-15T19:12:45.921093",
+    "metadata": {}
+  },
+  {
+    "phase": "compilation",
+    "duration_ms": 436022,
+    "success": true,
+    "timestamp": "2026-01-15T19:12:47.288574",
+    "metadata": {}
+  },
+  {
+    "phase": "runtime",
+    "duration_ms": 457788,
+    "success": true,
+    "timestamp": "2026-01-15T19:20:03.335939",
+    "metadata": {}
+  },
+  {
+    "phase": "markdown_update",
+    "duration_ms": 551,
+    "success": true,
+    "timestamp": "2026-01-15T19:27:41.151269",
+    "metadata": {}
+  },
+  {
+    "phase": "final_review",
+    "duration_ms": 21302,
+    "success": true,
+    "timestamp": "2026-01-15T19:27:41.726851",
+    "metadata": {}
+  }
+]

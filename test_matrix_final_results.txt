@@ -1,0 +1,71 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.2, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer
+configfile: pytest.ini
+plugins: anyio-4.12.1, asyncio-1.3.0, mock-3.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 46 items
+
+tests/test_cli_matrix.py::test_run_family_max_examples_matrix[zip-1] FAILED [  2%]
+tests/test_cli_matrix.py::test_run_family_max_examples_matrix[pdf-1] FAILED [  4%]
+tests/test_cli_matrix.py::test_run_family_max_examples_matrix[cells-1] FAILED [  6%]
+tests/test_cli_matrix.py::test_run_minimal_with_different_families[zip] PASSED [  8%]
+tests/test_cli_matrix.py::test_run_minimal_with_different_families[pdf] PASSED [ 10%]
+tests/test_cli_matrix.py::test_run_minimal_with_different_families[cells] PASSED [ 13%]
+tests/test_cli_matrix.py::test_run_minimal_with_different_families[words] PASSED [ 15%]
+tests/test_cli_matrix.py::test_run_with_nonexistent_family PASSED        [ 17%]
+tests/test_cli_matrix.py::test_flag_combinations[flags0] PASSED          [ 19%]
+tests/test_cli_matrix.py::test_flag_combinations[flags1] PASSED          [ 21%]
+tests/test_cli_matrix.py::test_flag_combinations[flags2] PASSED          [ 23%]
+tests/test_cli_matrix.py::test_flag_combinations[flags3] PASSED          [ 26%]
+tests/test_cli_matrix.py::test_flag_combinations[flags4] PASSED          [ 28%]
+tests/test_cli_matrix.py::test_flag_combinations[flags5] PASSED          [ 30%]
+tests/test_cli_matrix.py::test_flag_combinations[flags6] PASSED          [ 32%]
+tests/test_cli_matrix.py::test_skip_runtime_alone PASSED                 [ 34%]
+tests/test_cli_matrix.py::test_skip_llm_alone PASSED                     [ 36%]
+tests/test_cli_matrix.py::test_all_skip_flags_together PASSED            [ 39%]
+tests/test_cli_matrix.py::test_max_examples_range[1] PASSED              [ 41%]
+tests/test_cli_matrix.py::test_max_examples_range[2] PASSED              [ 43%]
+tests/test_cli_matrix.py::test_max_examples_range[5] PASSED              [ 45%]
+tests/test_cli_matrix.py::test_max_examples_range[10] PASSED             [ 47%]
+tests/test_cli_matrix.py::test_max_examples_zero PASSED                  [ 50%]
+tests/test_cli_matrix.py::test_max_examples_large_value PASSED           [ 52%]
+tests/test_cli_matrix.py::test_max_examples_negative PASSED              [ 54%]
+tests/test_cli_matrix.py::test_custom_workspace_dir PASSED               [ 56%]
+tests/test_cli_matrix.py::test_custom_db_path PASSED                     [ 58%]
+tests/test_cli_matrix.py::test_json_output_format PASSED                 [ 60%]
+tests/test_cli_matrix.py::test_verbose_flag PASSED                       [ 63%]
+tests/test_cli_matrix.py::test_global_flag_combinations[global_flags0] PASSED [ 65%]
+tests/test_cli_matrix.py::test_global_flag_combinations[global_flags1] PASSED [ 67%]
+tests/test_cli_matrix.py::test_global_flag_combinations[global_flags2] PASSED [ 69%]
+tests/test_cli_matrix.py::test_other_commands_with_family[scan-extra_args0] PASSED [ 71%]
+tests/test_cli_matrix.py::test_other_commands_with_family[extract-extra_args1] PASSED [ 73%]
+tests/test_cli_matrix.py::test_other_commands_with_family[compile-verify-extra_args2] PASSED [ 76%]
+tests/test_cli_matrix.py::test_other_commands_with_family[status-extra_args3] PASSED [ 78%]
+tests/test_cli_matrix.py::test_commands_with_json_output[scan] PASSED    [ 80%]
+tests/test_cli_matrix.py::test_commands_with_json_output[extract] PASSED [ 82%]
+tests/test_cli_matrix.py::test_commands_with_json_output[compile-verify] PASSED [ 84%]
+tests/test_cli_matrix.py::test_missing_required_family PASSED            [ 86%]
+tests/test_cli_matrix.py::test_invalid_flag_value_type PASSED            [ 89%]
+tests/test_cli_matrix.py::test_unknown_flag PASSED                       [ 91%]
+tests/test_cli_matrix.py::test_full_option_stack FAILED                  [ 93%]
+tests/test_cli_matrix.py::test_minimal_run_no_optional_args PASSED       [ 95%]
+tests/test_cli_matrix.py::test_multiple_families_sequential PASSED       [ 97%]
+tests/test_cli_matrix.py::test_dry_run_is_fast PASSED                    [100%]
+
+================================== FAILURES ===================================
+E   subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'zip', '--max-examples', '1', '--dry-run']' timed out after 30 seconds
+C:\Python313\Lib\subprocess.py:1642: subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'zip', '--max-examples', '1', '--dry-run']' timed out after 30 seconds
+E   subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'pdf', '--max-examples', '1', '--dry-run']' timed out after 30 seconds
+C:\Python313\Lib\subprocess.py:1642: subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'pdf', '--max-examples', '1', '--dry-run']' timed out after 30 seconds
+E   subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'cells', '--max-examples', '1', '--dry-run']' timed out after 30 seconds
+C:\Python313\Lib\subprocess.py:1642: subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'cells', '--max-examples', '1', '--dry-run']' timed out after 30 seconds
+E   subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'zip', '--max-examples', '1', '--skip-runtime', '--skip-llm', '--dry-run']' timed out after 30 seconds
+C:\Python313\Lib\subprocess.py:1642: subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'zip', '--max-examples', '1', '--skip-runtime', '--skip-llm', '--dry-run']' timed out after 30 seconds
+=========================== short test summary info ===========================
+FAILED tests/test_cli_matrix.py::test_run_family_max_examples_matrix[zip-1] - subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'zip', '--max-examples', '1', '--dry-run']' timed out after 30 seconds
+FAILED tests/test_cli_matrix.py::test_run_family_max_examples_matrix[pdf-1] - subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'pdf', '--max-examples', '1', '--dry-run']' timed out after 30 seconds
+FAILED tests/test_cli_matrix.py::test_run_family_max_examples_matrix[cells-1] - subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'cells', '--max-examples', '1', '--dry-run']' timed out after 30 seconds
+FAILED tests/test_cli_matrix.py::test_full_option_stack - subprocess.TimeoutExpired: Command '['C:\\Users\\prora\\OneDrive\\Documents\\GitHub\\example-reviewer\\.venv\\Scripts\\python.exe', '-m', 'src.cli.main', 'run', '--family', 'zip', '--max-examples', '1', '--skip-runtime', '--skip-llm', '--dry-run']' timed out after 30 seconds
+================== 4 failed, 42 passed in 134.81s (0:02:14) ===================

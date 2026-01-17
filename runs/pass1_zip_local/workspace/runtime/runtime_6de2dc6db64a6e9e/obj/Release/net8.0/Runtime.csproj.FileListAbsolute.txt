@@ -1,0 +1,6 @@
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_6de2dc6db64a6e9e\obj\Release\net8.0\Runtime.csproj.AssemblyReference.cache
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_6de2dc6db64a6e9e\obj\Release\net8.0\Runtime.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_6de2dc6db64a6e9e\obj\Release\net8.0\Runtime.AssemblyInfoInputs.cache
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_6de2dc6db64a6e9e\obj\Release\net8.0\Runtime.AssemblyInfo.cs
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_6de2dc6db64a6e9e\obj\Release\net8.0\Runtime.csproj.CoreCompileInputs.cache
+C:\Users\prora\OneDrive\Documents\GitHub\example-reviewer\runs\pass1_zip_local\workspace\runtime\runtime_6de2dc6db64a6e9e\obj\Release\net8.0\Runtime.sourcelink.json

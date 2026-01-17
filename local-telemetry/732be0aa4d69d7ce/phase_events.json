@@ -1,0 +1,30 @@
+[
+  {
+    "phase": "discovery",
+    "duration_ms": 53,
+    "success": true,
+    "timestamp": "2026-01-15T18:24:18.674197",
+    "metadata": {}
+  },
+  {
+    "phase": "compilation",
+    "duration_ms": 24656,
+    "success": true,
+    "timestamp": "2026-01-15T18:24:18.753075",
+    "metadata": {}
+  },
+  {
+    "phase": "runtime",
+    "duration_ms": 30211,
+    "success": true,
+    "timestamp": "2026-01-15T18:24:43.432160",
+    "metadata": {}
+  },
+  {
+    "phase": "markdown_update",
+    "duration_ms": 572,
+    "success": true,
+    "timestamp": "2026-01-15T18:25:13.667637",
+    "metadata": {}
+  }
+]

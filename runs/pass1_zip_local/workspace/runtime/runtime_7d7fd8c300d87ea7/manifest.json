@@ -1,0 +1,33 @@
+{
+  "description": "Test data for ZIP runtime validation",
+  "files": [
+    {
+      "name": "sample.zip",
+      "type": "archive",
+      "sha256": "2c8b37de2f71dc6e451075959431eebe75636bc3ce627b54e0791bbfbc93324b",
+      "size_bytes": 636,
+      "description": "ZIP archive containing sample_dir contents"
+    },
+    {
+      "name": "sample_dir/data.txt",
+      "type": "text",
+      "sha256": "71cd41209313b84396f3073288985513e3335e780f747062db84691354b8e3f4",
+      "size_bytes": 63,
+      "description": "Sample text file"
+    },
+    {
+      "name": "sample_dir/readme.txt",
+      "type": "text",
+      "sha256": "27124218cf2d06b7590bbfe827c46e7a0e8ad08d8bf02d8d2b3e1c4a1c62156c",
+      "size_bytes": 266,
+      "description": "Sample text file"
+    },
+    {
+      "name": "sample_dir/subfolder/nested.txt",
+      "type": "text",
+      "sha256": "365d86318a6e7685263ac8670c2360b7b4f145e0f120a9f462711ccc2d539501",
+      "size_bytes": 107,
+      "description": "Sample text file"
+    }
+  ]
+}
