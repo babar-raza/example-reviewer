@@ -1,0 +1,301 @@
+2026-01-19 11:45:57,328 - src.services.vector_db_service - WARNING - ChromaDB or sentence-transformers not installed. Vector DB features disabled. Install with: pip install chromadb>=0.4.20 sentence-transformers>=2.2.0
+2026-01-19 11:45:57,341 - src.core.database - INFO - Database initialized at data\example_reviewer.db
+2026-01-19 11:45:58,665 - httpx - INFO - HTTP Request: POST http://localhost:8765/api/v1/runs "HTTP/1.1 201 Created"
+2026-01-19 11:45:58,666 - src.services.telemetry_service - INFO - Posted telemetry run to API: 36337732-ef3b-4463-9ae9-d5b9a87a28e3
+2026-01-19 11:45:58,712 - src.core.telemetry - INFO - Resource decision logged: gpu_detected=False, strategy=cpu_fallback, vram_total=0MB
+2026-01-19 11:45:58,713 - src.pipeline.orchestrator - INFO - Phase A: Discovery for zip_local
+2026-01-19 11:45:58,723 - src.services.discovery_service - INFO - Processing 27 files for family zip_local
+2026-01-19 11:46:00,736 - src.services.discovery_service - INFO - Discovery complete: 66 examples found, 0 snippets filtered out, 0 gists filtered out
+2026-01-19 11:46:00,761 - src.pipeline.orchestrator - INFO - Phase B: Compilation verification for zip_local
+2026-01-19 11:46:11,694 - src.services.vector_db_service - INFO - Vector DB service initialized but unavailable (missing dependencies)
+2026-01-19 11:48:17,172 - src.pipeline.orchestrator - WARNING - DriftDetector not available (vector DB or embedding model unavailable)
+2026-01-19 11:48:17,176 - src.services.compilation_service - INFO - Error categories for ac3f755bac279cfc: ['unknown']
+2026-01-19 11:48:50,752 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:48:58,620 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:48:58,621 - src.pipeline.orchestrator - WARNING - Intent drift detected for ac3f755bac279cfc: The fixed code changes the usage from a reusable method to a standalone main function with hardcoded paths, which alters the original intent of creating a generic folder-to-7z converter. (confidence: 1.0)
+2026-01-19 11:48:58,637 - src.pipeline.orchestrator - INFO - Example ac3f755bac279cfc marked as needs-fix due to intent drift
+2026-01-19 11:49:03,873 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:49:08,297 - src.services.compilation_service - INFO - Error categories for ac3f755bac279cfc: ['unknown']
+2026-01-19 11:49:15,664 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:49:24,548 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:49:24,549 - src.pipeline.orchestrator - WARNING - Intent drift detected for ac3f755bac279cfc: The fixed code changes the usage from a reusable method to a standalone main function with hardcoded paths, which alters the original intent of creating a generic folder-to-7z converter. (confidence: 1.0)
+2026-01-19 11:49:24,561 - src.pipeline.orchestrator - INFO - Example ac3f755bac279cfc marked as needs-fix due to intent drift
+2026-01-19 11:49:30,791 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:49:35,292 - src.services.compilation_service - INFO - Error categories for ac3f755bac279cfc: ['unknown']
+2026-01-19 11:49:40,965 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:49:49,614 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:49:49,615 - src.pipeline.orchestrator - WARNING - Intent drift detected for ac3f755bac279cfc: The fixed code introduces a Main method that changes how the program is executed and consumed, which alters its primary functionality from being a utility class to an executable with command-line arguments. (confidence: 1.0)
+2026-01-19 11:49:49,631 - src.pipeline.orchestrator - INFO - Example ac3f755bac279cfc marked as needs-fix due to intent drift
+2026-01-19 11:50:18,209 - src.services.compilation_service - INFO - Error categories for 6235563c6d714a75: ['member_not_found']
+2026-01-19 11:50:24,801 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:50:29,299 - src.services.compilation_service - INFO - Error categories for 6235563c6d714a75: ['missing_type', 'undefined_variable']
+2026-01-19 11:50:37,564 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:50:43,149 - src.services.compilation_service - INFO - Error categories for 6235563c6d714a75: ['missing_type', 'undefined_variable']
+2026-01-19 11:50:48,289 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:50:53,006 - src.services.compilation_service - INFO - Error categories for 6235563c6d714a75: ['missing_type', 'undefined_variable']
+2026-01-19 11:51:00,822 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:51:06,017 - src.services.compilation_service - INFO - Error categories for 6235563c6d714a75: ['missing_type', 'undefined_variable']
+2026-01-19 11:51:11,211 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:51:20,912 - src.services.compilation_service - INFO - Error categories for 1c492dcb2580c607: ['unknown', 'member_not_found']
+2026-01-19 11:51:28,853 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:51:33,625 - src.services.compilation_service - INFO - Error categories for 1c492dcb2580c607: ['unknown']
+2026-01-19 11:51:40,686 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:51:45,835 - src.services.compilation_service - INFO - Error categories for 1c492dcb2580c607: ['unknown']
+2026-01-19 11:51:50,365 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:51:55,438 - src.services.compilation_service - INFO - Error categories for 1c492dcb2580c607: ['unknown']
+2026-01-19 11:52:02,552 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:52:07,821 - src.services.compilation_service - INFO - Error categories for 1c492dcb2580c607: ['unknown']
+2026-01-19 11:52:15,328 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:52:25,124 - src.services.compilation_service - INFO - Error categories for 2bb0d9c9906f7840: ['unknown', 'member_not_found']
+2026-01-19 11:52:28,578 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:52:33,530 - src.services.compilation_service - INFO - Error categories for 2bb0d9c9906f7840: ['unknown']
+2026-01-19 11:52:38,763 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:52:47,411 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:53:45,587 - src.services.compilation_service - INFO - Error categories for 2ba507b0dac2fb8b: ['unknown']
+2026-01-19 11:53:48,512 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:53:52,931 - src.services.compilation_service - INFO - Error categories for 2ba507b0dac2fb8b: ['member_not_found']
+2026-01-19 11:53:55,866 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:54:00,903 - src.services.compilation_service - INFO - Error categories for 2ba507b0dac2fb8b: ['missing_type']
+2026-01-19 11:54:03,924 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:54:08,426 - src.services.compilation_service - INFO - Error categories for 2ba507b0dac2fb8b: ['missing_type']
+2026-01-19 11:54:09,938 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:54:14,809 - src.services.compilation_service - INFO - Error categories for 2ba507b0dac2fb8b: ['missing_type']
+2026-01-19 11:54:16,456 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:54:30,633 - src.services.compilation_service - INFO - Error categories for 683eb88cef51bf01: ['unknown']
+2026-01-19 11:54:34,360 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:54:38,721 - src.services.compilation_service - INFO - Error categories for 683eb88cef51bf01: ['member_not_found', 'unknown', 'missing_type']
+2026-01-19 11:54:41,505 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:54:46,254 - src.services.compilation_service - INFO - Error categories for 683eb88cef51bf01: ['missing_type', 'unknown']
+2026-01-19 11:54:49,711 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:54:54,421 - src.services.compilation_service - INFO - Error categories for 683eb88cef51bf01: ['missing_type', 'unknown']
+2026-01-19 11:54:58,714 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:55:03,445 - src.services.compilation_service - INFO - Error categories for 683eb88cef51bf01: ['missing_type', 'unknown']
+2026-01-19 11:55:08,426 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:55:18,016 - src.services.compilation_service - INFO - Error categories for ceeeebd77117d53f: ['unknown']
+2026-01-19 11:55:20,933 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:55:25,671 - src.services.compilation_service - INFO - Error categories for ceeeebd77117d53f: ['member_not_found']
+2026-01-19 11:55:27,450 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:55:31,951 - src.services.compilation_service - INFO - Error categories for ceeeebd77117d53f: ['missing_type']
+2026-01-19 11:55:34,441 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:55:39,428 - src.services.compilation_service - INFO - Error categories for ceeeebd77117d53f: ['missing_type']
+2026-01-19 11:55:41,710 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:55:46,747 - src.services.compilation_service - INFO - Error categories for ceeeebd77117d53f: ['unknown']
+2026-01-19 11:55:49,872 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:56:10,703 - src.services.compilation_service - INFO - Error categories for cfe8a5443f268b31: ['unknown']
+2026-01-19 11:56:14,821 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:56:19,440 - src.services.compilation_service - INFO - Error categories for cfe8a5443f268b31: ['member_not_found', 'undefined_variable']
+2026-01-19 11:56:25,657 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:56:30,534 - src.services.compilation_service - INFO - Error categories for cfe8a5443f268b31: ['member_not_found', 'undefined_variable']
+2026-01-19 11:56:37,567 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:56:42,412 - src.services.compilation_service - INFO - Error categories for cfe8a5443f268b31: ['member_not_found', 'undefined_variable']
+2026-01-19 11:56:46,690 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:56:51,836 - src.services.compilation_service - INFO - Error categories for cfe8a5443f268b31: ['member_not_found', 'undefined_variable']
+2026-01-19 11:56:57,029 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:57:23,389 - src.services.compilation_service - INFO - Error categories for a923cd6a30c472aa: ['unknown']
+2026-01-19 11:57:28,753 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:57:33,405 - src.services.compilation_service - INFO - Error categories for a923cd6a30c472aa: ['undefined_variable']
+2026-01-19 11:57:38,414 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:57:43,388 - src.services.compilation_service - INFO - Error categories for a923cd6a30c472aa: ['undefined_variable']
+2026-01-19 11:57:46,421 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:57:51,580 - src.services.compilation_service - INFO - Error categories for a923cd6a30c472aa: ['undefined_variable']
+2026-01-19 11:57:54,423 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:57:59,324 - src.services.compilation_service - INFO - Error categories for a923cd6a30c472aa: ['undefined_variable']
+2026-01-19 11:58:04,268 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 11:58:39,676 - src.pipeline.orchestrator - INFO - Phase C: Runtime verification for zip_local
+2026-01-19 12:00:11,048 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:00:26,327 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:00:40,770 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:00:55,543 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:01:08,146 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:01:23,785 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:01:32,698 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:01:40,243 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:01:48,086 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:01:56,334 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:03:07,981 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:03:16,455 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:03:16,456 - src.pipeline.orchestrator - WARNING - Intent drift detected (runtime) for 998cd7d59ba52f00: The original code specifies a source file 'archive.zip' to create an archive from, while the fixed code does not provide any source and initializes an empty Archive object. (confidence: 1.0)
+2026-01-19 12:03:16,465 - src.pipeline.orchestrator - INFO - Example 998cd7d59ba52f00 marked as runtime failed due to intent drift
+2026-01-19 12:03:26,051 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:03:35,562 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:03:43,943 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:03:56,706 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:04:01,004 - src.pipeline.orchestrator - WARNING - Fix attempt 4 for 15d7fcc5fad05a97 introduced build errors, keeping previous code for next attempt
+2026-01-19 12:04:01,004 - src.pipeline.orchestrator - INFO - Build failure detected for 15d7fcc5fad05a97, using compile fix
+2026-01-19 12:04:05,788 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:04:41,217 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:04:53,779 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:05:07,236 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:05:18,250 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:05:30,888 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:05:54,623 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:06:06,009 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:06:17,099 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:06:26,781 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:06:38,130 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:07:03,371 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:07:15,346 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:07:20,050 - src.pipeline.orchestrator - WARNING - Fix attempt 2 for 2bb0d9c9906f7840 introduced build errors, keeping previous code for next attempt
+2026-01-19 12:07:20,050 - src.pipeline.orchestrator - INFO - Build failure detected for 2bb0d9c9906f7840, using compile fix
+2026-01-19 12:07:25,734 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:07:39,220 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:07:43,987 - src.pipeline.orchestrator - WARNING - Fix attempt 4 for 2bb0d9c9906f7840 introduced build errors, keeping previous code for next attempt
+2026-01-19 12:07:43,987 - src.pipeline.orchestrator - INFO - Build failure detected for 2bb0d9c9906f7840, using compile fix
+2026-01-19 12:07:49,330 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:08:47,347 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:08:58,275 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:09:02,132 - src.pipeline.orchestrator - WARNING - Fix attempt 2 for 93b6b9105fc31737 introduced build errors, keeping previous code for next attempt
+2026-01-19 12:09:02,133 - src.pipeline.orchestrator - INFO - Build failure detected for 93b6b9105fc31737, using compile fix
+2026-01-19 12:09:04,623 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:09:14,342 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:09:24,305 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:09:44,561 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:09:52,437 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:10:00,182 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:10:08,093 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:10:16,524 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:10:31,270 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:10:39,794 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:10:49,444 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:10:58,645 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:11:06,741 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:11:21,205 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:11:31,163 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:11:38,980 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:11:47,472 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:11:57,091 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:12:17,726 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:12:26,760 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:12:35,644 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:12:45,479 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:12:54,183 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:13:10,012 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:13:19,075 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:13:27,255 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:13:31,818 - src.pipeline.orchestrator - WARNING - Fix attempt 3 for 0c9e0333bef49bc7 introduced build errors, keeping previous code for next attempt
+2026-01-19 12:13:31,819 - src.pipeline.orchestrator - INFO - Build failure detected for 0c9e0333bef49bc7, using compile fix
+2026-01-19 12:13:33,812 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:13:42,684 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:14:06,596 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:14:18,352 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:14:27,883 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:14:37,678 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:14:46,980 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:15:01,766 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:15:09,652 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:15:17,399 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:15:25,009 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:15:32,583 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:15:46,515 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:15:54,467 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:16:02,133 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:16:11,498 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:16:19,530 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:16:33,619 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:16:41,597 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:16:49,425 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:16:57,050 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:17:05,228 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:17:19,988 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:17:27,859 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:17:36,640 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:17:45,435 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:17:54,355 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:18:09,865 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:18:19,004 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:18:27,744 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:18:37,861 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:18:48,652 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:01,934 - src.pipeline.orchestrator - INFO - Phase D: Markdown update for zip_local
+2026-01-19 12:19:01,936 - src.pipeline.orchestrator - INFO - Markdown writes ENABLED via --allow-md-write flag
+2026-01-19 12:19:02,734 - src.pipeline.orchestrator - INFO - Phase E: Final LLM review for zip_local
+2026-01-19 12:19:02,742 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:04,117 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:04,118 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:04,644 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:04,668 - src.pipeline.orchestrator - INFO - Final review PASSED for test-content\zip\blog\compress-files-online\index.md on attempt 1
+2026-01-19 12:19:04,688 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:05,901 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:05,902 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:06,442 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:06,463 - src.pipeline.orchestrator - INFO - Final review PASSED for test-content\zip\blog\create-flat-zip-csharp\index.md on attempt 1
+2026-01-19 12:19:06,483 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:07,508 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:07,509 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:08,042 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:08,059 - src.pipeline.orchestrator - INFO - Final review PASSED for test-content\zip\blog\create-tar-archive-csharp\index.md on attempt 1
+2026-01-19 12:19:08,076 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:09,098 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:09,099 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:09,668 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:09,685 - src.pipeline.orchestrator - INFO - Final review PASSED for test-content\zip\blog\create-zip-file-online\index.md on attempt 1
+2026-01-19 12:19:09,703 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:11,233 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:11,234 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:11,839 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:11,861 - src.pipeline.orchestrator - INFO - Final review PASSED for test-content\zip\blog\csharp-7z-archives-aspose-zip\index.md on attempt 1
+2026-01-19 12:19:11,937 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:18,358 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:18,359 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:23,595 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:23,644 - src.pipeline.orchestrator - WARNING - Final review found 4 issues in test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md (attempt 1/2)
+2026-01-19 12:19:23,644 - src.pipeline.orchestrator - INFO - Retrying review for test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md (attempt 2)
+2026-01-19 12:19:23,644 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:29,670 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:29,671 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:36,891 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:36,936 - src.pipeline.orchestrator - WARNING - Final review found 4 issues in test-content\zip\blog\csharp-zip-file-in-memory-aspose-zip\index.md (attempt 2/2)
+2026-01-19 12:19:37,084 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:38,370 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:38,371 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:38,967 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:39,002 - src.pipeline.orchestrator - INFO - Final review PASSED for test-content\zip\blog\rar-password-recovery-online\index.md on attempt 1
+2026-01-19 12:19:39,044 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:40,157 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:40,158 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:40,763 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:40,812 - src.pipeline.orchestrator - INFO - Final review PASSED for test-content\zip\blog\unzip-7z-programmatically-csharp\index.md on attempt 1
+2026-01-19 12:19:40,856 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:41,978 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:41,979 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:42,573 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:42,609 - src.pipeline.orchestrator - INFO - Final review PASSED for test-content\zip\docs\developer-guide\rar-extractor\_index.md on attempt 1
+2026-01-19 12:19:42,662 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:45,075 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:45,076 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:47,303 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:47,348 - src.pipeline.orchestrator - WARNING - Final review found 2 issues in test-content\zip\docs\getting-started\metered-licensing\_index.md (attempt 1/2)
+2026-01-19 12:19:47,348 - src.pipeline.orchestrator - INFO - Retrying review for test-content\zip\docs\getting-started\metered-licensing\_index.md (attempt 2)
+2026-01-19 12:19:47,348 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:49,568 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:49,569 - src.services.llm_service - WARNING - Instructor not available, falling back to manual JSON parsing
+2026-01-19 12:19:52,105 - httpx - INFO - HTTP Request: POST http://localhost:11434/v1/chat/completions "HTTP/1.1 200 OK"
+2026-01-19 12:19:52,142 - src.pipeline.orchestrator - WARNING - Final review found 1 issues in test-content\zip\docs\getting-started\metered-licensing\_index.md (attempt 2/2)
+2026-01-19 12:19:52,217 - src.pipeline.orchestrator - INFO - Phase F: Finalization for zip_local
+2026-01-19 12:19:52,260 - src.core.telemetry - INFO - Exported run summary to local-telemetry\f465cb6aefb6578b\run_summary.json
+2026-01-19 12:19:52,269 - src.core.telemetry - INFO - Exported phase events to local-telemetry\f465cb6aefb6578b\phase_events.json
+2026-01-19 12:19:52,296 - src.core.telemetry - INFO - Exported artifact index to local-telemetry\f465cb6aefb6578b\artifact_index.json
+2026-01-19 12:19:52,296 - src.core.telemetry - INFO - Successfully exported telemetry for run f465cb6aefb6578b to local-telemetry\f465cb6aefb6578b
+2026-01-19 12:19:52,297 - src.pipeline.orchestrator - INFO - Exported 3 telemetry files
+2026-01-19 12:19:52,494 - httpx - INFO - HTTP Request: PATCH http://localhost:8765/api/v1/runs/36337732-ef3b-4463-9ae9-d5b9a87a28e3 "HTTP/1.1 200 OK"
+[OK] Success
+  family: zip_local
+  started_at: 2026-01-19T11:45:57.341400
+  phases:
+    discovery: {'files_found': 27, 'files_processed': 27, 'examples_found': 66, 'inline_examples': 41, 'gist_examples': 25, 'errors': 0}
+    compilation: {'total_processed': 66, 'compiled_first_try': 57, 'compiled_with_fix': 1, 'failed': 11, 'errors': 0, 'dotnet_version': '9.0.200', 'verified': 58}
+    runtime: {'total_processed': 58, 'passed_first_try': 39, 'passed_with_fix': 0, 'failed': 20, 'errors': 0, 'llm_fix_attempts': 91, 'verified': 39}
+    markdown_update: {'files_processed': 15, 'files_updated': 10, 'examples_updated': 14, 'errors': 0}
+    final_review: {'files_reviewed': 10, 'approved': 8, 'failed': 2, 'total_issues': 11, 'critical_issues': 0, 'review_attempts': 12}
+    finalization: {'committed': False, 'commit_hash': None, 'telemetry_exported': True, 'telemetry_files': ['local-telemetry\\f465cb6aefb6578b\\run_summary.json', 'local-telemetry\\f465cb6aefb6578b\\phase_events.json', 'local-telemetry\\f465cb6aefb6578b\\artifact_index.json']}
+  success: True
+  run_id: f465cb6aefb6578b
+  telemetry_event_id: 36337732-ef3b-4463-9ae9-d5b9a87a28e3
+  resource_decision:
+    gpu_detected: False
+    vram_total_mb: 0
+    vram_used_mb: 0
+    cpu_mode: True
+    chosen_strategy: cpu_fallback
+    limits_applied: {'cpu_max_percent': 90, 'ram_max_mb': 0, 'vram_max_mb': 0}
+  completed_at: 2026-01-19T12:19:52.495817
