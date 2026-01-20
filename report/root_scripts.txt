@@ -1,0 +1,15 @@
+code_pattern_detector.py
+config_utils.py
+database.py
+debug_filter.py
+gist_publisher.py
+gist_service.py
+namespace_validator.py
+ollama_integration.py
+patching_service.py
+persistent_fix_service.py
+setup.py
+telemetry.py
+test_drift_manual.py
+verify_drift_implementation.py
+workspace_manager.py

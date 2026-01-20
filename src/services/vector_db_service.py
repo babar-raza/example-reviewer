@@ -285,13 +285,13 @@ class VectorDBService:
                     best_by_id[example_id] = (example_id, code, similarity, metadata)
 
             # Sort deterministically (Track 1: C.7)
-            # Primary: similarity descending (rounded to 6 decimals for stability)
+            # Primary: similarity descending (rounded to 4 decimals for stability)
             # Secondary: example_key or example_id (stable tie-break)
             # Tertiary: file_path (stable tie-break for same example_key)
             def sort_key(result: Tuple[str, str, float, Dict[str, Any]]) -> Tuple[float, str, str]:
                 example_id, code, similarity, metadata = result
-                # Round distance (1-similarity) to 6 decimals for deterministic tie-breaking
-                rounded_distance = round(1.0 - similarity, 6)
+                # Round distance (1-similarity) to 4 decimals for deterministic tie-breaking
+                rounded_distance = round(1.0 - similarity, 4)
                 # Use example_key if available, else example_id
                 stable_id = metadata.get('example_key', example_id)
                 # Use file_path as tertiary tie-break

@@ -148,12 +148,16 @@ class RunFingerprint:
         # Get LLM capabilities (if LLM service initialized)
         llm_capabilities = {}
         if orchestrator._llm_service:
+            # Get detected capabilities from LLM service
+            caps = orchestrator._llm_service.get_provider_capabilities()
             llm_capabilities = {
                 'provider': global_config.llm.provider,
                 'model': global_config.llm.model,
                 'temperature': global_config.llm.temperature,
-                'seed_supported': True,  # Will be updated if capability detection runs
-                'timeout_supported': True,
+                'seed_supported': caps.seed_supported,
+                'timeout_supported': caps.timeout_supported,
+                'model_hash': caps.model_hash,
+                'detected_at': caps.detected_at,
             }
 
         # LLM seed and deterministic mode
@@ -173,25 +177,79 @@ class RunFingerprint:
 
     def to_dict(self) -> Dict[str, Any]:
         """
-        Convert fingerprint to dictionary.
+        Convert fingerprint to dictionary matching Plan v2.1 Section B format (lines 60-107).
 
         Returns:
-            Dictionary representation suitable for JSON serialization
+            Dictionary representation with all required nested sections
         """
+        # Extract values from llm_provider_capabilities
+        llm_caps = self.llm_provider_capabilities or {}
+
+        # Parse platform_info for OS details
+        platform_parts = self.platform_info.split() if self.platform_info else ['Unknown']
+        os_name = platform_parts[0]
+        os_version = ' '.join(platform_parts[1:]) if len(platform_parts) > 1 else 'Unknown'
+
         return {
             'run_id': self.run_id,
             'timestamp_utc': self.timestamp.isoformat() if self.timestamp else None,
             'config_hash': self.config_hash,
-            'selection_hash': self.selection_hash,
-            'vector_db_startup_decision': self.vector_db_startup_decision,
-            'drift_enabled': self.drift_enabled,
-            'llm_provider_capabilities': self.llm_provider_capabilities,
-            'llm_seed': self.llm_seed,
-            'deterministic_mode': self.deterministic_mode,
+
+            # LLM section (lines 65-78)
+            'llm': {
+                'provider': llm_caps.get('provider', 'unknown'),
+                'base_url': llm_caps.get('base_url'),
+                'model': llm_caps.get('model', 'unknown'),
+                'model_hash': llm_caps.get('model_hash'),
+                'temperature': llm_caps.get('temperature', 0.0),
+                'seed': self.llm_seed,
+                'timeout_seconds': llm_caps.get('timeout_seconds', 120),
+                'deterministic_mode': self.deterministic_mode,
+                'provider_capabilities': {
+                    'seed_supported': llm_caps.get('seed_supported', True),
+                    'timeout_supported': llm_caps.get('timeout_supported', True),
+                },
+            },
+
+            # Final review section (lines 79-84)
+            'final_review': {
+                'enabled': llm_caps.get('final_review_enabled', True),
+                'provider': llm_caps.get('final_review_provider', 'anthropic'),
+                'model': llm_caps.get('final_review_model', 'claude-3-5-sonnet-latest'),
+                'timeout_seconds': llm_caps.get('final_review_timeout', 30),
+            },
+
+            # Vector DB section (lines 85-92)
+            'vector_db': {
+                'enabled': self.drift_enabled,
+                'provider': llm_caps.get('vector_db_provider', 'chromadb'),
+                'embedding_model': llm_caps.get('embedding_model', 'all-MiniLM-L6-v2'),
+                'embedding_model_version': llm_caps.get('embedding_model_version'),
+                'device': llm_caps.get('embedding_device', 'cpu'),
+                'drift_tolerance': llm_caps.get('drift_tolerance', 0.02),
+            },
+
+            # Environment section (lines 93-99)
             'environment': {
+                'os': os_name,
+                'os_version': os_version,
                 'python_version': self.python_version,
-                'platform': self.platform_info,
-                'git_commit_hash': self.git_commit_hash,
+                'dotnet_version': llm_caps.get('dotnet_version'),
+                'git_commit': self.git_commit_hash,
+            },
+
+            # Content snapshot section (lines 100-106)
+            'content_snapshot': {
+                'family': llm_caps.get('family', 'unknown'),
+                'total_examples_selected': llm_caps.get('total_examples_selected', 0),
+                'content_hash': llm_caps.get('content_hash'),
+                'selection_hash': self.selection_hash or "",
+            },
+
+            # Additional runtime state (for backward compatibility and debugging)
+            '_runtime_state': {
+                'vector_db_startup_decision': self.vector_db_startup_decision,
+                'drift_enabled': self.drift_enabled,
             },
         }
 
@@ -238,28 +296,84 @@ class RunFingerprint:
         """
         Create fingerprint from dictionary.
 
+        Handles both Plan v2.1 nested format and legacy flat format.
+
         Args:
             data: Dictionary with fingerprint data
 
         Returns:
             RunFingerprint instance
         """
-        env = data.get('environment', {})
+        # Check if this is Plan v2.1 format (has nested sections)
+        if 'llm' in data and isinstance(data['llm'], dict):
+            # Plan v2.1 format
+            llm_section = data.get('llm', {})
+            env_section = data.get('environment', {})
+            content_section = data.get('content_snapshot', {})
+            final_review_section = data.get('final_review', {})
+            vector_db_section = data.get('vector_db', {})
+            runtime_state = data.get('_runtime_state', {})
 
-        return cls(
-            run_id=data.get('run_id', ''),
-            config_hash=data.get('config_hash', ''),
-            selection_hash=data.get('selection_hash'),
-            vector_db_startup_decision=data.get('vector_db_startup_decision'),
-            drift_enabled=data.get('drift_enabled', False),
-            llm_provider_capabilities=data.get('llm_provider_capabilities'),
-            llm_seed=data.get('llm_seed'),
-            deterministic_mode=data.get('deterministic_mode', False),
-            timestamp=datetime.fromisoformat(data['timestamp_utc']) if data.get('timestamp_utc') else None,
-            python_version=env.get('python_version'),
-            platform_info=env.get('platform'),
-            git_commit_hash=env.get('git_commit_hash'),
-        )
+            # Reconstruct llm_provider_capabilities from nested sections
+            llm_caps = {
+                'provider': llm_section.get('provider'),
+                'base_url': llm_section.get('base_url'),
+                'model': llm_section.get('model'),
+                'model_hash': llm_section.get('model_hash'),
+                'temperature': llm_section.get('temperature'),
+                'timeout_seconds': llm_section.get('timeout_seconds'),
+                'seed_supported': llm_section.get('provider_capabilities', {}).get('seed_supported'),
+                'timeout_supported': llm_section.get('provider_capabilities', {}).get('timeout_supported'),
+                'final_review_enabled': final_review_section.get('enabled'),
+                'final_review_provider': final_review_section.get('provider'),
+                'final_review_model': final_review_section.get('model'),
+                'final_review_timeout': final_review_section.get('timeout_seconds'),
+                'vector_db_provider': vector_db_section.get('provider'),
+                'embedding_model': vector_db_section.get('embedding_model'),
+                'embedding_model_version': vector_db_section.get('embedding_model_version'),
+                'embedding_device': vector_db_section.get('device'),
+                'drift_tolerance': vector_db_section.get('drift_tolerance'),
+                'dotnet_version': env_section.get('dotnet_version'),
+                'family': content_section.get('family'),
+                'total_examples_selected': content_section.get('total_examples_selected'),
+                'content_hash': content_section.get('content_hash'),
+            }
+
+            # Reconstruct platform_info from env_section
+            platform_info = f"{env_section.get('os', 'Unknown')} {env_section.get('os_version', '')}"
+
+            return cls(
+                run_id=data.get('run_id', ''),
+                config_hash=data.get('config_hash', ''),
+                selection_hash=content_section.get('selection_hash'),
+                vector_db_startup_decision=runtime_state.get('vector_db_startup_decision'),
+                drift_enabled=vector_db_section.get('enabled', False),
+                llm_provider_capabilities=llm_caps,
+                llm_seed=llm_section.get('seed'),
+                deterministic_mode=llm_section.get('deterministic_mode', False),
+                timestamp=datetime.fromisoformat(data['timestamp_utc']) if data.get('timestamp_utc') else None,
+                python_version=env_section.get('python_version'),
+                platform_info=platform_info.strip(),
+                git_commit_hash=env_section.get('git_commit'),
+            )
+        else:
+            # Legacy flat format
+            env = data.get('environment', {})
+
+            return cls(
+                run_id=data.get('run_id', ''),
+                config_hash=data.get('config_hash', ''),
+                selection_hash=data.get('selection_hash'),
+                vector_db_startup_decision=data.get('vector_db_startup_decision'),
+                drift_enabled=data.get('drift_enabled', False),
+                llm_provider_capabilities=data.get('llm_provider_capabilities'),
+                llm_seed=data.get('llm_seed'),
+                deterministic_mode=data.get('deterministic_mode', False),
+                timestamp=datetime.fromisoformat(data['timestamp_utc']) if data.get('timestamp_utc') else None,
+                python_version=env.get('python_version'),
+                platform_info=env.get('platform'),
+                git_commit_hash=env.get('git_commit_hash'),
+            )
 
     @classmethod
     def from_json(cls, json_str: str) -> 'RunFingerprint':

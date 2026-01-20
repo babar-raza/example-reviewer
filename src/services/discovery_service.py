@@ -508,7 +508,7 @@ class DiscoveryService:
             if family_config.content_pattern:
                 for site, pattern in family_config.content_pattern.items():
                     full_pattern = str(root_path / pattern)
-                    matched = glob(full_pattern, recursive=True)
+                    matched = sorted(glob(full_pattern, recursive=True), key=lambda p: str(p).lower())
                     files.extend(matched)
             else:
                 # Default: find all .md files (sorted deterministically)

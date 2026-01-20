@@ -20,6 +20,11 @@ reports/*
 !reports/STATUS.md
 !reports/TASK_BACKLOG.md
 !reports/agents/
+!reports/preflight_candidates.md
+!reports/preflight_tree.txt
+!reports/report_md_files.txt
+!reports/root_md_files.txt
+!reports/root_scripts.txt
 
 # Build artifacts
 test-examples/bin/
@@ -89,3 +94,4 @@ test-content/
 
 # NUL file (Windows artifact)
 NUL
+/report

@@ -4,6 +4,7 @@ Coordinates all pipeline phases as defined in the spec.
 """
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -105,6 +106,14 @@ class PipelineOrchestrator:
                 deterministic_mode=global_config.llm.deterministic_mode,
                 enforce_timeout=global_config.llm.enforce_timeout,
             )
+            # Detect provider capabilities on startup (Track 1: Agent F)
+            if self._llm_service.is_available():
+                capabilities = self._llm_service.get_provider_capabilities()
+                logger.info(
+                    f"LLM capabilities detected: seed_supported={capabilities.seed_supported}, "
+                    f"timeout_supported={capabilities.timeout_supported}, "
+                    f"model_hash={capabilities.model_hash}"
+                )
         return self._llm_service
 
     @property
@@ -1802,20 +1811,59 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             family: Family identifier
         """
         from ..core.fingerprint import RunFingerprint
+        import subprocess
 
         global_config = self.config_manager.load_global_config()
 
         # Compute config hash
         config_hash = self.config_manager.compute_config_hash(family)
 
-        # Build LLM capabilities
+        # Try to get dotnet version
+        dotnet_version = None
+        try:
+            result = subprocess.run(
+                ["dotnet", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                dotnet_version = result.stdout.strip()
+        except Exception:
+            pass
+
+        # Build comprehensive LLM capabilities dict for Plan v2.1 Section B
         llm_capabilities = {
+            # LLM section
             'provider': global_config.llm.provider,
+            'base_url': global_config.llm.base_url,
             'model': global_config.llm.model,
+            'model_hash': None,  # Not available from most providers
             'temperature': global_config.llm.temperature,
             'timeout_seconds': global_config.llm.timeout_seconds,
             'seed_supported': True,  # Assume supported unless provider rejects
             'timeout_supported': True,
+
+            # Final review section
+            'final_review_enabled': global_config.final_review.enabled,
+            'final_review_provider': global_config.final_review.provider,
+            'final_review_model': global_config.final_review.model,
+            'final_review_timeout': global_config.final_review.timeout_seconds,
+
+            # Vector DB section
+            'vector_db_provider': global_config.vector_db.provider,
+            'embedding_model': global_config.vector_db.embedding_model,
+            'embedding_model_version': None,  # Could be detected at runtime
+            'embedding_device': global_config.vector_db.embedding_device,
+            'drift_tolerance': global_config.vector_db.drift_tolerance,
+
+            # Environment section
+            'dotnet_version': dotnet_version,
+
+            # Content snapshot section (will be updated after discovery)
+            'family': family,
+            'total_examples_selected': 0,  # Will be updated after discovery
+            'content_hash': None,  # Optional: SHA256 of all markdown files
         }
 
         # Create fingerprint
@@ -1855,7 +1903,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         run_dir = Path(f"runs/{run_id}")
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Update fingerprint with selection_hash (after discovery)
+        # Update fingerprint with selection_hash and total_examples_selected (after discovery)
         try:
             fingerprint = self.db.get_run_fingerprint(run_id)
             if fingerprint:
@@ -1864,8 +1912,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 example_keys = [ex.example_key for ex in examples if ex.example_key]
                 selection_hash = self.db.compute_selection_hash(example_keys)
 
-                # Update fingerprint
+                # Update fingerprint selection_hash and total_examples_selected
                 fingerprint.selection_hash = selection_hash
+                if fingerprint.llm_provider_capabilities:
+                    fingerprint.llm_provider_capabilities['total_examples_selected'] = len(examples)
                 self.db.save_run_fingerprint(fingerprint)
 
                 # Export fingerprint.json
