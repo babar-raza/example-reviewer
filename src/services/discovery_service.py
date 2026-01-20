@@ -511,10 +511,11 @@ class DiscoveryService:
                     matched = glob(full_pattern, recursive=True)
                     files.extend(matched)
             else:
-                # Default: find all .md files
-                files.extend(str(p) for p in root_path.rglob("*.md"))
-        
-        return sorted(set(files))
+                # Default: find all .md files (sorted deterministically)
+                files.extend(str(p) for p in sorted(root_path.rglob("*.md"), key=lambda p: str(p).lower()))
+
+        # Sort final file list deterministically (case-normalized for Windows compatibility)
+        return sorted(set(files), key=lambda f: f.lower())
     
     def _process_file(self, file_path: str, family: str) -> List[ExampleRecord]:
         """
@@ -769,10 +770,12 @@ class DiscoveryService:
             return stats
         
         if recursive:
-            files = list(dir_path.rglob("*.md"))
+            # Sort glob results deterministically (case-normalized for Windows compatibility)
+            files = sorted(dir_path.rglob("*.md"), key=lambda p: str(p).lower())
         else:
-            files = list(dir_path.glob("*.md"))
-        
+            # Sort glob results deterministically (case-normalized for Windows compatibility)
+            files = sorted(dir_path.glob("*.md"), key=lambda p: str(p).lower())
+
         stats['files_found'] = len(files)
         
         for file_path in files:

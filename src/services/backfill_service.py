@@ -412,8 +412,8 @@ class BackfillService:
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
 
-            # Find all C# example files
-            cs_files = list(examples_path.rglob("*.cs"))
+            # Find all C# example files (sorted deterministically for stable ordering)
+            cs_files = sorted(examples_path.rglob("*.cs"), key=lambda p: str(p).lower())
 
             # Add to vector DB
             files_indexed = 0
@@ -713,7 +713,8 @@ class BackfillService:
         files_copied = 0
 
         try:
-            for item in source.rglob('*'):
+            # Sort rglob results deterministically (case-normalized for Windows compatibility)
+            for item in sorted(source.rglob('*'), key=lambda p: str(p).lower()):
                 if item.is_file():
                     # Calculate relative path
                     relative_path = item.relative_to(source)

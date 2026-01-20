@@ -592,12 +592,14 @@ class RuntimeService:
     ) -> List[str]:
         """Find expected output files in workspace."""
         output_files = []
-        
+
         for pattern in runtime_config.expected_outputs:
-            matches = list(work_dir.glob(pattern))
+            # Sort glob results deterministically (case-normalized for Windows compatibility)
+            matches = sorted(work_dir.glob(pattern), key=lambda p: str(p).lower())
             output_files.extend(str(m.relative_to(work_dir)) for m in matches)
-        
-        return output_files
+
+        # Sort final output list deterministically
+        return sorted(output_files, key=lambda f: f.lower())
     
     def _parse_exception(self, output: str) -> Tuple[Optional[str], Optional[str]]:
         """Parse exception information from output."""
