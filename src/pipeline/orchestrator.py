@@ -73,6 +73,7 @@ class PipelineOrchestrator:
         
         # Services (initialized lazily)
         self._llm_service: Optional[LLMService] = None
+        self._final_review_llm_service: Optional[LLMService] = None  # Separate LLM for final review
         self._discovery_service: Optional[DiscoveryService] = None
         self._compilation_service: Optional[CompilationService] = None
         self._runtime_service: Optional[RuntimeService] = None
@@ -80,6 +81,13 @@ class PipelineOrchestrator:
         self._vector_db_service: Optional[VectorDBService] = None
         self._resource_detection_service: Optional[ResourceDetectionService] = None
         self._telemetry_service: Optional[TelemetryService] = None
+
+        # VectorDB and DriftDetector startup decision (Track 1: C.2)
+        # Make a single decision at startup, never change mid-run
+        self._drift_detector: Optional['DriftDetector'] = None
+        self._drift_enabled: bool = False
+        self._vector_db_startup_decision: Dict[str, Any] = {}
+        self._initialize_vector_db_and_drift()
     
     @property
     def llm_service(self) -> LLMService:
@@ -92,9 +100,62 @@ class PipelineOrchestrator:
                 temperature=global_config.llm.temperature,
                 max_retries=global_config.llm.max_retries,
                 retry_backoff_seconds=global_config.llm.retry_backoff_seconds,
+                timeout_seconds=global_config.llm.timeout_seconds,
+                seed=global_config.llm.seed,
+                deterministic_mode=global_config.llm.deterministic_mode,
+                enforce_timeout=global_config.llm.enforce_timeout,
             )
         return self._llm_service
-    
+
+    @property
+    def final_review_llm_service(self) -> LLMService:
+        """
+        Get or initialize separate LLM service for final review.
+        Uses final_review.provider and final_review.model from config.
+        """
+        if self._final_review_llm_service is None:
+            global_config = self.config_manager.load_global_config()
+
+            # Determine API key based on provider (C.6: separate provider)
+            provider = global_config.final_review.provider
+            if provider == 'anthropic':
+                api_key = os.getenv('ANTHROPIC_API_KEY')
+            elif provider == 'openai':
+                api_key = os.getenv('OPENAI_API_KEY')
+            elif provider == 'ollama':
+                api_key = 'ollama'  # Placeholder for Ollama
+            else:
+                # Fallback to main LLM api_key_env_var
+                api_key = os.getenv(global_config.llm.api_key_env_var)
+
+            # Determine base_url
+            base_url = None
+            if provider == 'ollama':
+                base_url = global_config.llm.base_url or "http://localhost:11434/v1"
+            elif provider == 'anthropic':
+                base_url = None  # Use default Anthropic API
+            # For other providers, could check if a base_url is configured
+
+            self._final_review_llm_service = LLMService(
+                provider=provider,
+                model=global_config.final_review.model,
+                api_key=api_key,
+                base_url=base_url,
+                temperature=0.0,  # Final review should be deterministic
+                max_retries=1,  # Final review doesn't need retries
+                retry_backoff_seconds=5,
+                timeout_seconds=global_config.final_review.timeout_seconds,
+                seed=None,  # Final review doesn't use seed
+                deterministic_mode=False,
+                enforce_timeout=True,
+            )
+            logger.info(
+                f"Initialized final review LLM: provider={provider}, "
+                f"model={global_config.final_review.model}, "
+                f"timeout={global_config.final_review.timeout_seconds}s"
+            )
+        return self._final_review_llm_service
+
     @property
     def discovery_service(self) -> DiscoveryService:
         """Get or initialize discovery service."""
@@ -133,9 +194,11 @@ class PipelineOrchestrator:
     def markdown_service(self) -> MarkdownUpdateService:
         """Get or initialize markdown service."""
         if self._markdown_service is None:
+            global_config = self.config_manager.load_global_config()
             self._markdown_service = MarkdownUpdateService(
                 self.db,
                 artifacts_dir=self.artifacts_dir / "diffs",
+                allow_markdown_write=global_config.markdown_write.allow_markdown_write,
             )
         return self._markdown_service
 
@@ -160,6 +223,95 @@ class PipelineOrchestrator:
                 global_config.resource_detection
             )
         return self._resource_detection_service
+
+    def _initialize_vector_db_and_drift(self):
+        """
+        Make a single startup decision for VectorDB and DriftDetector.
+
+        Track 1 requirement (C.2): No lazy initialization.
+        Decision is made once at orchestrator startup and recorded in telemetry.
+        """
+        global_config = self.config_manager.load_global_config()
+
+        decision = {
+            'vector_db_enabled_config': global_config.vector_db.enabled,
+            'require_on_startup': global_config.vector_db.require_on_startup,
+            'drift_enabled_config': global_config.drift.enabled,
+            'vector_db_available': False,
+            'drift_detector_available': False,
+            'decision': 'not_attempted',
+            'reason': None,
+        }
+
+        if not global_config.vector_db.enabled:
+            decision['decision'] = 'disabled_by_config'
+            decision['reason'] = 'vector_db.enabled=false in config'
+            self._vector_db_startup_decision = decision
+            logger.info("VectorDB disabled by configuration")
+            return
+
+        # Try to initialize VectorDB service
+        try:
+            self._vector_db_service = VectorDBService(
+                persist_directory=global_config.vector_db.persist_directory,
+                embedding_model=global_config.vector_db.embedding_model,
+                enabled=True,
+            )
+
+            if self._vector_db_service.is_available():
+                decision['vector_db_available'] = True
+                decision['decision'] = 'available'
+                decision['reason'] = 'VectorDB initialized successfully'
+
+                # Initialize DriftDetector if drift is enabled
+                if global_config.drift.enabled:
+                    try:
+                        from ..services.drift_detector import DriftDetector
+                        if self._vector_db_service._embedding_model:
+                            self._drift_detector = DriftDetector(self._vector_db_service._embedding_model)
+                            self._drift_enabled = True
+                            decision['drift_detector_available'] = True
+                            logger.info("DriftDetector initialized successfully at startup")
+                        else:
+                            decision['reason'] += '; Drift disabled (no embedding model)'
+                            logger.warning("Drift disabled: embedding model not available")
+                    except Exception as e:
+                        decision['reason'] += f'; Drift init failed: {e}'
+                        logger.warning(f"Failed to initialize DriftDetector: {e}")
+                else:
+                    decision['reason'] += '; Drift disabled by config'
+                    logger.info("Drift detection disabled by configuration")
+
+                logger.info(f"VectorDB startup decision: {decision['decision']}")
+            else:
+                # VectorDB dependencies missing
+                if global_config.vector_db.require_on_startup:
+                    decision['decision'] = 'failed_required'
+                    decision['reason'] = 'VectorDB unavailable but required'
+                    self._vector_db_startup_decision = decision
+                    raise RuntimeError(
+                        "VectorDB is unavailable but require_on_startup=true. "
+                        "Install dependencies: pip install chromadb>=0.4.20 sentence-transformers>=2.2.0"
+                    )
+                else:
+                    decision['decision'] = 'unavailable_optional'
+                    decision['reason'] = 'VectorDB unavailable, proceeding without it'
+                    self._vector_db_startup_decision = decision
+                    logger.warning("VectorDB unavailable but not required, proceeding without vector DB and drift detection")
+
+        except Exception as e:
+            if global_config.vector_db.require_on_startup:
+                decision['decision'] = 'failed_required'
+                decision['reason'] = f'Init failed: {e}'
+                self._vector_db_startup_decision = decision
+                raise RuntimeError(f"VectorDB initialization failed and require_on_startup=true: {e}")
+            else:
+                decision['decision'] = 'failed_optional'
+                decision['reason'] = f'Init failed: {e}'
+                self._vector_db_startup_decision = decision
+                logger.warning(f"VectorDB initialization failed, proceeding without it: {e}")
+
+        self._vector_db_startup_decision = decision
 
     @property
     def telemetry_service(self) -> TelemetryService:
@@ -220,7 +372,8 @@ class PipelineOrchestrator:
         try:
             # Collect API reference content from cache files
             api_content = []
-            for file_path in cache_path.glob("**/*.md"):
+            # Sort glob results deterministically (case-normalized for Windows compatibility)
+            for file_path in sorted(cache_path.glob("**/*.md"), key=lambda p: str(p).lower()):
                 try:
                     content = file_path.read_text(encoding='utf-8')
                     api_content.append(f"# {file_path.stem}\n{content}")
@@ -229,8 +382,8 @@ class PipelineOrchestrator:
                     continue
 
             if not api_content:
-                # Also try .txt files
-                for file_path in cache_path.glob("**/*.txt"):
+                # Also try .txt files (sorted deterministically)
+                for file_path in sorted(cache_path.glob("**/*.txt"), key=lambda p: str(p).lower()):
                     try:
                         content = file_path.read_text(encoding='utf-8')
                         api_content.append(content)
@@ -256,17 +409,19 @@ class PipelineOrchestrator:
         skip_runtime: bool = False,
         skip_llm_fixes: bool = False,
         dry_run: bool = False,
+        allow_md_write: bool = False,
     ) -> Dict[str, Any]:
         """
         Run the full pipeline for a family.
-        
+
         Args:
             family: Family identifier
             max_examples: Maximum examples to process
             skip_runtime: Skip runtime verification phase
             skip_llm_fixes: Skip LLM-based fixing
             dry_run: Don't write changes to files
-            
+            allow_md_write: Override global config to allow markdown writes
+
         Returns:
             Pipeline results dictionary
         """
@@ -292,6 +447,13 @@ class PipelineOrchestrator:
         # Load global config for resource detection
         global_config = self.config_manager.load_global_config()
 
+        # Record VectorDB startup decision to run results (Track 1: C.2)
+        results['vector_db_startup_decision'] = self._vector_db_startup_decision
+        results['drift_enabled'] = self._drift_enabled
+
+        # Capture run fingerprint at start (Track 1: C.8)
+        self._capture_and_store_fingerprint(run_id, family)
+
         # Start telemetry run tracking (HTTP API + SQLite)
         telemetry_event_id = None
         if global_config.telemetry.internal_enabled:
@@ -306,6 +468,28 @@ class PipelineOrchestrator:
                 telemetry_event_id = telemetry_event.event_id
                 results['telemetry_event_id'] = telemetry_event_id
                 logger.debug(f"Started telemetry run: {telemetry_event_id}")
+
+                # Emit VectorDB startup decision event once (Track 1: C.2)
+                decision = self._vector_db_startup_decision.get('decision', 'unknown')
+                if decision in ['unavailable_optional', 'failed_optional', 'disabled_by_config']:
+                    # Emit telemetry event for vector DB unavailability
+                    try:
+                        from ..core.telemetry import emit_telemetry_event
+                        emit_telemetry_event(
+                            self.db,
+                            run_id,
+                            family,
+                            event_type='vector_db_unavailable' if 'unavailable' in decision else 'drift_disabled',
+                            phase='startup',
+                            metadata={
+                                'decision': decision,
+                                'reason': self._vector_db_startup_decision.get('reason'),
+                                'drift_enabled': self._drift_enabled,
+                            }
+                        )
+                        logger.debug(f"Emitted telemetry event for VectorDB decision: {decision}")
+                    except Exception as e:
+                        logger.warning(f"Failed to emit VectorDB telemetry event: {e}")
             except Exception as e:
                 # Don't fail pipeline if telemetry fails
                 logger.warning(f"Failed to start telemetry run: {e}")
@@ -355,7 +539,9 @@ class PipelineOrchestrator:
             # Phase D: Markdown Update
             logger.info(f"Phase D: Markdown update for {family}")
             with track_phase_timing(self.db, run_id, family, "markdown_update"):
-                update_stats = self._run_markdown_update_phase(family, dry_run)
+                update_stats = self._run_markdown_update_phase(
+                    family, dry_run, allow_md_write=allow_md_write
+                )
             results['phases']['markdown_update'] = update_stats
 
             # Phase E: Final Review (using LLM)
@@ -370,20 +556,24 @@ class PipelineOrchestrator:
             with track_phase_timing(self.db, run_id, family, "finalization"):
                 final_stats = self._run_finalization_phase(family, run_id, dry_run)
             results['phases']['finalization'] = final_stats
+
+            # Export run artifacts (fingerprint.json, results_summary.json)
+            logger.info(f"Exporting run artifacts for {run_id}")
+            self._export_run_artifacts(run_id, family)
             
-            # Complete run
+            # Complete run (stats computed from DB, not stale counters)
             self.db.complete_run(
                 run_id,
                 status='completed',
-                examples_processed=compile_stats.get('total_processed', 0),
-                examples_verified=compile_stats.get('verified', 0),
+                family=family,  # Let complete_run query DB for accurate stats
             )
 
             # Complete telemetry run (success)
             if telemetry_event_id and global_config.telemetry.internal_enabled:
                 try:
+                    # Get accurate stats from DB, not stale counters
+                    db_stats = self.db.get_run_stats_from_db(family, run_id)
                     discovery_stats = results['phases'].get('discovery', {})
-                    compile_stats_phase = results['phases'].get('compilation', {})
 
                     # Associate commit if one was made
                     commit_hash = final_stats.get('commit_hash')
@@ -398,9 +588,9 @@ class PipelineOrchestrator:
                         telemetry_event_id,
                         status='success',
                         items_discovered=discovery_stats.get('examples_found', 0),
-                        items_succeeded=compile_stats_phase.get('verified', 0),
-                        items_failed=compile_stats_phase.get('total_processed', 0) - compile_stats_phase.get('verified', 0),
-                        output_summary=f"Verified {compile_stats_phase.get('verified', 0)} examples for {family}",
+                        items_succeeded=db_stats['verified'],
+                        items_failed=db_stats['failed'],
+                        output_summary=f"Verified {db_stats['verified']} examples for {family}",
                     )
                     logger.debug(f"Completed telemetry run: {telemetry_event_id}")
                 except Exception as e:
@@ -411,7 +601,7 @@ class PipelineOrchestrator:
             results['success'] = False
             results['error'] = str(e)
 
-            self.db.complete_run(run_id, status='failed', error=str(e))
+            self.db.complete_run(run_id, status='failed', family=family, error=str(e))
 
             # Complete telemetry run (failure)
             if telemetry_event_id and global_config.telemetry.internal_enabled:
@@ -532,17 +722,6 @@ class PipelineOrchestrator:
                 fixed = False
                 current_code = example.original_code
 
-                # Initialize drift detector (lazy, once per orchestrator)
-                if not hasattr(self, '_drift_detector'):
-                    from ..services.drift_detector import DriftDetector
-                    # Reuse embedding model from VectorDBService to avoid instantiation cost
-                    if self.vector_db_service.is_available() and self.vector_db_service._embedding_model:
-                        self._drift_detector = DriftDetector(self.vector_db_service._embedding_model)
-                        logger.debug("DriftDetector initialized with reused embedding model")
-                    else:
-                        self._drift_detector = None
-                        logger.warning("DriftDetector not available (vector DB or embedding model unavailable)")
-
                 # Load API reference context for LLM (LCE-01)
                 api_context = self._load_api_context(family_config)
                 if api_context:
@@ -595,7 +774,8 @@ class PipelineOrchestrator:
                         continue
 
                     # Drift detection: Compare fixed code against ORIGINAL code
-                    if self._drift_detector and global_config.drift.enabled:
+                    # Use startup decision, not runtime check
+                    if self._drift_enabled and self._drift_detector:
                         drift_score, similarity = self._drift_detector.compute_drift(
                             original_code=example.original_code,
                             fixed_code=fixed_code
@@ -649,7 +829,8 @@ class PipelineOrchestrator:
                     
                     if success:
                         # Stage 5.5: Final Review (if enabled and code was LLM-fixed)
-                        if global_config.final_review.enabled and global_config.final_review.get('only_review_llm_fixed', True):
+                        only_review_llm_fixed = getattr(global_config.final_review, 'only_review_llm_fixed', True)
+                        if global_config.final_review.enabled and only_review_llm_fixed:
                             logger.debug(f"Running Stage 5.5 final review for {example.example_id}")
 
                             review = self.llm_service.final_review(
@@ -659,7 +840,7 @@ class PipelineOrchestrator:
 
                             if review['success'] and not review['intent_preserved']:
                                 # Intent drift detected - check confidence threshold
-                                confidence_threshold = global_config.final_review.get('confidence_threshold', 0.7)
+                                confidence_threshold = getattr(global_config.final_review, 'confidence_threshold', 0.7)
                                 if review['confidence'] >= confidence_threshold:
                                     logger.warning(
                                         f"Intent drift detected for {example.example_id}: {review['explanation']} "
@@ -699,7 +880,7 @@ class PipelineOrchestrator:
                         self.db.update_example_code(example.example_id, compilable_code=fixed_code)
 
                         # Store final drift score for successful fix
-                        if self._drift_detector and global_config.drift.enabled:
+                        if self._drift_enabled and self._drift_detector:
                             final_drift, final_sim = self._drift_detector.compute_drift(
                                 original_code=example.original_code,
                                 fixed_code=fixed_code
@@ -714,7 +895,7 @@ class PipelineOrchestrator:
                             try:
                                 # Use final drift score (ID-05: Pass drift to vector DB)
                                 drift_to_store = None
-                                if self._drift_detector and global_config.drift.enabled:
+                                if self._drift_enabled and self._drift_detector:
                                     drift_to_store = final_drift  # From lines 701-710
 
                                 self.vector_db_service.add_example(
@@ -771,6 +952,7 @@ class PipelineOrchestrator:
 
         # Pre-runtime backfill check (if enabled)
         global_config = self.config_manager.load_global_config()
+
         if global_config.backfill.auto_enabled:
             test_data_path = Path(family_config.test_data.local_path) if family_config.test_data.local_path else None
 
@@ -818,14 +1000,25 @@ class PipelineOrchestrator:
         if family_config.test_data.local_path:
             test_data_path = Path(family_config.test_data.local_path)
             if test_data_path.exists():
-                # Build test data info for LLM context
+                # Build comprehensive test data info for LLM context
                 test_files = []
                 for f in test_data_path.iterdir():
                     if f.is_file():
-                        test_files.append(f"- {f.name} ({f.stat().st_size} bytes)")
+                        test_files.append(f"- {f.name}")
                     elif f.is_dir():
                         test_files.append(f"- {f.name}/ (directory)")
+
                 test_data_info = "Available test files:\n" + "\n".join(test_files[:20])
+
+                # Add file aliases mapping if configured (CRITICAL for LLM placeholder replacement)
+                if family_config.runtime_validation.file_aliases:
+                    alias_lines = []
+                    for real_file, aliases in family_config.runtime_validation.file_aliases.items():
+                        alias_lines.append(f"  {real_file} → replaces: {', '.join(aliases)}")
+                    test_data_info += "\n\nFile Aliases (use the real file when you see these placeholder names):\n" + "\n".join(alias_lines)
+                    logger.info(f"Added {len(alias_lines)} file aliases to test_data_info for LLM context")
+                else:
+                    logger.warning("No file aliases configured - LLM will not know about placeholder mappings!")
 
         max_retries = global_config.llm.max_retries
         
@@ -979,7 +1172,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                         fixed_code = llm_response.content
 
                         # Drift detection: Compare fixed code against ORIGINAL code
-                        if self._drift_detector and global_config.drift.enabled:
+                        # Use startup decision, not runtime check
+                        if self._drift_enabled and self._drift_detector:
                             drift_score, similarity = self._drift_detector.compute_drift(
                                 original_code=example.original_code,
                                 fixed_code=fixed_code
@@ -1040,7 +1234,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                         if success:
                             # Stage 5.5: Final Review (if enabled and code was LLM-fixed)
-                            if global_config.final_review.enabled and global_config.final_review.get('only_review_llm_fixed', True):
+                            only_review_llm_fixed = getattr(global_config.final_review, 'only_review_llm_fixed', True)
+                            if global_config.final_review.enabled and only_review_llm_fixed:
                                 logger.debug(f"Running Stage 5.5 final review (runtime) for {example.example_id}")
 
                                 review = self.llm_service.final_review(
@@ -1050,7 +1245,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                                 if review['success'] and not review['intent_preserved']:
                                     # Intent drift detected - check confidence threshold
-                                    confidence_threshold = global_config.final_review.get('confidence_threshold', 0.7)
+                                    confidence_threshold = getattr(global_config.final_review, 'confidence_threshold', 0.7)
                                     if review['confidence'] >= confidence_threshold:
                                         logger.warning(
                                             f"Intent drift detected (runtime) for {example.example_id}: {review['explanation']} "
@@ -1177,8 +1372,29 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         self,
         family: str,
         dry_run: bool,
+        allow_md_write: bool = False,
     ) -> Dict[str, Any]:
-        """Run Phase D: Markdown Update."""
+        """
+        Run Phase D: Markdown Update.
+
+        Args:
+            family: Family identifier
+            dry_run: If True, don't write changes
+            allow_md_write: If True, override global config to allow markdown writes
+
+        Returns:
+            Statistics dictionary
+        """
+        # If allow_md_write is explicitly True, recreate service with override
+        if allow_md_write and not self.markdown_service.allow_markdown_write:
+            global_config = self.config_manager.load_global_config()
+            self._markdown_service = MarkdownUpdateService(
+                self.db,
+                artifacts_dir=self.artifacts_dir / "diffs",
+                allow_markdown_write=True,  # Override to True
+            )
+            logger.info("Markdown writes ENABLED via --allow-md-write flag")
+
         return self.markdown_service.update_all_files(family, dry_run)
 
     def _consensus_review(
@@ -1195,13 +1411,16 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         2. Approving only if both agree (strong consensus)
         3. Running a tiebreaker if reviews disagree
 
+        Uses the separate final_review_llm_service (C.6: independent provider/model/timeout).
+
         Returns:
             Dict with 'approved', 'issues', 'confidence', and 'raw_response'
         """
         reviews = []
 
         for pass_num in range(num_passes):
-            result = self.llm_service.review_markdown_structured(content, snippets)
+            # Use dedicated final_review LLM service (C.6)
+            result = self.final_review_llm_service.review_markdown_structured(content, snippets)
             reviews.append(result)
 
             # If first pass rejected, we still want second pass to confirm
@@ -1240,7 +1459,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         else:
             # Split decision - run tiebreaker
             logger.info("Consensus review: split decision, running tiebreaker")
-            tiebreaker = self.llm_service.review_markdown_structured(content, snippets)
+            # Use dedicated final_review LLM service (C.6)
+            tiebreaker = self.final_review_llm_service.review_markdown_structured(content, snippets)
             if tiebreaker.get('approved', False):
                 return {
                     'approved': True,
@@ -1564,6 +1784,108 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         
         return stats
     
+    def _capture_and_store_fingerprint(self, run_id: str, family: str) -> None:
+        """
+        Capture run fingerprint and store to DB.
+
+        Track 1 requirement (C.8): Capture fingerprint at run start with:
+        - config_hash
+        - vector_db_startup_decision
+        - drift_enabled
+        - llm_provider_capabilities
+        - environment info
+
+        Selection_hash will be updated after discovery phase.
+
+        Args:
+            run_id: Run identifier
+            family: Family identifier
+        """
+        from ..core.fingerprint import RunFingerprint
+
+        global_config = self.config_manager.load_global_config()
+
+        # Compute config hash
+        config_hash = self.config_manager.compute_config_hash(family)
+
+        # Build LLM capabilities
+        llm_capabilities = {
+            'provider': global_config.llm.provider,
+            'model': global_config.llm.model,
+            'temperature': global_config.llm.temperature,
+            'timeout_seconds': global_config.llm.timeout_seconds,
+            'seed_supported': True,  # Assume supported unless provider rejects
+            'timeout_supported': True,
+        }
+
+        # Create fingerprint
+        fingerprint = RunFingerprint(
+            run_id=run_id,
+            config_hash=config_hash,
+            selection_hash=None,  # Will be updated after discovery
+            vector_db_startup_decision=self._vector_db_startup_decision,
+            drift_enabled=self._drift_enabled,
+            llm_provider_capabilities=llm_capabilities,
+            llm_seed=global_config.llm.seed,
+            deterministic_mode=global_config.llm.deterministic_mode,
+        )
+
+        # Save to database
+        try:
+            self.db.save_run_fingerprint(fingerprint)
+            logger.info(f"Captured run fingerprint for {run_id}")
+        except Exception as e:
+            logger.warning(f"Failed to save run fingerprint: {e}")
+
+    def _export_run_artifacts(self, run_id: str, family: str) -> None:
+        """
+        Export run artifacts to files.
+
+        Track 1 requirement (C.8): Export fingerprint.json and results_summary.json
+        to runs/{run_id}/ directory for determinism verification.
+
+        Args:
+            run_id: Run identifier
+            family: Family identifier
+        """
+        from ..core.fingerprint import RunFingerprint
+        from ..core.results_summary import ResultsSummary
+
+        # Create output directory
+        run_dir = Path(f"runs/{run_id}")
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Update fingerprint with selection_hash (after discovery)
+        try:
+            fingerprint = self.db.get_run_fingerprint(run_id)
+            if fingerprint:
+                # Compute selection_hash from all examples in family
+                examples = self.db.get_examples_by_family(family)
+                example_keys = [ex.example_key for ex in examples if ex.example_key]
+                selection_hash = self.db.compute_selection_hash(example_keys)
+
+                # Update fingerprint
+                fingerprint.selection_hash = selection_hash
+                self.db.save_run_fingerprint(fingerprint)
+
+                # Export fingerprint.json
+                fingerprint_path = run_dir / "fingerprint.json"
+                fingerprint.save_to_file(fingerprint_path)
+                logger.info(f"Exported fingerprint to {fingerprint_path}")
+            else:
+                logger.warning(f"No fingerprint found for run {run_id}")
+        except Exception as e:
+            logger.error(f"Failed to export fingerprint: {e}")
+
+        # Export results_summary.json
+        try:
+            summary = ResultsSummary.from_run(self.db, run_id)
+            summary_path = run_dir / "results_summary.json"
+            summary.save_to_file(summary_path)
+            logger.info(f"Exported results summary to {summary_path}")
+        except Exception as e:
+            logger.error(f"Failed to export results summary: {e}")
+
     def get_status(self, family: Optional[str] = None) -> Dict[str, Any]:
         """Get pipeline status for a family or all families."""
         if family:
