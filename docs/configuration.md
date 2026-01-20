@@ -1,202 +1,96 @@
-# Configuration Guide
+# Configuration Overview
 
-**See also**:
-- [Security Guide](security.md) - GitHub token security and best practices
-- [Operations Guide](operations.md) - Cache and database management
+Configuration is split into:
 
----
+1. **Global Configuration**: `config/global.json`
+2. **Per-Family Configuration**: `config/families/<family>.json`
 
-## Environment Variables
+The schema is represented by Pydantic models in `src/core/config.py`.
 
-### GITHUB_TOKEN (Optional)
-**Purpose**: Increase GitHub API rate limits for gist fetching.
+## Global Configuration (`config/global.json`)
 
-**Default Rate Limits:**
-- **Without token**: 60 requests/hour (per IP)
-- **With token**: 5,000 requests/hour
+### LLM
 
-**How to Set:**
-```bash
-# Linux/Mac
-export GITHUB_TOKEN="ghp_your_personal_access_token_here"
+Key fields (`llm`):
 
-# Windows (Command Prompt)
-set GITHUB_TOKEN=ghp_your_personal_access_token_here
+- `provider`: `openai`, `azure`, `ollama`, `openrouter` (the code currently treats these as OpenAI-compatible endpoints)
+- `model`: Model name for the selected provider
+- `temperature`: Randomness in generations (lower is more deterministic)
+- `max_retries` and `retry_backoff_seconds`: Retry controls
+- `base_url`: Required for Ollama or proxyed endpoints (example: `http://localhost:11434/v1`)
+- `timeout_seconds`
 
-# Windows (PowerShell)
-$env:GITHUB_TOKEN="ghp_your_personal_access_token_here"
-```
+**Notes**:
+- `src/services/llm_service.py` uses the OpenAI Python client. For Ollama, it sets `base_url` and uses a placeholder `api_key`.
 
-**Creating a Token:**
-1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Generate new token
-3. **Scopes required**: None for public gists (see [Security Guide](security.md#token-scopes) for details)
-4. Copy token and set environment variable
+### Markdown Write Guard
 
-**Security Note:**
-- Never commit tokens to git
-- Use environment variables or secure key vaults
-- Rotate tokens periodically
-- **See [Security Guide](security.md)** for comprehensive token management and security best practices
+Key fields (`markdown_write`):
 
-### CACHE_DIR (Optional)
-**Purpose**: Override default gist cache location.
+- `allow_markdown_write`: Default `false`
 
-**Default**: `<repo_root>/cache/gists/`
+This is the primary safety lock. If it is `false`, `MarkdownUpdateService` will refuse to write markdown even if the rest of the pipeline succeeds.
 
-**How to Set:**
-```bash
-export CACHE_DIR="/path/to/custom/cache"
-```
+You can also override via CLI `--allow-md-write` when using the `md-update` or `run` subcommands.
 
-## Directory Structure
+### Vector DB
 
-### Cache Directory
-**Path**: `cache/gists/` (relative to repo root)
+Key fields (`vector_db`):
 
-**Contents:**
-```
-cache/gists/
-  ├── <gistid>.json          # API response (with ETag)
-  └── <gistid>/
-      ├── file1.cs.raw       # Cached file content
-      └── file2.cs.raw
-```
+- `enabled`
+- `embedding_model`
+- `persist_directory`
+- `search_k`
+- `min_similarity_threshold`
 
-**Cache Behavior:**
-- Automatically created on first gist fetch
-- ETags used for conditional requests
-- Cache checked before API calls
-- Stale cache (> 1 hour) triggers revalidation
+The vector DB implementation is in `src/services/vector_db_service.py` and uses ChromaDB + sentence-transformers if available.
 
-**Cache Cleanup:**
-Safe to delete `cache/gists/` directory:
-- Gists will be re-fetched from API
-- Database still retains gist metadata
-- Content re-cached on next fetch
+### Drift Control
 
-**See [Operations Guide](operations.md#cache-management)** for detailed cache management procedures.
+Key fields (`drift`):
 
-### Database
-**Path**: `data/examples.db`
+- `enabled`
+- `threshold`: Default `0.3`
+- `fail_on_exceed`: If `true`, LLM fixes that drift too far should be rejected
+- `log_all_drift_scores`
 
-**Mode**: WAL (Write-Ahead Logging)
+Drift computation is implemented by `src/services/drift_detector.py` (cosine similarity via sentence-transformer embeddings).
 
-**Gist Tables:**
-- `gists`: Metadata (id, owner, ETag, fetch status)
-- `gist_files`: File content (code, hash, language)
+### Telemetry
 
-**Migration:**
-Schema version 2 adds gist tables.
-- Old databases: tables created automatically on `init-db`
-- New databases: full schema including gists
+Key fields (`telemetry`):
 
-**See [Operations Guide](operations.md#database-management)** for database maintenance and monitoring.
+- `internal_enabled`
+- `local_telemetry_enabled` + `local_telemetry_path`
+- `http_api_enabled` + `http_api_url`
 
-## CLI Configuration
+Telemetry is coordinated by `src/services/telemetry_service.py` and DB tables in `src/core/database.py`.
 
-### Default Behavior
-- **Gist mode**: `inline-on-change` (replace only changed gists)
-- **Dry run**: `false` (actually patch files)
-- **Max pages**: unlimited
-- **Max snippets**: unlimited
+### Backfill
 
-### Override via CLI Flags
-```bash
-# Dry run (preview changes without writing)
-python src/cli.py patch --family zip --dry-run
+Key fields (`backfill`):
 
-# Gist mode options
-python src/cli.py patch --family zip --gist-mode preserve         # Never replace
-python src/cli.py patch --family zip --gist-mode inline-on-change # Default
-python src/cli.py patch --family zip --gist-mode inline-always    # Always replace
+- `auto_enabled`: If `true`, pipeline can auto-download missing data
+- `targets`: List (`test_data`, `api_reference`, `examples`, `gist_source_code`)
+- `github_timeout_seconds`
 
-# Limit scope
-python src/cli.py discover --family zip --max-pages 10
-python src/cli.py validate --family zip --max-snippets 50
-```
+Backfill logic is in `src/services/backfill_service.py`.
 
-## Family Configuration
+### Resource Detection and Limits
 
-**Path**: `config/families/<family>.json`
+- `limits`: Provides CPU/RAM/VRAM constraints
+- `resource_detection`: Controls auto GPU detection and logging
 
-Each product family has a JSON configuration file:
-```json
-{
-  "name": "zip",
-  "package_id": "Aspose.Zip",
-  "version": "24.x",
-  "target_framework": "net6.0",
-  "skip_patterns": [],
-  "ollama_enabled": true
-}
-```
+Implementation: `src/services/resource_detection_service.py`.
 
-Family configs are independent of gist support (gist handling is automatic).
+## Family Configuration (`config/families/<family>.json`)
 
-## Rate Limit Monitoring
+Each family config declares:
 
-Gist service logs rate limit warnings:
-```
-[!] GitHub API rate limit exceeded. Set GITHUB_TOKEN env var for higher limits.
-```
+- Where to scan content
+- How to compile and run examples (NuGet, target frameworks)
+- Namespace policies and code defaults
+- Runtime validation rules (required files, aliases)
+- Optional external sources (example repo, API reference sources)
 
-Check current rate limit status:
-```bash
-# With token set
-curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/rate_limit
-
-# Without token
-curl https://api.github.com/rate_limit
-```
-
-## Database Queries
-
-### Check Gist Fetch Status
-```sql
-SELECT gist_id, owner, last_status, last_error, last_fetched_at
-FROM gists
-WHERE last_status != 'success';
-```
-
-### Find Skipped Gists
-```sql
-SELECT s.snippet_id, s.snippet_type, p.relative_path, s.status
-FROM snippets s
-JOIN pages p ON s.page_id = p.page_id
-WHERE s.snippet_type = 'gist' AND s.status = 'skipped';
-```
-
-### Gist File Count
-```sql
-SELECT gist_id, COUNT(*) as file_count
-FROM gist_files
-GROUP BY gist_id;
-```
-
-## Troubleshooting
-
-### Gists Not Being Fetched
-1. Check GITHUB_TOKEN is set correctly
-2. Verify network connectivity to api.github.com
-3. Check rate limit status (see above)
-4. Inspect `gists` table for error messages
-
-### Cache Issues
-1. Delete cache directory: `rm -rf cache/gists`
-2. Re-run discovery: `python src/cli.py discover --family <family>`
-3. Check disk space (cache grows with number of gists)
-
-### Database Errors
-1. Ensure schema version 2 is applied: `SELECT * FROM schema_version;`
-2. Re-run init-db: `python src/cli.py init-db`
-3. Check database file permissions
-
-## Best Practices
-
-1. **Set GITHUB_TOKEN** if processing > 60 gists/hour
-2. **Use --dry-run** first to preview patches
-3. **Commit before patching** to enable easy rollback
-4. **Monitor rate limits** during large discovery runs
-5. **Cache directory** can be shared across runs (saves API calls)
-6. **Database backup** before major operations
+See `KB/04-family-config-reference.md` for a full field-level reference.

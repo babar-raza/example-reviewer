@@ -7,7 +7,10 @@
     "retry_backoff_seconds": 5,
     "api_key_env_var": "OPENAI_API_KEY",
     "base_url": "http://localhost:11434/v1",
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "seed": null,
+    "deterministic_mode": false,
+    "enforce_timeout": true
   },
   "limits": {
     "cpu_max_percent": 90,
@@ -25,6 +28,10 @@
     "commit_message_template": "chore({family}): verify {count} examples",
     "commit_description_template": "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}",
     "only_commit_touched_files": true
+  },
+  "markdown_write": {
+    "allow_markdown_write": false,
+    "_comment": "SAFETY: Set to true to allow markdown file updates. Default is false to prevent accidental manual edits. Use --allow-md-write CLI flag or set this to true explicitly."
   },
   "gist": {
     "enabled": true,
@@ -52,7 +59,11 @@
     "embedding_model": "all-MiniLM-L6-v2",
     "persist_directory": "./data/chroma",
     "search_k": 3,
-    "min_similarity_threshold": 0.7
+    "min_similarity_threshold": 0.7,
+    "require_on_startup": false,
+    "deterministic_search": true,
+    "embedding_device": "cpu",
+    "drift_tolerance": 0.02
   },
   "backfill": {
     "auto_enabled": false,
@@ -130,8 +141,10 @@
   "final_review": {
     "enabled": true,
     "confidence_threshold": 0.7,
-    "model": "sonnet-4.5",
+    "provider": "anthropic",
+    "model": "claude-3-5-sonnet-latest",
     "timeout_seconds": 30,
+    "enforce_model": true,
     "auto_remediation_enabled": false,
     "max_review_attempts": 2,
     "strict_mode": false,
@@ -143,6 +156,14 @@
     "threshold": 0.3,
     "fail_on_exceed": true,
     "log_all_drift_scores": true
+  },
+  "timeouts": {
+    "llm_call_seconds": 120,
+    "code_execution_seconds": 30,
+    "per_example_seconds": 300,
+    "per_phase_seconds": 1800,
+    "hard_run_timeout_seconds": 2400,
+    "allow_timeout_override": false
   },
   "artifact_store_path": "./artifacts",
   "database_path": "./data/example_reviewer.db",
