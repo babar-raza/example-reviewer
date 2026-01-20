@@ -46,3 +46,46 @@ secrets/
 *.swp
 *.swo
 /Python313Libsite-packages
+# Local telemetry directory
+/local-telemetry
+
+# Runtime workspace directories
+/workspace/runtime/
+/runs/
+
+# Test determinism artifacts
+test_determinism/
+
+# Pipeline logs
+pipeline_full.log
+
+# Test reports and outputs
+test_*.txt
+test_results*.txt
+validation_output.log
+validation_run_*.log
+
+# Generated reports and plans
+reports/
+plans/
+
+# Knowledge base (generated documentation)
+KB/
+
+# Test data and content (should not be committed)
+test-data/
+test-content/
+
+# Build and cache directories
+.cache/
+.benchmarks/
+
+# IDE and editor files
+*.swp
+*.swo
+
+# Python environment
+/Python313Libsite-packages
+
+# NUL file (Windows artifact)
+NUL
