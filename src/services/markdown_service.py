@@ -24,12 +24,36 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class MarkdownWriteGuardError(Exception):
+    """Raised when attempting to write markdown files without proper authorization."""
+    pass
+
+
+class ReadOnlyPathError(Exception):
+    """Raised when attempting to write to read-only test paths."""
+    pass
+
+
 class MarkdownUpdateService:
     """
     Service for updating markdown files with verified code.
     Implements the D_markdown_update phase from the spec.
+
+    SAFETY: This service enforces strict write guards:
+    1. Markdown writes require explicit allow_markdown_write=True
+    2. Test data paths (test-data/, test-examples/, test-reference/) are strictly read-only
+    3. test-content/ CAN be updated by pipeline when allow_markdown_write=True
     """
-    
+
+    # Read-only path prefixes (normalized to forward slashes)
+    # NOTE: test-content/ is NOT read-only - it can be updated by pipeline with --allow-md-write
+    # Only test data/examples/reference are strictly read-only (never write)
+    READ_ONLY_PREFIXES = (
+        'test-data/',
+        'test-examples/',
+        'test-reference/',
+    )
+
     def __init__(
         self,
         db: Database,
@@ -37,6 +61,7 @@ class MarkdownUpdateService:
         gist_publisher: Optional[Any] = None,
         gist_upload_mode: str = "inline-only",
         gist_target_account: str = "",
+        allow_markdown_write: bool = False,
     ):
         """
         Initialize markdown update service.
@@ -47,6 +72,7 @@ class MarkdownUpdateService:
             gist_publisher: Optional GistPublisher instance for upload modes
             gist_upload_mode: One of "inline-only", "upload-on-change", "upload-always"
             gist_target_account: GitHub account for new gist shortcodes
+            allow_markdown_write: If True, allow markdown file writes (default: False for safety)
         """
         self.db = db
         self.artifacts_dir = artifacts_dir or Path("artifacts/diffs")
@@ -54,7 +80,54 @@ class MarkdownUpdateService:
         self.gist_publisher = gist_publisher
         self.gist_upload_mode = gist_upload_mode
         self.gist_target_account = gist_target_account
-    
+        self.allow_markdown_write = allow_markdown_write
+
+    def _is_read_only_path(self, file_path: str) -> bool:
+        """
+        Check if a file path is in a read-only test directory.
+
+        Args:
+            file_path: Path to check (absolute or relative)
+
+        Returns:
+            True if path is in a read-only directory
+        """
+        # Normalize to forward slashes for consistent checking
+        normalized = Path(file_path).as_posix()
+
+        # Check both absolute and relative forms
+        for prefix in self.READ_ONLY_PREFIXES:
+            if normalized.startswith(prefix) or f"/{prefix}" in normalized:
+                return True
+
+        return False
+
+    def _validate_write_allowed(self, file_path: str) -> None:
+        """
+        Validate that writing to this file is allowed.
+
+        Raises:
+            ReadOnlyPathError: If attempting to write to test-* paths
+            MarkdownWriteGuardError: If markdown writes are not authorized
+        """
+        # Check read-only paths first (highest priority)
+        if self._is_read_only_path(file_path):
+            raise ReadOnlyPathError(
+                f"WRITE BLOCKED: Cannot write to read-only test path: {file_path}\n"
+                f"Read-only prefixes: {', '.join(self.READ_ONLY_PREFIXES)}\n"
+                f"Test paths are strictly read-only to prevent cheating by manual edits."
+            )
+
+        # Check markdown write guard
+        if not self.allow_markdown_write:
+            raise MarkdownWriteGuardError(
+                f"WRITE BLOCKED: Markdown writes are not authorized.\n"
+                f"File: {file_path}\n"
+                f"To allow markdown writes, set allow_markdown_write=True in global config\n"
+                f"or use --allow-md-write CLI flag.\n"
+                f"Default is dry-run to prevent accidental manual edits."
+            )
+
     def update_markdown_file(
         self,
         file_path: str,
@@ -113,9 +186,12 @@ class MarkdownUpdateService:
         # Generate and store diff
         diff = self._generate_diff(original_content, updated_content, file_path)
         diff_ref = self._store_diff(file_path, diff)
-        
+
         # Write updated file if not dry run
         if not dry_run:
+            # SAFETY: Validate write is allowed before modifying file
+            self._validate_write_allowed(file_path)
+
             try:
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(updated_content)
