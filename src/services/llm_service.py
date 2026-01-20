@@ -7,8 +7,10 @@ import os
 import time
 import json
 import logging
+import asyncio
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 try:
     from openai import OpenAI
@@ -37,6 +39,16 @@ class LLMResponse:
     latency_ms: int
     success: bool = True
     error: Optional[str] = None
+    raw_prompt: Optional[str] = None  # For telemetry
+
+
+@dataclass
+class ProviderCapabilities:
+    """Provider capability detection results."""
+    seed_supported: bool = False
+    timeout_supported: bool = True  # Most providers honor timeout
+    model_hash: Optional[str] = None
+    detected_at: Optional[str] = None
 
 
 class LLMService:
@@ -127,10 +139,14 @@ using (var archive = new Archive(settings))
         temperature: float = 0.2,
         max_retries: int = 3,
         retry_backoff_seconds: int = 5,
+        timeout_seconds: int = 120,
+        seed: Optional[int] = None,
+        deterministic_mode: bool = False,
+        enforce_timeout: bool = True,
     ):
         """
         Initialize LLM service.
-        
+
         Args:
             provider: Provider name ('openai', 'anthropic', 'ollama', etc.)
             model: Model name
@@ -139,30 +155,45 @@ using (var archive = new Archive(settings))
             temperature: Generation temperature
             max_retries: Maximum retry attempts
             retry_backoff_seconds: Backoff between retries
+            timeout_seconds: Request timeout in seconds
+            seed: Random seed for deterministic mode
+            deterministic_mode: Enable deterministic mode (use seed)
+            enforce_timeout: Enforce application-level timeout
         """
         self.provider = provider
         self.model = model
         self.temperature = temperature
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
-        
+        self.timeout_seconds = timeout_seconds
+        self.seed = seed
+        self.deterministic_mode = deterministic_mode
+        self.enforce_timeout = enforce_timeout
+
         # Resolve API key from environment if not provided
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.base_url = base_url
-        
+
         # Initialize client
         self._client = None
+        self._capabilities: Optional[ProviderCapabilities] = None
+        self._capabilities_detected = False
+        self._executor = ThreadPoolExecutor(max_workers=1)  # For timeout enforcement
         self._init_client()
     
     def _init_client(self):
-        """Initialize the API client."""
+        """Initialize the API client with client-level timeout."""
         if not OPENAI_AVAILABLE:
             logger.warning("OpenAI library not available. LLM features disabled.")
             return
-        
-        if self.provider in ("openai", "azure", "ollama", "openrouter"):
+
+        if self.provider in ("openai", "azure", "ollama", "openrouter", "anthropic"):
             client_kwargs = {}
-            
+
+            # Add client-level timeout (C.5: client timeout)
+            if self.enforce_timeout:
+                client_kwargs["timeout"] = self.timeout_seconds
+
             if self.provider == "ollama":
                 # Ollama doesn't require a real API key
                 client_kwargs["base_url"] = self.base_url or "http://localhost:11434/v1"
@@ -175,9 +206,10 @@ using (var archive = new Archive(settings))
                 client_kwargs["api_key"] = self.api_key
                 if self.base_url:
                     client_kwargs["base_url"] = self.base_url
-            
+
             try:
                 self._client = OpenAI(**client_kwargs)
+                logger.debug(f"Initialized LLM client for {self.provider} with timeout={self.timeout_seconds}s")
             except Exception as e:
                 logger.warning(f"Failed to initialize OpenAI client: {e}. LLM features disabled.")
                 self._client = None
@@ -190,7 +222,116 @@ using (var archive = new Archive(settings))
         if self.provider != "ollama" and not self.api_key:
             return False
         return True
+
+    def get_provider_capabilities(self) -> ProviderCapabilities:
+        """
+        Get provider capabilities (seed support, timeout support).
+        Performs capability detection on first call.
+
+        Returns:
+            ProviderCapabilities with detected features
+        """
+        if self._capabilities_detected:
+            return self._capabilities
+
+        # Perform capability detection
+        self._capabilities = self._detect_capabilities()
+        self._capabilities_detected = True
+
+        return self._capabilities
+
+    def _detect_capabilities(self) -> ProviderCapabilities:
+        """
+        Detect provider capabilities (seed, timeout, model hash).
+
+        Returns:
+            ProviderCapabilities with detection results
+        """
+        capabilities = ProviderCapabilities()
+        capabilities.detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        if not self._client:
+            logger.warning("Cannot detect capabilities: client not initialized")
+            return capabilities
+
+        # Test seed support with a minimal request
+        # We assume seed is supported by default and check if it's accepted
+        try:
+            test_messages = [{"role": "user", "content": "Say 'test' only."}]
+            test_kwargs = {
+                "model": self.model,
+                "messages": test_messages,
+                "max_tokens": 10,
+                "temperature": 0.0,
+            }
+
+            # Try with seed
+            if self.seed is not None:
+                test_kwargs["seed"] = self.seed
+
+            # Use a short timeout for capability detection
+            if self.enforce_timeout:
+                test_kwargs["timeout"] = min(10, self.timeout_seconds)
+
+            response = self._client.chat.completions.create(**test_kwargs)
+
+            # If we get here without exception, seed is likely supported
+            capabilities.seed_supported = True
+            capabilities.timeout_supported = True
+
+            # Try to extract model hash if available (provider-specific)
+            if hasattr(response, 'system_fingerprint'):
+                capabilities.model_hash = response.system_fingerprint
+
+            logger.info(
+                f"Capability detection complete: seed_supported={capabilities.seed_supported}, "
+                f"timeout_supported={capabilities.timeout_supported}"
+            )
+
+        except Exception as e:
+            # If seed caused an error, mark as unsupported
+            error_str = str(e).lower()
+            if 'seed' in error_str or 'not supported' in error_str:
+                capabilities.seed_supported = False
+                logger.warning(f"Provider {self.provider} does not support seed parameter: {e}")
+            else:
+                # Assume seed is supported, other error
+                capabilities.seed_supported = True
+                logger.debug(f"Capability detection encountered error (assuming seed supported): {e}")
+
+        return capabilities
     
+    def _call_with_timeout(self, func, timeout_seconds: int, label: str) -> Any:
+        """
+        Execute a blocking function with application-level timeout.
+
+        Args:
+            func: Callable to execute
+            timeout_seconds: Timeout in seconds
+            label: Label for error messages
+
+        Returns:
+            Function result
+
+        Raises:
+            TimeoutError: If timeout is exceeded
+        """
+        future = self._executor.submit(func)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FutureTimeout:
+            # Log timeout error
+            logger.error(
+                f"LLM timeout exceeded after {timeout_seconds}s: {label} "
+                f"(provider={self.provider}, model={self.model})"
+            )
+            # Note: Telemetry event 'timeout_exceeded' should be emitted by caller
+            # who has access to db and run_id context
+            raise TimeoutError(
+                f"LLM request timeout after {timeout_seconds}s: {label} "
+                f"(provider={self.provider}, model={self.model})"
+            )
+
     def complete(
         self,
         prompt: str,
@@ -198,17 +339,19 @@ using (var archive = new Archive(settings))
         max_tokens: int = 4096,
         temperature: Optional[float] = None,
         stop: Optional[List[str]] = None,
+        timeout_override: Optional[int] = None,
     ) -> LLMResponse:
         """
         Generate a completion from the LLM.
-        
+
         Args:
             prompt: User prompt
             system_prompt: Optional system prompt
             max_tokens: Maximum tokens in response
             temperature: Override default temperature
             stop: Stop sequences
-            
+            timeout_override: Override configured timeout
+
         Returns:
             LLMResponse with content and metadata
         """
@@ -222,28 +365,61 @@ using (var archive = new Archive(settings))
                 success=False,
                 error="LLM client not initialized"
             )
-        
+
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
-        
+
         temp = temperature if temperature is not None else self.temperature
-        
+        timeout = timeout_override if timeout_override is not None else self.timeout_seconds
+
+        # Get capabilities on first call (lazy detection)
+        if not self._capabilities_detected:
+            capabilities = self.get_provider_capabilities()
+        else:
+            capabilities = self._capabilities
+
         last_error = None
         for attempt in range(self.max_retries):
             start_time = time.time()
             try:
-                response = self._client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temp,
-                    stop=stop,
-                )
-                
+                # Build request kwargs
+                request_kwargs = {
+                    "model": self.model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temp,
+                }
+
+                if stop:
+                    request_kwargs["stop"] = stop
+
+                # Add seed if deterministic mode is enabled and seed is configured
+                if self.deterministic_mode and self.seed is not None:
+                    if capabilities and capabilities.seed_supported:
+                        request_kwargs["seed"] = self.seed
+                    else:
+                        logger.warning(
+                            f"Deterministic mode enabled but provider {self.provider} "
+                            f"does not support seed parameter"
+                        )
+
+                # Application-level timeout enforcement (C.5: wall timeout)
+                def make_request():
+                    return self._client.chat.completions.create(**request_kwargs)
+
+                if self.enforce_timeout:
+                    response = self._call_with_timeout(
+                        make_request,
+                        timeout,
+                        f"LLM complete (attempt {attempt + 1})"
+                    )
+                else:
+                    response = make_request()
+
                 latency_ms = int((time.time() - start_time) * 1000)
-                
+
                 choice = response.choices[0]
                 return LLMResponse(
                     content=choice.message.content or "",
@@ -256,15 +432,22 @@ using (var archive = new Archive(settings))
                     finish_reason=choice.finish_reason or "stop",
                     latency_ms=latency_ms,
                     success=True,
+                    raw_prompt=prompt,
                 )
-                
+
+            except TimeoutError as e:
+                last_error = str(e)
+                logger.error(f"LLM request timeout (attempt {attempt + 1}/{self.max_retries}): {e}")
+                # Don't retry on timeout - fail fast
+                break
+
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"LLM request failed (attempt {attempt + 1}/{self.max_retries}): {e}")
-                
+
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_backoff_seconds * (attempt + 1))
-        
+
         return LLMResponse(
             content="",
             model=self.model,
@@ -272,7 +455,8 @@ using (var archive = new Archive(settings))
             finish_reason="error",
             latency_ms=0,
             success=False,
-            error=last_error or "Unknown error"
+            error=last_error or "Unknown error",
+            raw_prompt=prompt,
         )
     
     def fix_code(
@@ -654,7 +838,15 @@ If you cannot fix the code without major changes, return the original code uncha
                 "## Available Test Data Files:",
                 test_data_info,
                 "",
-                "IMPORTANT: Update file paths to use these available files. Make minimal path changes.",
+                "CRITICAL FILE PATH RULES:",
+                "1. When you see placeholder paths (e.g., 'path\\\\to\\\\file.zip', 'C:\\\\data\\\\input'), replace with actual test files from above",
+                "2. When you see aliased file names (check 'File Aliases' section if present), use the REAL file name (left side of →)",
+                "3. Use relative paths from the workspace directory - DO NOT use absolute paths",
+                "4. Examples of placeholder → real file transformations:",
+                "   ❌ 'parent.zip' → ✅ use real file from alias mapping",
+                "   ❌ 'path\\\\to\\\\input.zip' → ✅ use real file from available list",
+                "   ❌ 'C:\\\\data\\\\archive.zip' → ✅ 'archive.zip' (if available)",
+                "   ❌ 'input_folder' → ✅ use real directory from alias mapping",
             ])
 
         if api_context:
@@ -1236,18 +1428,60 @@ Return ONLY the JSON object, no other text."""
 
 class LLMServiceFactory:
     """Factory for creating LLM service instances."""
-    
+
     @staticmethod
-    def from_config(config: Dict[str, Any]) -> LLMService:
-        """Create LLM service from configuration dictionary."""
-        llm_config = config.get('llm', {})
-        
-        return LLMService(
-            provider=llm_config.get('provider', 'openai'),
-            model=llm_config.get('model', 'gpt-4o'),
-            api_key=os.getenv(llm_config.get('api_key_env_var', 'OPENAI_API_KEY')),
-            base_url=llm_config.get('base_url'),
-            temperature=llm_config.get('temperature', 0.2),
-            max_retries=llm_config.get('max_retries', 3),
-            retry_backoff_seconds=llm_config.get('retry_backoff_seconds', 5),
-        )
+    def from_config(config: Dict[str, Any], use_final_review: bool = False) -> LLMService:
+        """
+        Create LLM service from configuration dictionary.
+
+        Args:
+            config: Configuration dictionary with 'llm' and optionally 'final_review' sections
+            use_final_review: If True, use final_review config instead of main llm config
+
+        Returns:
+            LLMService instance
+        """
+        if use_final_review and 'final_review' in config:
+            # Use final_review configuration (C.6: separate provider/model/timeout)
+            final_review_config = config['final_review']
+            llm_config = config.get('llm', {})  # For fallback values
+
+            # Determine API key based on provider
+            provider = final_review_config.get('provider', 'openai')
+            if provider == 'anthropic':
+                api_key_env_var = 'ANTHROPIC_API_KEY'
+            elif provider == 'openai':
+                api_key_env_var = 'OPENAI_API_KEY'
+            else:
+                api_key_env_var = llm_config.get('api_key_env_var', 'OPENAI_API_KEY')
+
+            return LLMService(
+                provider=provider,
+                model=final_review_config.get('model', 'claude-3-5-sonnet-latest'),
+                api_key=os.getenv(api_key_env_var),
+                base_url=final_review_config.get('base_url'),  # Allow base_url override
+                temperature=0.0,  # Final review should be deterministic
+                max_retries=1,  # Final review doesn't need retries
+                retry_backoff_seconds=5,
+                timeout_seconds=final_review_config.get('timeout_seconds', 30),
+                seed=None,  # Final review doesn't use seed
+                deterministic_mode=False,
+                enforce_timeout=True,
+            )
+        else:
+            # Use main llm configuration
+            llm_config = config.get('llm', {})
+
+            return LLMService(
+                provider=llm_config.get('provider', 'openai'),
+                model=llm_config.get('model', 'gpt-4o'),
+                api_key=os.getenv(llm_config.get('api_key_env_var', 'OPENAI_API_KEY')),
+                base_url=llm_config.get('base_url'),
+                temperature=llm_config.get('temperature', 0.2),
+                max_retries=llm_config.get('max_retries', 3),
+                retry_backoff_seconds=llm_config.get('retry_backoff_seconds', 5),
+                timeout_seconds=llm_config.get('timeout_seconds', 120),
+                seed=llm_config.get('seed'),
+                deterministic_mode=llm_config.get('deterministic_mode', False),
+                enforce_timeout=llm_config.get('enforce_timeout', True),
+            )
