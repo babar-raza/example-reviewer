@@ -100,6 +100,9 @@ class ExampleRecord(BaseModel):
     section_heading: Optional[str] = Field(default=None, description="Markdown heading above code block")
     description_context: Optional[str] = Field(default=None, description="Paragraphs before code block")
     topic: Optional[str] = Field(default=None, description="Topic inferred from file path")
+
+    # Deterministic key for stable ordering (Track 1 requirement)
+    example_key: str = Field(default="", description="Deterministic hash for stable ordering")
     
     @computed_field
     @property
@@ -111,11 +114,36 @@ class ExampleRecord(BaseModel):
         """Generate stable ID from content hash."""
         content = f"{self.family}:{self.file_path}:{self.location.block_index}:{self.original_code or ''}"
         return hashlib.sha256(content.encode()).hexdigest()[:16]
-    
+
+    def generate_example_key(self) -> str:
+        """
+        Generate deterministic example_key for stable ordering.
+
+        Formula: sha256(f"{norm_path}:{block_index}:{lang}:{kind}").hexdigest()[:16]
+
+        Where:
+        - norm_path: normalized file path (lowercase, forward slashes)
+        - block_index: location.block_index
+        - lang: language
+        - kind: source_type (inline/gist)
+
+        Returns:
+            16-character hex hash for deterministic ordering
+        """
+        # Normalize path for cross-platform determinism
+        norm_path = self.file_path.replace("\\", "/").lower()
+
+        # Build deterministic key from stable components
+        content = f"{norm_path}:{self.location.block_index}:{self.language}:{self.source_type.value}"
+
+        return hashlib.sha256(content.encode()).hexdigest()[:16]
+
     def model_post_init(self, __context) -> None:
-        """Generate ID if not provided."""
+        """Generate ID and example_key if not provided."""
         if not self.example_id:
             self.example_id = self.generate_id()
+        if not self.example_key:
+            self.example_key = self.generate_example_key()
 
     @field_validator("original_code", mode="before")
     @classmethod

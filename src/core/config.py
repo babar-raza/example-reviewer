@@ -5,14 +5,83 @@ Uses Pydantic for validation and supports multi-family configurations.
 
 import os
 import json
+import hashlib
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
-from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, List, Tuple, Set
+from pydantic import BaseModel, Field, ConfigDict
 from pydantic_settings import BaseSettings
+
+
+class ConfigAccessTracker:
+    """
+    Tracks which config fields are accessed at runtime.
+
+    Usage:
+        tracker = ConfigAccessTracker()
+        tracker.record_access('llm.seed')
+        tracker.record_access('vector_db.enabled')
+        tracker.export_to_file('runs/run_id/config_access.json')
+    """
+
+    def __init__(self):
+        """Initialize config access tracker."""
+        self._accesses: Set[str] = set()
+        self._enabled: bool = True
+
+    def record_access(self, field_path: str) -> None:
+        """
+        Record access to a config field.
+
+        Args:
+            field_path: Dot-separated path to config field (e.g., 'llm.seed')
+        """
+        if self._enabled:
+            self._accesses.add(field_path)
+
+    def get_accesses(self) -> List[str]:
+        """
+        Get list of all accessed config fields.
+
+        Returns:
+            Sorted list of field paths
+        """
+        return sorted(self._accesses)
+
+    def export_to_file(self, file_path: Path) -> None:
+        """
+        Export config access log to JSON file.
+
+        Args:
+            file_path: Path to output JSON file
+        """
+        file_path = Path(file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        data = {
+            'total_accesses': len(self._accesses),
+            'accessed_fields': self.get_accesses(),
+        }
+
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+
+    def clear(self) -> None:
+        """Clear all recorded accesses."""
+        self._accesses.clear()
+
+    def disable(self) -> None:
+        """Disable tracking (for performance)."""
+        self._enabled = False
+
+    def enable(self) -> None:
+        """Enable tracking."""
+        self._enabled = True
 
 
 class LLMConfig(BaseModel):
     """LLM provider configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     provider: str = Field(default="openai", description="LLM provider (openai, ollama, azure)")
     model: str = Field(default="gpt-4o-mini", description="Model name")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
@@ -21,10 +90,15 @@ class LLMConfig(BaseModel):
     api_key_env_var: str = Field(default="OPENAI_API_KEY")
     base_url: Optional[str] = Field(default=None, description="Custom API base URL")
     timeout_seconds: int = Field(default=120)
+    seed: Optional[int] = Field(default=None, description="Random seed for deterministic mode")
+    deterministic_mode: bool = Field(default=False, description="Enable deterministic mode")
+    enforce_timeout: bool = Field(default=True, description="Enforce timeout strictly")
 
 
 class LimitsConfig(BaseModel):
     """Resource limit configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     cpu_max_percent: int = Field(default=90, ge=0, le=100)
     ram_max_mb: int = Field(default=0, description="0 = no limit")
     vram_max_mb: int = Field(default=0, description="0 = no limit")
@@ -32,6 +106,8 @@ class LimitsConfig(BaseModel):
 
 class ResourceDetectionConfig(BaseModel):
     """Resource detection settings."""
+    model_config = ConfigDict(extra="forbid")
+
     auto_detect_vram: bool = True
     prefer_gpu_when_available: bool = True
     fallback_to_cpu: bool = True
@@ -40,6 +116,8 @@ class ResourceDetectionConfig(BaseModel):
 
 class GitConfig(BaseModel):
     """Git integration configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = True
     commit_message_template: str = "chore({family}): verify {count} examples"
     commit_description_template: str = "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}"
@@ -48,6 +126,8 @@ class GitConfig(BaseModel):
 
 class GistConfig(BaseModel):
     """GitHub Gist configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = True
     target_account: str = ""
     auth_method: str = Field(default="none", pattern="^(pat|oauth|none)$")
@@ -66,6 +146,8 @@ class GistConfig(BaseModel):
 
 class TelemetryConfig(BaseModel):
     """Telemetry configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     internal_enabled: bool = True
     local_telemetry_enabled: bool = True
     local_telemetry_path: str = "./local-telemetry"
@@ -77,6 +159,8 @@ class TelemetryConfig(BaseModel):
 
 class VectorDBConfig(BaseModel):
     """Vector database configuration for similarity search."""
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = Field(default=False, description="Enable vector DB features")
     provider: str = Field(default="chromadb", description="Vector DB provider")
     embedding_model: str = Field(
@@ -91,10 +175,30 @@ class VectorDBConfig(BaseModel):
         le=1.0,
         description="Minimum similarity score (0.0-1.0)"
     )
+    require_on_startup: bool = Field(
+        default=False,
+        description="Require vector DB to be available on startup (fail-fast if disabled)"
+    )
+    deterministic_search: bool = Field(
+        default=True,
+        description="Enable deterministic ordering for vector search results"
+    )
+    embedding_device: str = Field(
+        default="cpu",
+        description="Device for embeddings (cpu or cuda)"
+    )
+    drift_tolerance: float = Field(
+        default=0.02,
+        ge=0.0,
+        le=1.0,
+        description="Tolerance for drift in embedding comparisons"
+    )
 
 
 class BackfillConfig(BaseModel):
     """Backfill configuration for auto-downloading missing data."""
+    model_config = ConfigDict(extra="forbid")
+
     auto_enabled: bool = Field(default=False, description="Enable automatic backfill")
     targets: List[str] = Field(
         default_factory=lambda: ["test_data", "api_reference", "examples", "gist_source_code"],
@@ -106,6 +210,8 @@ class BackfillConfig(BaseModel):
 
 class ContextExtractionConfig(BaseModel):
     """Configuration for context extraction around code snippets."""
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = Field(
         default=True,
         description="Enable/disable context extraction"
@@ -138,6 +244,8 @@ class ContextExtractionConfig(BaseModel):
 
 class GistPatternsConfig(BaseModel):
     """Configuration for gist detection patterns."""
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = Field(
         default=True,
         description="Enable/disable gist extraction"
@@ -213,6 +321,8 @@ class GistPatternsConfig(BaseModel):
 
 class DiscoveryPatternsConfig(BaseModel):
     """Discovery pattern configuration for code extraction."""
+    model_config = ConfigDict(extra="forbid")
+
     fence_patterns: List[str] = Field(
         default=["^```(\\w+|c#)\\s*\\n(.*?)^```"],
         description="Regex patterns for code fence detection"
@@ -286,7 +396,14 @@ class DiscoveryPatternsConfig(BaseModel):
 
 class FinalReviewConfig(BaseModel):
     """Final review phase configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = Field(default=True, description="Enable final LLM review phase")
+    provider: str = Field(default="anthropic", description="LLM provider for final review")
+    model: str = Field(default="claude-3-5-sonnet-latest", description="Model for final review")
+    timeout_seconds: int = Field(default=30, ge=1, description="Timeout for final review calls")
+    enforce_model: bool = Field(default=True, description="Enforce specific model usage")
+    confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Confidence threshold")
     auto_remediation_enabled: bool = Field(
         default=False,
         description="Enable automatic remediation of review issues (future feature)"
@@ -305,10 +422,16 @@ class FinalReviewConfig(BaseModel):
         default=True,
         description="Fail review if critical issues are found"
     )
+    only_review_llm_fixed: bool = Field(
+        default=True,
+        description="Only review examples that were fixed by LLM"
+    )
 
 
 class DriftConfig(BaseModel):
     """Configuration for drift detection during LLM fix iterations."""
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = Field(
         default=True,
         description="Enable drift detection in compilation and runtime fix loops"
@@ -329,12 +452,42 @@ class DriftConfig(BaseModel):
     )
 
 
+class MarkdownWriteConfig(BaseModel):
+    """
+    Markdown write safety configuration.
+
+    SAFETY: This enforces write guards to prevent accidental manual edits.
+    Default is False (dry-run) to ensure operator must explicitly enable writes.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    allow_markdown_write: bool = Field(
+        default=False,
+        description="Allow markdown file writes. Default is False for safety. Use --allow-md-write CLI flag."
+    )
+
+
+class TimeoutsConfig(BaseModel):
+    """Timeout configuration for various operations."""
+    model_config = ConfigDict(extra="forbid")
+
+    llm_call_seconds: int = Field(default=120, ge=1, description="Timeout for LLM API calls")
+    code_execution_seconds: int = Field(default=30, ge=1, description="Timeout for code execution")
+    per_example_seconds: int = Field(default=300, ge=1, description="Timeout per example processing")
+    per_phase_seconds: int = Field(default=1800, ge=1, description="Timeout per pipeline phase")
+    hard_run_timeout_seconds: int = Field(default=2400, ge=1, description="Hard timeout for entire run")
+    allow_timeout_override: bool = Field(default=False, description="Allow CLI timeout overrides")
+
+
 class GlobalConfig(BaseModel):
     """Global configuration settings."""
+    model_config = ConfigDict(extra="forbid")
+
     llm: LLMConfig = Field(default_factory=LLMConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     resource_detection: ResourceDetectionConfig = Field(default_factory=ResourceDetectionConfig)
     git: GitConfig = Field(default_factory=GitConfig)
+    markdown_write: MarkdownWriteConfig = Field(default_factory=MarkdownWriteConfig)
     gist: GistConfig = Field(default_factory=GistConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     vector_db: VectorDBConfig = Field(default_factory=VectorDBConfig)
@@ -342,6 +495,7 @@ class GlobalConfig(BaseModel):
     discovery_patterns: DiscoveryPatternsConfig = Field(default_factory=DiscoveryPatternsConfig)
     final_review: FinalReviewConfig = Field(default_factory=FinalReviewConfig)
     drift: DriftConfig = Field(default_factory=DriftConfig)
+    timeouts: TimeoutsConfig = Field(default_factory=TimeoutsConfig)
 
     # Paths
     artifact_store_path: str = Field(default="./artifacts")
@@ -350,6 +504,7 @@ class GlobalConfig(BaseModel):
 
 class NuGetPackage(BaseModel):
     """NuGet package reference."""
+    model_config = ConfigDict(extra="forbid")
     name: str
     version_strategy: str = Field(default="latest_stable")
     version: Optional[str] = None
@@ -357,6 +512,8 @@ class NuGetPackage(BaseModel):
 
 class NuGetConfig(BaseModel):
     """NuGet configuration for a family."""
+    model_config = ConfigDict(extra="forbid")
+
     primary_package: NuGetPackage
     additional_packages: List[NuGetPackage] = Field(default_factory=list)
     target_frameworks: List[str] = Field(default_factory=lambda: ["net8.0"])
@@ -364,11 +521,15 @@ class NuGetConfig(BaseModel):
 
 class CodeDefaults(BaseModel):
     """Default code configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     default_usings: List[str] = Field(default_factory=list)
 
 
 class RuntimeValidationConfig(BaseModel):
     """Runtime validation configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = True
     mode: str = Field(default="strict", pattern="^(strict|lenient)$")
     timeout_seconds: int = Field(default=30, ge=1)
@@ -380,12 +541,16 @@ class RuntimeValidationConfig(BaseModel):
 
 class TestDataConfig(BaseModel):
     """Test data configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     local_path: str = ""
     download_if_missing: bool = True
 
 
 class ExampleRepoConfig(BaseModel):
     """Example repository configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     url: str = ""
     examples_path: str = ""
     test_data_path: str = ""
@@ -394,12 +559,16 @@ class ExampleRepoConfig(BaseModel):
 
 class ApiReferenceConfig(BaseModel):
     """API reference configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     sources: List[str] = Field(default_factory=list)
     cache_path: str = ""
 
 
 class FamilyConfig(BaseModel):
     """Per-family configuration settings."""
+    model_config = ConfigDict(extra="forbid")
+
     family: str = Field(..., description="Family identifier")
     display_name: str = ""
     auto_commit: bool = False
@@ -520,6 +689,9 @@ class ConfigurationManager:
         if 'drift' in data:
             parsed['drift'] = DriftConfig(**data['drift'])
 
+        if 'timeouts' in data:
+            parsed['timeouts'] = TimeoutsConfig(**data['timeouts'])
+
         if 'artifact_store_path' in data:
             parsed['artifact_store_path'] = data['artifact_store_path']
 
@@ -619,23 +791,67 @@ class ConfigurationManager:
         """List all available family configurations."""
         if not self.config_dir.exists():
             return []
-        
+
         families = []
-        for path in self.config_dir.glob("*.json"):
+        # Sort glob results deterministically (case-normalized for Windows compatibility)
+        for path in sorted(self.config_dir.glob("*.json"), key=lambda p: str(p).lower()):
             if path.name != "global.json":
                 families.append(path.stem)
-        
-        return sorted(families)
+
+        # Sort family names deterministically (case-normalized)
+        return sorted(families, key=lambda f: f.lower())
     
-    def get_effective_config(self, family: str) -> Dict[str, Any]:
-        """Get merged global + family config as dictionary."""
+    def get_effective_config(
+        self,
+        family: str,
+        cli_overrides: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Get merged global + family + CLI overrides config as dictionary.
+
+        Args:
+            family: Family identifier
+            cli_overrides: CLI overrides dictionary (e.g., {'llm': {'seed': 12345}})
+
+        Returns:
+            Effective configuration dictionary with global, family, and cli_overrides sections
+        """
         global_cfg = self.load_global_config()
         family_cfg = self.load_family_config(family)
-        
-        return {
+
+        effective = {
             'global': global_cfg.model_dump(),
             'family': family_cfg.model_dump(),
         }
+
+        if cli_overrides:
+            effective['cli_overrides'] = cli_overrides
+
+        return effective
+
+    def compute_config_hash(
+        self,
+        family: str,
+        cli_overrides: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Compute SHA256 hash of effective configuration.
+
+        Args:
+            family: Family identifier
+            cli_overrides: CLI overrides dictionary
+
+        Returns:
+            SHA256 hash of effective config (hex string)
+        """
+        effective_config = self.get_effective_config(family, cli_overrides)
+
+        # Convert to deterministic JSON (sorted keys)
+        config_json = json.dumps(effective_config, sort_keys=True, indent=None)
+
+        # Compute SHA256
+        hash_obj = hashlib.sha256(config_json.encode('utf-8'))
+        return hash_obj.hexdigest()
     
     def save_family_config(self, family: str, config: FamilyConfig) -> None:
         """Save family configuration to disk."""
