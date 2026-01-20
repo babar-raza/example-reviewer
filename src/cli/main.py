@@ -348,6 +348,8 @@ def main() -> int:
                                    help='Family identifier')
     md_update_parser.add_argument('--dry-run', action='store_true',
                                    help="Don't write changes")
+    md_update_parser.add_argument('--allow-md-write', action='store_true',
+                                   help='REQUIRED to write .md files (safety guard)')
     
     # Final review command
     final_review_parser = subparsers.add_parser('final-review',
@@ -376,6 +378,8 @@ def main() -> int:
                             help='Skip LLM-based fixing')
     run_parser.add_argument('--dry-run', action='store_true',
                             help="Don't write changes")
+    run_parser.add_argument('--allow-md-write', action='store_true',
+                            help='REQUIRED to write .md files (safety guard)')
     
     # List families command
     list_parser = subparsers.add_parser('list-families',
@@ -475,6 +479,7 @@ def main() -> int:
         result = tools.md_update(
             family=args.family,
             dry_run=args.dry_run,
+            allow_md_write=getattr(args, 'allow_md_write', False),
         )
     
     elif args.command == 'final-review':
@@ -493,6 +498,7 @@ def main() -> int:
             skip_runtime=args.skip_runtime,
             skip_llm_fixes=args.skip_llm,
             dry_run=args.dry_run,
+            allow_md_write=getattr(args, 'allow_md_write', False),
         )
     
     elif args.command == 'list-families':
