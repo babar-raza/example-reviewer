@@ -98,11 +98,12 @@ class ExampleReviewerTools:
                 dir_path = Path(directory)
                 if not dir_path.exists():
                     return ToolResult(success=False, error=f"Directory not found: {directory}")
-                
-                files = list(dir_path.rglob("*.md"))
+
+                # Sort glob results deterministically (case-normalized for Windows compatibility)
+                files = sorted(dir_path.rglob("*.md"), key=lambda p: str(p).lower())
                 if max_files:
                     files = files[:max_files]
-                
+
                 return ToolResult(
                     success=True,
                     data={
@@ -331,24 +332,28 @@ class ExampleReviewerTools:
         self,
         family: str,
         dry_run: bool = False,
+        allow_md_write: bool = False,
     ) -> ToolResult:
         """
         Update markdown files with verified code.
-        
+
         Maps to CLI command: md_update
         Maps to phase: D_markdown_update
-        
+
         Args:
             family: Family identifier
             dry_run: If True, don't write changes
-            
+            allow_md_write: If True, override global config to allow markdown writes
+
         Returns:
             ToolResult with update statistics
         """
         try:
-            stats = self.orchestrator._run_markdown_update_phase(family, dry_run)
+            stats = self.orchestrator._run_markdown_update_phase(
+                family, dry_run, allow_md_write=allow_md_write
+            )
             return ToolResult(success=True, data=stats)
-            
+
         except Exception as e:
             return ToolResult(success=False, error=str(e))
     
@@ -558,17 +563,19 @@ class ExampleReviewerTools:
         skip_runtime: bool = False,
         skip_llm_fixes: bool = False,
         dry_run: bool = False,
+        allow_md_write: bool = False,
     ) -> ToolResult:
         """
         Run the full pipeline for a family.
-        
+
         Args:
             family: Family identifier
             max_examples: Maximum examples to process
             skip_runtime: Skip runtime verification
             skip_llm_fixes: Skip LLM-based fixing
             dry_run: Don't write changes
-            
+            allow_md_write: Override global config to allow markdown writes
+
         Returns:
             ToolResult with full pipeline results
         """
@@ -579,10 +586,11 @@ class ExampleReviewerTools:
                 skip_runtime=skip_runtime,
                 skip_llm_fixes=skip_llm_fixes,
                 dry_run=dry_run,
+                allow_md_write=allow_md_write,
             )
-            
+
             return ToolResult(success=results['success'], data=results)
-            
+
         except Exception as e:
             return ToolResult(success=False, error=str(e))
 

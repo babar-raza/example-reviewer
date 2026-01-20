@@ -164,3 +164,173 @@ def cli_env(temp_workspace):
     env['EXAMPLE_REVIEWER_DB'] = str(temp_workspace / 'data' / 'test.db')
     env['EXAMPLE_REVIEWER_WORKSPACE'] = str(temp_workspace / 'workspace')
     return env
+
+
+# ============================================================================
+# Track 1 Determinism Test Fixtures
+# ============================================================================
+
+@pytest.fixture
+def mock_llm_service():
+    """
+    Mock LLMService for unit tests.
+
+    Prevents actual LLM API calls during tests.
+
+    Returns:
+        Mock: Mocked LLMService instance
+    """
+    from unittest.mock import MagicMock
+    from src.services.llm_service import LLMService, ProviderCapabilities
+
+    service = MagicMock(spec=LLMService)
+    service.is_available.return_value = True
+    service.timeout_seconds = 120
+    service.seed = 12345
+    service.deterministic_mode = True
+    service.enforce_timeout = True
+
+    # Mock provider capabilities
+    capabilities = ProviderCapabilities(
+        seed_supported=True,
+        timeout_supported=True,
+        detected_at="2026-01-20T10:00:00Z",
+    )
+    service.get_provider_capabilities.return_value = capabilities
+
+    # Mock LLM response
+    from src.services.llm_service import LLMResponse
+    mock_response = LLMResponse(
+        content="// Fixed code",
+        model="gpt-4",
+        usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        finish_reason="stop",
+        latency_ms=1000,
+    )
+    service.fix_compilation_error.return_value = mock_response
+
+    return service
+
+
+@pytest.fixture
+def mock_vector_db():
+    """
+    Mock VectorDBService for unit tests.
+
+    Prevents actual ChromaDB operations during tests.
+
+    Returns:
+        Mock: Mocked VectorDBService instance
+    """
+    from unittest.mock import MagicMock
+    from src.services.vector_db_service import VectorDBService
+
+    service = MagicMock(spec=VectorDBService)
+    service.is_available.return_value = True
+    service.enabled = True
+
+    # Mock search results (deterministically sorted)
+    service.search_similar_examples.return_value = [
+        {
+            "id": "example1",
+            "code": "// Example 1",
+            "distance": 0.10,
+            "metadata": {"example_key": "key1", "file_path": "a.md"},
+        },
+        {
+            "id": "example2",
+            "code": "// Example 2",
+            "distance": 0.15,
+            "metadata": {"example_key": "key2", "file_path": "b.md"},
+        },
+    ]
+
+    return service
+
+
+@pytest.fixture
+def mock_database(tmp_path):
+    """
+    In-memory SQLite database for unit tests.
+
+    Provides isolated database for testing without polluting main DB.
+
+    Returns:
+        Database: In-memory database instance
+    """
+    from src.core.database import Database
+
+    db = Database(db_path=Path(":memory:"))
+    db.initialize_schema()
+
+    return db
+
+
+@pytest.fixture
+def temp_config():
+    """
+    Temporary config directory with valid Track 1 configs.
+
+    Returns:
+        Path: Temporary config directory
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_dir = Path(tmpdir) / "config"
+        config_dir.mkdir()
+
+        families_dir = config_dir / "families"
+        families_dir.mkdir()
+
+        # Create valid global.json with Track 1 fields
+        global_config = {
+            "llm": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "temperature": 0.0,
+                "max_retries": 3,
+                "retry_backoff_seconds": 5,
+                "timeout_seconds": 120,
+                "seed": 12345,
+                "deterministic_mode": True,
+                "enforce_timeout": True,
+            },
+            "vector_db": {
+                "enabled": True,
+                "provider": "chromadb",
+                "embedding_model": "all-MiniLM-L6-v2",
+                "require_on_startup": False,
+                "deterministic_search": True,
+                "embedding_device": "cpu",
+                "drift_tolerance": 0.02,
+            },
+            "final_review": {
+                "enabled": True,
+                "provider": "anthropic",
+                "model": "claude-3-5-sonnet-latest",
+                "timeout_seconds": 30,
+                "enforce_model": True,
+            },
+            "timeouts": {
+                "llm_call_seconds": 120,
+                "code_execution_seconds": 30,
+                "per_example_seconds": 300,
+                "per_phase_seconds": 1800,
+                "hard_run_timeout_seconds": 2400,
+                "allow_timeout_override": False,
+            },
+            "database_path": "./data/test.db",
+            "artifact_store_path": "./artifacts",
+        }
+
+        (config_dir / "global.json").write_text(json.dumps(global_config, indent=2))
+
+        # Create minimal family config
+        family_config = {
+            "family": "test_family",
+            "display_name": "Test Family",
+            "content_roots": ["./test-content"],
+        }
+
+        (families_dir / "test_family.json").write_text(json.dumps(family_config, indent=2))
+
+        yield config_dir

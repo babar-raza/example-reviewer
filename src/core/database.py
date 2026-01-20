@@ -6,6 +6,7 @@ Uses SQLite with WAL mode for concurrent access.
 import sqlite3
 import json
 import logging
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -61,13 +62,15 @@ class Database:
         description_context TEXT,
         topic TEXT,
         drift_score REAL,
-        drift_similarity REAL
+        drift_similarity REAL,
+        example_key TEXT
     );
-    
+
     CREATE INDEX IF NOT EXISTS idx_examples_family ON example_records(family);
     CREATE INDEX IF NOT EXISTS idx_examples_status ON example_records(status);
     CREATE INDEX IF NOT EXISTS idx_examples_file_path ON example_records(file_path);
     CREATE INDEX IF NOT EXISTS idx_examples_drift ON example_records(drift_score);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_example_key ON example_records(family, example_key);
 
     -- Compile attempts table
     CREATE TABLE IF NOT EXISTS compile_attempts (
@@ -301,6 +304,19 @@ class Database:
     CREATE INDEX IF NOT EXISTS idx_telemetry_runs_status ON telemetry_runs(status);
     CREATE INDEX IF NOT EXISTS idx_telemetry_runs_family ON telemetry_runs(product_family);
     CREATE INDEX IF NOT EXISTS idx_telemetry_runs_agent ON telemetry_runs(agent_name);
+
+    -- Run fingerprints table (Track 1: C.8)
+    CREATE TABLE IF NOT EXISTS run_fingerprints (
+        run_id TEXT PRIMARY KEY,
+        config_hash TEXT NOT NULL,
+        selection_hash TEXT,
+        fingerprint_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_fingerprints_config_hash ON run_fingerprints(config_hash);
+    CREATE INDEX IF NOT EXISTS idx_fingerprints_selection_hash ON run_fingerprints(selection_hash);
     """
     
     def __init__(self, db_path: Optional[Path] = None):
@@ -369,6 +385,11 @@ class Database:
             ).fetchone()
             if existing and existing["family"] != example.family:
                 example.example_id = example.generate_id()
+
+            # Ensure example_key is populated
+            if not example.example_key:
+                example.example_key = example.generate_example_key()
+
             conn.execute("""
                 INSERT OR REPLACE INTO example_records (
                     example_id, family, file_path, source_type, language,
@@ -376,8 +397,8 @@ class Database:
                     gist_owner, gist_id, gist_filename,
                     original_code, compilable_code, verified_code,
                     status, failure_reason, created_at, updated_at,
-                    section_heading, description_context, topic
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    section_heading, description_context, topic, example_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 example.example_id,
                 example.family,
@@ -401,6 +422,7 @@ class Database:
                 example.section_heading,
                 example.description_context,
                 example.topic,
+                example.example_key,
             ))
         return example.example_id
     
@@ -426,17 +448,18 @@ class Database:
         with self.get_connection() as conn:
             query = "SELECT * FROM example_records WHERE family = ?"
             params = [family]
-            
+
             if status:
                 query += " AND status = ?"
                 params.append(status.value)
-            
-            query += " ORDER BY created_at"
-            
+
+            # Deterministic ordering: example_key (primary), then example_id (tie-breaker)
+            query += " ORDER BY example_key ASC, example_id ASC"
+
             if limit:
                 query += " LIMIT ?"
                 params.append(limit)
-            
+
             rows = conn.execute(query, params).fetchall()
             return [self._row_to_example(row) for row in rows]
     
@@ -444,7 +467,7 @@ class Database:
         """Get all examples from a specific file."""
         with self.get_connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM example_records WHERE file_path = ? ORDER BY location_block_index",
+                "SELECT * FROM example_records WHERE file_path = ? ORDER BY location_block_index, example_key ASC, example_id ASC",
                 (file_path,)
             ).fetchall()
             return [self._row_to_example(row) for row in rows]
@@ -583,6 +606,7 @@ class Database:
         section_heading = row['section_heading'] if 'section_heading' in row.keys() else None
         description_context = row['description_context'] if 'description_context' in row.keys() else None
         topic = row['topic'] if 'topic' in row.keys() else None
+        example_key = row['example_key'] if 'example_key' in row.keys() else ""
 
         return ExampleRecord(
             example_id=row['example_id'],
@@ -607,6 +631,7 @@ class Database:
             section_heading=section_heading,
             description_context=description_context,
             topic=topic,
+            example_key=example_key,
         )
     
     # =========================================================================
@@ -814,16 +839,86 @@ class Database:
             ))
         
         return run.run_id
-    
+
+    def get_run_stats_from_db(
+        self,
+        family: str,
+        run_id: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """
+        Compute run statistics from actual DB state (not stale counters).
+
+        Queries example_records to get accurate counts based on status.
+        This ensures stats reflect true DB state, not accumulated counters.
+
+        Args:
+            family: Family identifier
+            run_id: Optional run ID to filter by (for future multi-run tracking)
+
+        Returns:
+            Dictionary with total_processed, verified, failed counts
+        """
+        with self.get_connection() as conn:
+            # Count examples by status for this family
+            counts = conn.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN status = 'VERIFIED' OR status = 'MD_UPDATED' OR status = 'FINAL_REVIEW_PASSED' THEN 1 ELSE 0 END) as verified,
+                    SUM(CASE WHEN status LIKE '%FAILED%' THEN 1 ELSE 0 END) as failed
+                FROM example_records
+                WHERE family = ?
+            """, (family,)).fetchone()
+
+            return {
+                'total_processed': counts['total'] or 0,
+                'verified': counts['verified'] or 0,
+                'failed': counts['failed'] or 0,
+            }
+
     def complete_run(
         self,
         run_id: str,
         status: str = "completed",
-        examples_processed: int = 0,
-        examples_verified: int = 0,
+        examples_processed: Optional[int] = None,
+        examples_verified: Optional[int] = None,
         error: Optional[str] = None,
+        family: Optional[str] = None,
     ) -> None:
-        """Mark a run as completed."""
+        """
+        Mark a run as completed.
+
+        If examples_processed or examples_verified are not provided, they will be
+        computed from the database state to ensure accuracy.
+
+        Args:
+            run_id: Run identifier
+            status: Run status ('completed', 'failed', etc.)
+            examples_processed: Total examples processed (computed from DB if None)
+            examples_verified: Successfully verified examples (computed from DB if None)
+            error: Error message if failed
+            family: Family identifier (required if examples_processed/verified not provided)
+        """
+        # If stats not provided, compute from DB
+        if examples_processed is None or examples_verified is None:
+            if family is None:
+                # Get family from run record
+                with self.get_connection() as conn:
+                    run = conn.execute(
+                        "SELECT family FROM run_records WHERE run_id = ?",
+                        (run_id,)
+                    ).fetchone()
+                    if run:
+                        family = run['family']
+
+            if family:
+                db_stats = self.get_run_stats_from_db(family, run_id)
+                examples_processed = db_stats['total_processed']
+                examples_verified = db_stats['verified']
+            else:
+                # Fallback to 0 if family unknown
+                examples_processed = 0
+                examples_verified = 0
+
         with self.get_connection() as conn:
             conn.execute("""
                 UPDATE run_records
@@ -1328,6 +1423,124 @@ class Database:
                 'failure_samples': failure_samples,
                 'total_failures': sum(failure_counts.values()),
             }
+
+    def compute_selection_hash(self, example_keys: List[str]) -> str:
+        """
+        Compute deterministic selection_hash from example_keys.
+
+        Formula: sha256("\\n".join(sorted(example_keys))).hexdigest()
+
+        This hash proves the exact set of examples selected for a run,
+        enabling determinism verification across runs.
+
+        Args:
+            example_keys: List of example_key values from selected examples
+
+        Returns:
+            64-character hex SHA256 hash of sorted example keys
+        """
+        if not example_keys:
+            return hashlib.sha256(b"").hexdigest()
+
+        # Sort keys for deterministic ordering
+        sorted_keys = sorted(example_keys)
+
+        # Join with newlines and hash
+        content = "\n".join(sorted_keys)
+        return hashlib.sha256(content.encode()).hexdigest()
+
+    # =========================================================================
+    # RUN FINGERPRINTS (Track 1: C.8)
+    # =========================================================================
+
+    def save_run_fingerprint(self, fingerprint: 'RunFingerprint') -> str:
+        """
+        Save run fingerprint to database.
+
+        Args:
+            fingerprint: RunFingerprint instance
+
+        Returns:
+            run_id
+        """
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO run_fingerprints (
+                    run_id, config_hash, selection_hash,
+                    fingerprint_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (
+                fingerprint.run_id,
+                fingerprint.config_hash,
+                fingerprint.selection_hash,
+                fingerprint.to_json(),
+                fingerprint.timestamp.isoformat() if fingerprint.timestamp else datetime.utcnow().isoformat(),
+            ))
+        return fingerprint.run_id
+
+    def get_run_fingerprint(self, run_id: str) -> Optional['RunFingerprint']:
+        """
+        Get run fingerprint from database.
+
+        Args:
+            run_id: Run identifier
+
+        Returns:
+            RunFingerprint or None if not found
+        """
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM run_fingerprints WHERE run_id = ?",
+                (run_id,)
+            ).fetchone()
+
+            if row:
+                # Import here to avoid circular dependency
+                from .fingerprint import RunFingerprint
+                return RunFingerprint.from_json(row['fingerprint_json'])
+        return None
+
+    def get_fingerprints_by_config_hash(self, config_hash: str) -> List['RunFingerprint']:
+        """
+        Get all fingerprints with matching config_hash.
+
+        Useful for finding runs with identical configuration.
+
+        Args:
+            config_hash: Configuration hash
+
+        Returns:
+            List of RunFingerprint instances
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM run_fingerprints WHERE config_hash = ? ORDER BY created_at DESC",
+                (config_hash,)
+            ).fetchall()
+
+            from .fingerprint import RunFingerprint
+            return [RunFingerprint.from_json(row['fingerprint_json']) for row in rows]
+
+    def get_fingerprints_by_selection_hash(self, selection_hash: str) -> List['RunFingerprint']:
+        """
+        Get all fingerprints with matching selection_hash.
+
+        Useful for finding runs that processed the same example set.
+
+        Args:
+            selection_hash: Selection hash
+
+        Returns:
+            List of RunFingerprint instances
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM run_fingerprints WHERE selection_hash = ? ORDER BY created_at DESC",
+                (selection_hash,)
+            ).fetchall()
+
+            from .fingerprint import RunFingerprint
+            return [RunFingerprint.from_json(row['fingerprint_json']) for row in rows]
 
     # =========================================================================
     # REVIEW RESULTS
