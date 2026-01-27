@@ -1,7 +1,8 @@
-# Python virtual environment
+# Python virtual environment and bytecode
 .venv/
 venv/
 *.pyc
+*.pyo
 __pycache__/
 .pytest_cache/
 
@@ -40,6 +41,33 @@ test-examples/obj/
 !test-data/**/*.zip
 snippet_*_content.txt
 
+# Root artifacts
+.coverage
+*.log
+*.db
+*.zip
+*.txt
+*.json
+
+# Temporary project management files
+/PHASE*.md
+/PROMPT*.md
+/COMPLETE*.md
+/FIXES*.md
+/IMPLEMENTATION*.md
+/INTEGRATION*.md
+create_*.py
+fix_*.py
+collect_*.py
+recompile_*.py
+query_run.py
+run_with_userpath.py
+run_pytest.py
+run_track2_unit_fast.py
+
+# Release artifacts and packages
+/release/
+
 # Secrets and environment variables
 .env
 .env.local
@@ -54,8 +82,8 @@ secrets/
 # Local telemetry directory
 /local-telemetry
 
-# Runtime workspace directories
-/workspace/runtime/
+# Runtime workspace directories (workspace copy mode artifacts)
+workspace/
 /runs/
 
 # Test determinism artifacts
