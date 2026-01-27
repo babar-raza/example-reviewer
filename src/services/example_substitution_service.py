@@ -223,10 +223,14 @@ class ExampleSubstitutionService:
             # Phase-2 Gate B: Filter by app_context if same_context_only enabled
             if self.same_context_only and original_app_context:
                 candidate_context = classify_app_context(example_code)
-                if candidate_context.value if hasattr(candidate_context, 'value') else candidate_context != original_app_context:
+                # Normalize both contexts to strings for comparison
+                candidate_context_str = candidate_context.value if hasattr(candidate_context, 'value') else str(candidate_context)
+                original_context_str = original_app_context.lower() if isinstance(original_app_context, str) else str(original_app_context)
+
+                if candidate_context_str != original_context_str:
                     logger.debug(
                         f"Filtered out {example_id}: context mismatch "
-                        f"(original={original_app_context}, candidate={candidate_context})"
+                        f"(original={original_context_str}, candidate={candidate_context_str})"
                     )
                     continue
 

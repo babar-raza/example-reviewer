@@ -97,37 +97,50 @@ class AppContextClassifier:
             logger.debug("Classified as aspnet_core_minimal (minimal hosting API detected)")
             return AppContext.ASPNET_CORE_MINIMAL
 
-        # Check ASP.NET Core MVC
+        # Check ASP.NET Core Web API vs MVC (order matters)
+        # WebAPI uses ControllerBase and [ApiController]
+        # MVC uses Controller (inherits from ControllerBase) and View()
+        # If code has specific WebAPI markers, it's WebAPI
+        has_webapi_markers = (
+            re.search(r'\[ApiController\]', normalized_code) or
+            re.search(r':\s*ControllerBase\b', normalized_code)
+        )
+
+        # If code has MVC-specific markers, it's MVC
+        has_mvc_markers = (
+            re.search(r':\s*Controller\b', normalized_code) or
+            re.search(r'\bView\s*\(', normalized_code)
+        )
+
+        # MVC takes priority if it has MVC-specific markers (Controller base or View())
+        if has_mvc_markers and cls._matches_any(normalized_code, cls.MVC_PATTERNS):
+            logger.debug("Classified as aspnet_core_mvc (MVC-specific patterns detected)")
+            return AppContext.ASPNET_CORE_MVC
+
+        # WebAPI if it has WebAPI-specific markers (ControllerBase or [ApiController])
+        if has_webapi_markers and cls._matches_any(normalized_code, cls.WEBAPI_PATTERNS):
+            logger.debug("Classified as aspnet_core_webapi (WebAPI-specific patterns detected)")
+            return AppContext.ASPNET_CORE_WEBAPI
+
+        # Fallback: check for general MVC or WebAPI patterns
         if cls._matches_any(normalized_code, cls.MVC_PATTERNS):
             logger.debug("Classified as aspnet_core_mvc (MVC patterns detected)")
             return AppContext.ASPNET_CORE_MVC
 
-        # Check ASP.NET Core Web API
         if cls._matches_any(normalized_code, cls.WEBAPI_PATTERNS):
             logger.debug("Classified as aspnet_core_webapi (Web API patterns detected)")
             return AppContext.ASPNET_CORE_WEBAPI
 
-        # Check if it's a library (no entrypoint)
+        # Check if it's a library (no entrypoint, only type definitions)
         has_entrypoint = cls._matches_any(normalized_code, cls.ENTRYPOINT_PATTERNS)
         has_class_only = cls._matches_any(normalized_code, cls.LIBRARY_INDICATORS)
 
-        if has_class_only and not has_entrypoint:
-            # Check if there's any standalone logic (not just class definitions)
-            lines = [line.strip() for line in normalized_code.split('\n') if line.strip()]
+        # Check for top-level statements (entrypoint without Main)
+        has_top_level_statements = cls._has_top_level_statements(normalized_code)
 
-            # Filter out using statements, namespace declarations, class/interface declarations
-            non_structural_lines = [
-                line for line in lines
-                if not line.startswith('using ')
-                and not line.startswith('namespace ')
-                and not re.match(r'^\s*(public|private|protected|internal|static)?\s*(class|interface|enum|struct)\s+\w+', line)
-                and not line in ['{', '}']
-            ]
-
-            # If mostly structural, it's a library
-            if len(non_structural_lines) < len(lines) * 0.3:
-                logger.debug("Classified as library (class-only, no entrypoint)")
-                return AppContext.LIBRARY
+        if has_class_only and not has_entrypoint and not has_top_level_statements:
+            logger.debug("Classified as library (type definitions only, no entrypoint)")
+            return AppContext.LIBRARY
 
         # Default: console application
         logger.debug("Classified as console (default)")
@@ -151,6 +164,73 @@ class AppContextClassifier:
                     return True
             except re.error as e:
                 logger.warning(f"Invalid regex pattern '{pattern}': {e}")
+        return False
+
+    @classmethod
+    def _has_top_level_statements(cls, code: str) -> bool:
+        """
+        Check if code has top-level statements (executable code outside of type definitions).
+
+        This helps distinguish libraries (only type definitions) from console apps.
+        Top-level statements are statements outside of class/interface/struct/enum/namespace.
+
+        Args:
+            code: Code to check
+
+        Returns:
+            True if code has top-level statements
+        """
+        lines = code.split('\n')
+        depth = 0  # Track nesting depth
+        in_namespace = False
+        in_type = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Skip empty lines, comments, attributes
+            if not stripped or stripped.startswith('//') or stripped.startswith('['):
+                continue
+
+            # Skip using statements
+            if stripped.startswith('using '):
+                continue
+
+            # Track namespace
+            if stripped.startswith('namespace '):
+                in_namespace = True
+                depth = 0
+                continue
+
+            # Track type definitions (class, interface, struct, enum, record)
+            if re.match(r'^(public|private|protected|internal|static|sealed|abstract|\s)+(class|interface|struct|enum|record)\s+\w+', stripped):
+                in_type = True
+                depth = 0
+                continue
+
+            # Count braces
+            open_braces = stripped.count('{')
+            close_braces = stripped.count('}')
+
+            # Before counting braces, check if we have a statement at depth 0
+            # (outside namespace and type definitions)
+            if depth == 0 and not in_namespace and not in_type:
+                # This line is at top level
+                # Check if it's a statement (not just braces)
+                non_brace_content = stripped.replace('{', '').replace('}', '').strip()
+                if non_brace_content and not non_brace_content.startswith('//'):
+                    return True
+
+            # Update depth
+            depth += open_braces
+            depth -= close_braces
+
+            # When we close back to depth 0, we're exiting the current block
+            if depth == 0:
+                in_type = False
+                # Note: we keep in_namespace True even at depth 0 within the namespace
+                # because there might be multiple types in the same namespace
+
         return False
 
 
