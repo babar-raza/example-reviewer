@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
-from code_pattern_detector import CodePattern, CodePatternDetector
+from src._legacy.code_pattern_detector import CodePattern, CodePatternDetector
 
 
 class PersistentFixService:

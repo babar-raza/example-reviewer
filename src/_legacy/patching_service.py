@@ -5,10 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core.path_guard import assert_write_allowed
 
 
 @dataclass
@@ -134,6 +139,7 @@ class PatchingService:
             updated = original_content.replace(shortcode, inline_block)
 
             if not dry_run:
+                assert_write_allowed(abs_path, reason="patch inline gist")
                 abs_path.write_text(updated, encoding="utf-8")
 
             return PatchResult(
@@ -195,6 +201,7 @@ class PatchingService:
             updated = original_content.replace(shortcode, new_shortcode)
 
             if not dry_run:
+                assert_write_allowed(abs_path, reason="patch gist shortcode")
                 abs_path.write_text(updated, encoding="utf-8")
 
             return PatchResult(
