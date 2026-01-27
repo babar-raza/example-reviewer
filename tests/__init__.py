@@ -1,1 +1,3 @@
-# Tests package for Example Reviewer
+"""
+Tests for Example Reviewer Pipeline.
+"""
