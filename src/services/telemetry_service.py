@@ -76,15 +76,19 @@ class TelemetryService:
         Returns:
             TelemetryRun with all fields populated
         """
-        # Get git info from content repository (not pipeline repo)
+        # Get git info from pipeline repository (example-reviewer repo)
+        pipeline_git = self._get_pipeline_repo_git_metadata()
+
+        # Get content root for subdomain field
         content_root = None
         if family_config.content_roots:
             content_root = family_config.content_roots[0]
-        git_branch = self._get_git_branch(content_root)
-        git_repo = family_config.example_repo.url if family_config.example_repo else ""
 
         # Extract subdomain from content roots
         subdomain = content_root or ""
+
+        # Use family example repo URL for website field (backward compatibility)
+        website_url = family_config.example_repo.url if family_config.example_repo else ""
 
         # Create event with all fields populated
         event = TelemetryRun(
@@ -95,9 +99,10 @@ class TelemetryService:
             product_family=family_config.family,
             platform="dotnet",
             subdomain=subdomain,
-            website=git_repo,
-            git_repo=git_repo,
-            git_branch=git_branch,
+            website=website_url,
+            git_repo=pipeline_git["repo_url"],  # Pipeline repo URL
+            git_branch=pipeline_git["branch"],  # Pipeline repo branch
+            git_commit_hash=pipeline_git["commit_sha"],  # Pipeline repo commit
             git_run_tag=f"{family_config.family}-{run_id[:8]}",
         )
 
@@ -462,3 +467,58 @@ class TelemetryService:
         except Exception:
             pass
         return ""
+
+    def _get_pipeline_repo_git_metadata(self) -> Dict[str, str]:
+        """
+        Get git metadata for the pipeline repository (example-reviewer repo).
+
+        Returns:
+            Dict with keys: repo_url, branch, commit_sha
+        """
+        metadata = {
+            "repo_url": "",
+            "branch": "",
+            "commit_sha": ""
+        }
+
+        try:
+            # Get remote URL
+            result = subprocess.run(
+                ["git", "config", "--get", "remote.origin.url"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                repo_url = result.stdout.strip()
+                # Clean up URL (remove .git, convert ssh to https)
+                if repo_url.endswith('.git'):
+                    repo_url = repo_url[:-4]
+                if repo_url.startswith('git@github.com:'):
+                    repo_url = repo_url.replace('git@github.com:', 'https://github.com/')
+                metadata["repo_url"] = repo_url
+
+            # Get branch
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                metadata["branch"] = result.stdout.strip()
+
+            # Get commit SHA
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                metadata["commit_sha"] = result.stdout.strip()
+
+        except Exception as e:
+            logger.debug(f"Failed to get pipeline repo git metadata: {e}")
+
+        return metadata
