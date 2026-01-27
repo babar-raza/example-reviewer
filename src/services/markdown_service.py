@@ -13,6 +13,7 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from ..core.models import ExampleRecord, ExampleStatus, MarkdownEdit, SourceType
 from ..core.database import Database
+from ..core.path_guard import assert_write_allowed, READ_ONLY_PREFIXES, is_read_only_path, get_workspace_path
 
 # Import GistPublisher - optional dependency
 try:
@@ -41,18 +42,11 @@ class MarkdownUpdateService:
 
     SAFETY: This service enforces strict write guards:
     1. Markdown writes require explicit allow_markdown_write=True
-    2. Test data paths (test-data/, test-examples/, test-reference/) are strictly read-only
-    3. test-content/ CAN be updated by pipeline when allow_markdown_write=True
-    """
+    2. All test-* paths (test-data/, test-examples/, test-reference/, test-content/) are strictly read-only
+    3. Use --use-workspace-copy to work with copies instead of originals
 
-    # Read-only path prefixes (normalized to forward slashes)
-    # NOTE: test-content/ is NOT read-only - it can be updated by pipeline with --allow-md-write
-    # Only test data/examples/reference are strictly read-only (never write)
-    READ_ONLY_PREFIXES = (
-        'test-data/',
-        'test-examples/',
-        'test-reference/',
-    )
+    Read-only enforcement is handled by src/core/path_guard.py
+    """
 
     def __init__(
         self,
@@ -62,6 +56,9 @@ class MarkdownUpdateService:
         gist_upload_mode: str = "inline-only",
         gist_target_account: str = "",
         allow_markdown_write: bool = False,
+        use_workspace_copy: bool = False,
+        workspace_root: Optional[Path] = None,
+        run_id: Optional[str] = None,
     ):
         """
         Initialize markdown update service.
@@ -73,6 +70,9 @@ class MarkdownUpdateService:
             gist_upload_mode: One of "inline-only", "upload-on-change", "upload-always"
             gist_target_account: GitHub account for new gist shortcodes
             allow_markdown_write: If True, allow markdown file writes (default: False for safety)
+            use_workspace_copy: If True, write to workspace copies for read-only paths
+            workspace_root: Root directory for workspace copies (default: artifacts/workspace)
+            run_id: Run ID for workspace isolation
         """
         self.db = db
         self.artifacts_dir = artifacts_dir or Path("artifacts/diffs")
@@ -81,42 +81,47 @@ class MarkdownUpdateService:
         self.gist_upload_mode = gist_upload_mode
         self.gist_target_account = gist_target_account
         self.allow_markdown_write = allow_markdown_write
+        self.use_workspace_copy = use_workspace_copy
+        self.workspace_root = workspace_root or Path("artifacts/workspace")
+        self.run_id = run_id or "default"
 
-    def _is_read_only_path(self, file_path: str) -> bool:
+    def _get_write_target_path(self, file_path: str) -> str:
         """
-        Check if a file path is in a read-only test directory.
+        Get the target path for writing (original or workspace copy).
 
         Args:
-            file_path: Path to check (absolute or relative)
+            file_path: Original file path
 
         Returns:
-            True if path is in a read-only directory
+            Target path for writing (workspace copy if enabled and path is read-only)
         """
-        # Normalize to forward slashes for consistent checking
-        normalized = Path(file_path).as_posix()
+        # If workspace copy mode is enabled and path is read-only, use workspace
+        if self.use_workspace_copy and is_read_only_path(file_path):
+            workspace_path = get_workspace_path(
+                file_path,
+                self.workspace_root,
+                self.run_id
+            )
+            return str(workspace_path)
 
-        # Check both absolute and relative forms
-        for prefix in self.READ_ONLY_PREFIXES:
-            if normalized.startswith(prefix) or f"/{prefix}" in normalized:
-                return True
-
-        return False
+        return file_path
 
     def _validate_write_allowed(self, file_path: str) -> None:
         """
         Validate that writing to this file is allowed.
 
+        Uses centralized path_guard module for read-only enforcement.
+
         Raises:
-            ReadOnlyPathError: If attempting to write to test-* paths
+            ReadOnlyPathError: If attempting to write to test-* paths (via PermissionError)
             MarkdownWriteGuardError: If markdown writes are not authorized
         """
-        # Check read-only paths first (highest priority)
-        if self._is_read_only_path(file_path):
-            raise ReadOnlyPathError(
-                f"WRITE BLOCKED: Cannot write to read-only test path: {file_path}\n"
-                f"Read-only prefixes: {', '.join(self.READ_ONLY_PREFIXES)}\n"
-                f"Test paths are strictly read-only to prevent cheating by manual edits."
-            )
+        # Check read-only paths first (highest priority) - uses centralized path_guard
+        try:
+            assert_write_allowed(file_path, reason="markdown update")
+        except PermissionError as e:
+            # Re-raise as ReadOnlyPathError for backward compatibility
+            raise ReadOnlyPathError(str(e))
 
         # Check markdown write guard
         if not self.allow_markdown_write:
@@ -144,9 +149,9 @@ class MarkdownUpdateService:
             Tuple of (success, list of changes made)
         """
         # Get all verified examples for this file
-        examples = self.db.get_examples_by_file(file_path)
+        examples = self.db.get_examples_by_file(file_path, run_id=self.run_id)
         verified_examples = [
-            e for e in examples 
+            e for e in examples
             if e.status in (ExampleStatus.VERIFIED, ExampleStatus.MD_UPDATED)
             and e.verified_code
         ]
@@ -189,17 +194,27 @@ class MarkdownUpdateService:
 
         # Write updated file if not dry run
         if not dry_run:
+            # Determine target path (original or workspace copy)
+            target_path = self._get_write_target_path(file_path)
+
             # SAFETY: Validate write is allowed before modifying file
-            self._validate_write_allowed(file_path)
+            self._validate_write_allowed(target_path)
 
             try:
-                with open(file_path, 'w', encoding='utf-8') as f:
+                # Ensure parent directory exists
+                Path(target_path).parent.mkdir(parents=True, exist_ok=True)
+
+                with open(target_path, 'w', encoding='utf-8') as f:
                     f.write(updated_content)
-                
+
+                # Log workspace redirect if applicable
+                if target_path != file_path:
+                    logger.info(f"Wrote to workspace copy: {target_path} (original: {file_path})")
+
                 # Update example statuses
                 for example in verified_examples:
-                    self.db.update_example_status(example.example_id, ExampleStatus.MD_UPDATED)
-                    
+                    self.db.update_example_status(example.example_id, ExampleStatus.MD_UPDATED, run_id=self.run_id)
+
                     # Record edit
                     edit = MarkdownEdit(
                         edit_id=str(uuid.uuid4())[:8],
@@ -209,7 +224,7 @@ class MarkdownUpdateService:
                         edit_type="inline_replace" if example.source_type == SourceType.INLINE else "gist_replace",
                         diff_ref=diff_ref,
                     )
-                    self.db.save_markdown_edit(edit)
+                    self.db.save_markdown_edit(edit, run_id=self.run_id)
                     
             except Exception as e:
                 logger.error(f"Failed to write {file_path}: {e}")
@@ -482,7 +497,7 @@ class MarkdownUpdateService:
         }
         
         # Get all verified examples for family
-        examples = self.db.get_examples_by_family(family, ExampleStatus.VERIFIED)
+        examples = self.db.get_examples_by_family(family, ExampleStatus.VERIFIED, run_id=self.run_id)
         
         # Group by file
         files_to_update = {}

@@ -15,6 +15,7 @@ import fnmatch
 from ..core.models import ExampleRecord, ExampleStatus, SourceType, Location, GistInfo
 from ..core.database import Database
 from ..core.config import FamilyConfig, DiscoveryPatternsConfig, GlobalConfig
+from ..pipeline.app_context_classifier import classify_app_context
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,9 @@ class DiscoveryService:
     Service for discovering and extracting code examples from markdown files.
     Implements the A_discovery_extraction phase from the spec.
     """
+
+    # Task 1: Minimum meaningful lines threshold
+    MIN_MEANINGFUL_LINES = 3
 
     def __init__(
         self,
@@ -75,6 +79,8 @@ class DiscoveryService:
             'filtered_gists': 0,
         }
         self._legacy_schema: Optional[bool] = None
+        # Task 1: Track skipped candidates for reporting
+        self.skipped_candidates: List[Dict[str, Any]] = []
 
         # Get effective discovery patterns (family overrides global)
         self.discovery_patterns = self._get_effective_discovery_patterns()
@@ -151,6 +157,66 @@ class DiscoveryService:
         validatable_lower = [lang.lower() for lang in self.discovery_patterns.validatable_languages]
         return normalized.lower() in validatable_lower
 
+    def _is_meaningful_code(self, code: str) -> Tuple[bool, str]:
+        """
+        Check if code is meaningful (not empty, whitespace-only, or comment-only).
+
+        Task 1: Skip empty/incomplete snippets from the denominator.
+
+        Args:
+            code: Code content to check
+
+        Returns:
+            Tuple of (is_meaningful: bool, reason: str if not meaningful)
+        """
+        if not code or not code.strip():
+            return False, "empty_code"
+
+        lines = code.strip().split('\n')
+
+        # Count non-empty, non-comment lines
+        meaningful_lines = []
+        for line in lines:
+            stripped = line.strip()
+            # Skip empty lines
+            if not stripped:
+                continue
+            # Skip single-line comments
+            if stripped.startswith('//') or stripped.startswith('#'):
+                continue
+            # Skip block comment markers
+            if stripped.startswith('/*') or stripped.startswith('*/') or stripped.startswith('*'):
+                continue
+            meaningful_lines.append(stripped)
+
+        if len(meaningful_lines) < self.MIN_MEANINGFUL_LINES:
+            return False, f"snippet_too_incomplete (only {len(meaningful_lines)} meaningful lines)"
+
+        return True, ""
+
+    def _record_skipped_candidate(
+        self,
+        file_path: str,
+        line_number: int,
+        reason: str,
+        code_preview: str = ""
+    ) -> None:
+        """
+        Record a skipped candidate for the skipped_candidates artifact.
+
+        Args:
+            file_path: Path to the source file
+            line_number: Line number where the code block starts
+            reason: Reason for skipping
+            code_preview: First 100 chars of code (for debugging)
+        """
+        self.skipped_candidates.append({
+            'file_path': file_path,
+            'line_number': line_number,
+            'reason': reason,
+            'code_preview': code_preview[:100] if code_preview else '',
+        })
+
     def filter_snippet(self, code: str, config: Optional[DiscoveryPatternsConfig] = None) -> Tuple[bool, str]:
         """
         Filter snippet based on content rules.
@@ -166,6 +232,12 @@ class DiscoveryService:
             config = self.filtering_config
 
         self.filter_stats['total_checked'] += 1
+
+        # Task 1: First check if code is meaningful (not empty/comment-only)
+        is_meaningful, reason = self._is_meaningful_code(code)
+        if not is_meaningful:
+            self._track_filter_reason(reason)
+            return False, reason
 
         # Line count check
         lines = code.strip().split('\n')
@@ -215,6 +287,56 @@ class DiscoveryService:
         if reason not in self.filter_stats['reasons']:
             self.filter_stats['reasons'][reason] = 0
         self.filter_stats['reasons'][reason] += 1
+
+    def export_skipped_candidates(self, run_id: str, artifacts_dir: Path) -> Path:
+        """
+        Export skipped candidates to JSON artifact.
+
+        Task 1: Creates artifacts/runs/<run_id>/skipped_candidates.json
+
+        Args:
+            run_id: Current run ID
+            artifacts_dir: Base artifacts directory
+
+        Returns:
+            Path to the exported JSON file
+        """
+        import json
+        from datetime import datetime
+
+        output_dir = artifacts_dir / "runs" / run_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        output_path = output_dir / "skipped_candidates.json"
+
+        # Group by reason for summary
+        reason_counts: Dict[str, int] = {}
+        for candidate in self.skipped_candidates:
+            reason = candidate.get('reason', 'unknown')
+            # Normalize reason for counting (remove variable parts)
+            if reason.startswith('snippet_too_incomplete'):
+                base_reason = 'snippet_too_incomplete'
+            else:
+                base_reason = reason
+            reason_counts[base_reason] = reason_counts.get(base_reason, 0) + 1
+
+        data = {
+            'run_id': run_id,
+            'generated_at': datetime.utcnow().isoformat(),
+            'total_skipped': len(self.skipped_candidates),
+            'reason_summary': reason_counts,
+            'skipped_candidates': self.skipped_candidates,
+        }
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+
+        logger.info(f"Exported {len(self.skipped_candidates)} skipped candidates to {output_path}")
+        return output_path
+
+    def clear_skipped_candidates(self) -> None:
+        """Clear skipped candidates list for a new run."""
+        self.skipped_candidates = []
 
     def get_filter_stats(self) -> Dict[str, Any]:
         """Get filter statistics."""
@@ -333,16 +455,18 @@ class DiscoveryService:
         family_config: Optional[FamilyConfig] = None,
         max_files: Optional[int] = None,
         max_pages: Optional[int] = None,
+        run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Discover all code examples for a family.
-        
+
         Args:
             family: Family identifier
             family_config: Family configuration
             max_files: Maximum files to process (for testing)
             max_pages: Alias for max_files (legacy compatibility)
-            
+            run_id: Run identifier for run-scoped tracking
+
         Returns:
             Statistics dictionary
         """
@@ -392,9 +516,9 @@ class DiscoveryService:
                     stats['gist_examples'] += sum(1 for e in examples if e.source_type != SourceType.INLINE)
                 else:
                     for example in examples:
-                        self.db.save_example(example)
+                        self.db.save_example(example, run_id=run_id)
                         stats['examples_found'] += 1
-                        
+
                         if example.source_type == SourceType.INLINE:
                             stats['inline_examples'] += 1
                         else:
@@ -582,6 +706,13 @@ class DiscoveryService:
 
                     if not should_include:
                         logger.debug(f"Filtered out snippet at {file_path}:{code_start_line} - {filter_reason}")
+                        # Task 1: Record skipped candidate for artifact
+                        self._record_skipped_candidate(
+                            file_path=file_path,
+                            line_number=code_start_line,
+                            reason=filter_reason,
+                            code_preview=code_content
+                        )
                         block_index += 1
                         continue
 
@@ -592,6 +723,9 @@ class DiscoveryService:
                     # code_start_line is 1-indexed, but we need 0-indexed for array access
                     fence_start_idx = code_start_line - 1  # Index of the ``` line
                     section_heading, description_context = self._extract_context(lines, fence_start_idx)
+
+                    # Classify application context (Phase-2 Gate B: prevent cross-context substitution)
+                    app_context = classify_app_context(code_content)
 
                     example = ExampleRecord(
                         family=family,
@@ -609,6 +743,7 @@ class DiscoveryService:
                         section_heading=section_heading or None,
                         description_context=description_context or None,
                         topic=topic or None,
+                        app_context=app_context.value,
                     )
                     # Generate ID is called in model_post_init
                     examples.append(example)

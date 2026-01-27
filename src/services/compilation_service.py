@@ -21,6 +21,11 @@ from ..core.models import (
 from ..core.database import Database
 from ..core.config import FamilyConfig
 
+try:
+    from .context_harness_service import ContextHarnessService
+except ImportError:
+    ContextHarnessService = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,19 +115,22 @@ class CompilationService:
         db: Database,
         workspace_dir: Optional[Path] = None,
         artifacts_dir: Optional[Path] = None,
+        context_harness: Optional['ContextHarnessService'] = None,
     ):
         """
         Initialize compilation service.
-        
+
         Args:
             db: Database instance
             workspace_dir: Working directory for compilation
             artifacts_dir: Directory for storing compilation artifacts
+            context_harness: Context-specific build harness service (Phase-2 Gate B)
         """
         self.db = db
         self.workspace_dir = workspace_dir or Path(tempfile.gettempdir()) / "example_reviewer"
         self.artifacts_dir = artifacts_dir or self.workspace_dir / "artifacts"
-        
+        self.context_harness = context_harness
+
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
     
@@ -155,9 +163,9 @@ class CompilationService:
             # Wrap code in compilable structure
             wrapped_code = self._wrap_code(code, family_config)
             
-            # Write project files
-            self._write_project(work_dir, family_config)
-            
+            # Write project files (with app_context for Phase-2 Gate B)
+            self._write_project(work_dir, family_config, app_context=example.app_context)
+
             # Write code file
             code_path = work_dir / "Program.cs"
             code_path.write_text(wrapped_code, encoding='utf-8')
@@ -290,6 +298,19 @@ class CompilationService:
                     lines.append(f"using {using};")
                 lines.append("")
             lines.append(code)
+
+            # If no Main method exists, inject one at the end
+            if not analysis['has_main'] and not analysis.get('is_top_level', False):
+                lines.append("")
+                lines.append("// Injected entry point for compilation")
+                lines.append("public class Program")
+                lines.append("{")
+                lines.append("    public static void Main(string[] args)")
+                lines.append("    {")
+                lines.append("        // Entry point - code executed from namespace classes")
+                lines.append("    }")
+                lines.append("}")
+
             return '\n'.join(lines)
 
         # Strategy 2: Code has class but no namespace
@@ -307,6 +328,19 @@ class CompilationService:
                 lines.append("")
 
             lines.append(code)
+
+            # If no Main method exists, inject Program.Main wrapper
+            if not analysis['has_main'] and not analysis.get('is_top_level', False):
+                lines.append("")
+                lines.append("// Injected entry point for compilation")
+                lines.append("public class Program")
+                lines.append("{")
+                lines.append("    public static void Main(string[] args)")
+                lines.append("    {")
+                lines.append("        // Entry point - instantiate and use classes above")
+                lines.append("    }")
+                lines.append("}")
+
             return '\n'.join(lines)
 
         # Strategy 3: Code has Main method but no class - just add class wrapper
@@ -384,13 +418,25 @@ class CompilationService:
 
         return '\n'.join(lines)
     
-    def _write_project(self, work_dir: Path, family_config: FamilyConfig) -> None:
-        """Write .csproj file for compilation."""
+    def _write_project(
+        self,
+        work_dir: Path,
+        family_config: FamilyConfig,
+        app_context: Optional[str] = None
+    ) -> None:
+        """
+        Write .csproj file for compilation.
+
+        Args:
+            work_dir: Working directory
+            family_config: Family configuration
+            app_context: Application context (Phase-2 Gate B)
+        """
         nuget_config = family_config.nuget_config
-        
+
         # Build package references
         package_refs = []
-        
+
         if nuget_config:
             # Primary package
             primary = nuget_config.primary_package
@@ -399,7 +445,7 @@ class CompilationService:
                 package_refs.append(
                     f'    <PackageReference Include="{primary.name}" Version="{version}" />'
                 )
-            
+
             # Additional packages
             for pkg in nuget_config.additional_packages:
                 if pkg.name:
@@ -407,12 +453,20 @@ class CompilationService:
                     package_refs.append(
                         f'    <PackageReference Include="{pkg.name}" Version="{version}" />'
                     )
-        
+
+        # Phase-2 Gate B: Use context harness for project template if available
+        if self.context_harness is not None:
+            project_template = self.context_harness.get_project_template(app_context)
+            logger.debug(f"Using context-specific project template for app_context={app_context}")
+        else:
+            project_template = self.PROJECT_TEMPLATE
+            logger.debug("Using default console project template")
+
         # Write project file
-        project_content = self.PROJECT_TEMPLATE.format(
+        project_content = project_template.format(
             package_refs='\n'.join(package_refs)
         )
-        
+
         (work_dir / "Compilation.csproj").write_text(project_content, encoding='utf-8')
     
     def _run_build(self, work_dir: Path, family_config: FamilyConfig) -> CompileResult:
@@ -662,10 +716,11 @@ class CompilationService:
         output_code: Optional[str] = None,
         llm_request: Optional[str] = None,
         llm_response: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> str:
         """
         Record a compilation attempt in the database.
-        
+
         Args:
             example_id: Example ID
             compile_result: Compilation result
@@ -673,7 +728,8 @@ class CompilationService:
             output_code: Fixed code (if any)
             llm_request: LLM request (if applicable)
             llm_response: LLM response (if applicable)
-            
+            run_id: Run ID for run-scoped tracking (optional)
+
         Returns:
             Attempt ID
         """
@@ -711,8 +767,8 @@ class CompilationService:
             error_messages=compile_result.errors,
             warnings=compile_result.warnings,
         )
-        
-        self.db.save_compile_attempt(attempt)
+
+        self.db.save_compile_attempt(attempt, run_id=run_id)
         return attempt_id
     
     def _store_artifact(self, filename: str, content: str) -> str:

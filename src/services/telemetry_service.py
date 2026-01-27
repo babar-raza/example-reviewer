@@ -219,6 +219,57 @@ class TelemetryService:
 
         return self.update_run(event_id, updates)
 
+    def emit_event(
+        self,
+        run_id: str,
+        event_type: str,
+        family: str,
+        phase: Optional[str] = None,
+        example_id: Optional[str] = None,
+        duration_ms: Optional[int] = None,
+        success: bool = True,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Emit a telemetry event to the database.
+
+        Args:
+            run_id: Run identifier
+            event_type: Type of event (e.g., 'timeout_exceeded', 'compilation_success')
+            family: Product family
+            phase: Pipeline phase
+            example_id: Example identifier
+            duration_ms: Duration in milliseconds
+            success: Whether operation succeeded
+            metadata: Additional metadata
+
+        Returns:
+            event_id
+        """
+        from ..core.models import TelemetryEvent
+        import uuid
+
+        event = TelemetryEvent(
+            event_id=str(uuid.uuid4()),
+            run_id=run_id,
+            family=family,
+            event_type=event_type,
+            phase=phase,
+            example_id=example_id,
+            duration_ms=duration_ms,
+            success=success,
+            metadata=metadata or {},
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        try:
+            self.db.save_telemetry_event(event)
+            logger.debug(f"Emitted telemetry event: {event_type} for example {example_id}")
+            return event.event_id
+        except Exception as e:
+            logger.warning(f"Failed to emit telemetry event: {e}")
+            return ""
+
     def associate_commit(
         self,
         event_id: str,

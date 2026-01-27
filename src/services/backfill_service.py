@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from .discovery_service import GistResolver
+from ..core.path_guard import assert_write_allowed, is_read_only_path
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,17 @@ class BackfillService:
 
             # Check if test data already exists
             local_path = Path(family_config.test_data.local_path)
+
+            # CRITICAL: If local_path is in a read-only directory, redirect to artifacts/backfill
+            original_path = local_path
+            if is_read_only_path(local_path):
+                # Redirect to artifacts/backfill/<family>/test-data/...
+                local_path = Path("artifacts/backfill") / family / "test-data"
+                logger.info(
+                    f"Redirecting backfill from read-only path {original_path} "
+                    f"to artifacts: {local_path}"
+                )
+
             if local_path.exists() and not force:
                 return BackfillResult(
                     success=True,
@@ -190,7 +202,8 @@ class BackfillService:
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
 
-            # Create destination directory
+            # Create destination directory (with path guard)
+            assert_write_allowed(local_path, reason=f"backfill test data for {family}")
             local_path.mkdir(parents=True, exist_ok=True)
 
             # Copy files
@@ -277,7 +290,8 @@ class BackfillService:
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
 
-            # Create cache directory
+            # Create cache directory (with path guard)
+            assert_write_allowed(cache_path, reason=f"backfill API reference cache for {family}")
             cache_path.mkdir(parents=True, exist_ok=True)
 
             # Copy from sources (currently assumes local sources)
@@ -288,7 +302,9 @@ class BackfillService:
                     if source_path.is_dir():
                         files_copied += self._copy_directory(source_path, cache_path)
                     else:
-                        shutil.copy2(source_path, cache_path / source_path.name)
+                        dest_file = cache_path / source_path.name
+                        assert_write_allowed(dest_file, reason=f"backfill API reference file {source_path.name}")
+                        shutil.copy2(source_path, dest_file)
                         files_copied += 1
                 else:
                     logger.warning(f"API reference source not found: {source}")
@@ -581,14 +597,14 @@ class BackfillService:
                 )
 
             # Check if gist support is enabled
-            if not getattr(family_config.gist, "enabled", True):
+            if not family_config.gist or not getattr(family_config.gist, "enabled", True):
                 return BackfillResult(
                     success=True,
                     target="gist_source_code",
                     source="config",
                     destination="database",
                     skipped=True,
-                    skip_reason="gist_support_disabled",
+                    skip_reason="gist_support_disabled_or_not_configured",
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
 
@@ -699,6 +715,197 @@ class BackfillService:
                 duration_seconds=(datetime.now() - start_time).total_seconds()
             )
 
+    def backfill_examples_files(
+        self,
+        family: str,
+        force: bool = False,
+    ) -> BackfillResult:
+        """
+        Backfill example files from example_repo to disk (artifacts/backfill/<family>/examples/).
+
+        Also creates an index JSON file with metadata for each example.
+
+        Args:
+            family: Family identifier
+            force: Force download even if examples exist locally
+
+        Returns:
+            BackfillResult with operation details
+        """
+        start_time = datetime.now()
+        import json
+        import hashlib
+
+        try:
+            # Load family config
+            family_config = self.config_manager.load_family_config(family)
+
+            # Destination path
+            examples_dest = Path("artifacts/backfill") / family / "examples"
+            index_path = Path("artifacts/backfill") / family / "examples-index.json"
+
+            # Check if examples already exist
+            if examples_dest.exists() and not force:
+                return BackfillResult(
+                    success=True,
+                    target="examples_files",
+                    source="local",
+                    destination=str(examples_dest),
+                    skipped=True,
+                    skip_reason="examples_files_already_exist",
+                    duration_seconds=(datetime.now() - start_time).total_seconds()
+                )
+
+            # Check if example_repo is configured
+            if not family_config.example_repo.url:
+                return BackfillResult(
+                    success=False,
+                    target="examples_files",
+                    source="example_repo",
+                    destination=str(examples_dest),
+                    error="example_repo.url not configured",
+                    duration_seconds=(datetime.now() - start_time).total_seconds()
+                )
+
+            # Check if examples_path is configured
+            if not family_config.example_repo.examples_path:
+                return BackfillResult(
+                    success=False,
+                    target="examples_files",
+                    source=family_config.example_repo.url,
+                    destination=str(examples_dest),
+                    error="example_repo.examples_path not configured",
+                    duration_seconds=(datetime.now() - start_time).total_seconds()
+                )
+
+            # Check GitPython availability
+            if not GIT_AVAILABLE:
+                return BackfillResult(
+                    success=False,
+                    target="examples_files",
+                    source=family_config.example_repo.url,
+                    destination=str(examples_dest),
+                    error="GitPython not installed - pip install gitpython",
+                    duration_seconds=(datetime.now() - start_time).total_seconds()
+                )
+
+            # Get or clone repo
+            repo_path = self._get_or_clone_repo(
+                url=family_config.example_repo.url,
+                ref=family_config.example_repo.ref,
+                family=family,
+            )
+
+            if not repo_path:
+                return BackfillResult(
+                    success=False,
+                    target="examples_files",
+                    source=family_config.example_repo.url,
+                    destination=str(examples_dest),
+                    error="Failed to clone repository",
+                    duration_seconds=(datetime.now() - start_time).total_seconds()
+                )
+
+            # Extract examples from repo
+            examples_path = repo_path / family_config.example_repo.examples_path
+            if not examples_path.exists():
+                return BackfillResult(
+                    success=False,
+                    target="examples_files",
+                    source=str(examples_path),
+                    destination=str(examples_dest),
+                    error=f"examples_path not found in repo: {family_config.example_repo.examples_path}",
+                    duration_seconds=(datetime.now() - start_time).total_seconds()
+                )
+
+            # Create destination directory (with path guard)
+            assert_write_allowed(examples_dest, reason=f"backfill examples files for {family}")
+            examples_dest.mkdir(parents=True, exist_ok=True)
+
+            # Copy .cs files and build index
+            index_entries = []
+            files_copied = 0
+
+            # Find all C# example files (sorted deterministically)
+            cs_files = sorted(examples_path.rglob("*.cs"), key=lambda p: str(p).lower())
+
+            for cs_file in cs_files:
+                try:
+                    # Calculate relative path
+                    relative_path = cs_file.relative_to(examples_path)
+                    dest_file = examples_dest / relative_path
+
+                    # Create parent directory if needed
+                    assert_write_allowed(dest_file, reason=f"backfill example file {cs_file.name}")
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+
+                    # Copy file
+                    shutil.copy2(cs_file, dest_file)
+                    files_copied += 1
+
+                    # Read file for index metadata
+                    code = cs_file.read_text(encoding='utf-8')
+
+                    # Generate stable ID from file path
+                    file_id = hashlib.sha256(str(relative_path).encode()).hexdigest()[:16]
+
+                    # Basic tag inference (can be enhanced later)
+                    tags = []
+                    if "compression" in code.lower():
+                        tags.append("compression")
+                    if "extract" in code.lower():
+                        tags.append("extraction")
+                    if "encrypt" in code.lower():
+                        tags.append("encryption")
+                    if "password" in code.lower():
+                        tags.append("password")
+
+                    # Add to index
+                    index_entries.append({
+                        "id": file_id,
+                        "path": str(relative_path).replace("\\", "/"),
+                        "class_name": cs_file.stem,
+                        "tags": tags,
+                        "size_bytes": cs_file.stat().st_size,
+                    })
+
+                except Exception as e:
+                    logger.warning(f"Failed to copy example file {cs_file}: {e}")
+
+            # Write index JSON
+            assert_write_allowed(index_path, reason=f"write examples index for {family}")
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(index_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "family": family,
+                    "source": family_config.example_repo.url,
+                    "generated_at": datetime.now().isoformat(),
+                    "total_examples": len(index_entries),
+                    "examples": index_entries
+                }, f, indent=2)
+
+            logger.info(f"Backfilled {files_copied} example files for {family} to {examples_dest}")
+
+            return BackfillResult(
+                success=True,
+                target="examples_files",
+                source=family_config.example_repo.url,
+                destination=str(examples_dest),
+                files_copied=files_copied,
+                duration_seconds=(datetime.now() - start_time).total_seconds()
+            )
+
+        except Exception as e:
+            logger.exception(f"Error backfilling example files for {family}")
+            return BackfillResult(
+                success=False,
+                target="examples_files",
+                source="",
+                destination="",
+                error=str(e),
+                duration_seconds=(datetime.now() - start_time).total_seconds()
+            )
+
     def _copy_directory(self, source: Path, destination: Path) -> int:
         """
         Copy all files from source to destination recursively.
@@ -720,7 +927,8 @@ class BackfillService:
                     relative_path = item.relative_to(source)
                     dest_path = destination / relative_path
 
-                    # Create parent directory if needed
+                    # Create parent directory if needed (with path guard)
+                    assert_write_allowed(dest_path, reason="backfill directory copy")
                     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
                     # Copy file
@@ -731,3 +939,127 @@ class BackfillService:
             logger.error(f"Error copying directory {source} to {destination}: {e}")
 
         return files_copied
+
+    def backfill_rar_fixtures(
+        self,
+        family: str,
+        force: bool = False,
+    ) -> BackfillResult:
+        """
+        Task 3: Backfill RAR fixtures from example_repo.
+
+        Attempts to fetch RAR files from the example repo's test data path:
+        - plrabn12.rar
+        - encrypted.rar
+
+        If unavailable, marks them as requiring substitution.
+
+        Args:
+            family: Family identifier
+            force: Force download even if files exist
+
+        Returns:
+            BackfillResult with operation details
+        """
+        start_time = datetime.now()
+        import requests
+
+        try:
+            # Load family config
+            family_config = self.config_manager.load_family_config(family)
+
+            # Destination path
+            rar_dest = Path("artifacts/backfill") / family / "test-data"
+            rar_dest.mkdir(parents=True, exist_ok=True)
+
+            # RAR fixtures to fetch
+            rar_fixtures = ["plrabn12.rar", "encrypted.rar"]
+            files_fetched = 0
+            errors = []
+
+            # Check if example_repo is configured
+            if not family_config.example_repo.url:
+                return BackfillResult(
+                    success=False,
+                    target="rar_fixtures",
+                    source="example_repo",
+                    destination=str(rar_dest),
+                    error="example_repo.url not configured",
+                    duration_seconds=(datetime.now() - start_time).total_seconds()
+                )
+
+            # Construct raw URL for GitHub
+            # Example: https://raw.githubusercontent.com/aspose-zip/Aspose.ZIP-for-.NET/master/Examples/Data/
+            repo_url = family_config.example_repo.url
+            ref = family_config.example_repo.ref
+            test_data_path = family_config.example_repo.test_data_path
+
+            # Parse GitHub URL to raw URL
+            if "github.com" in repo_url:
+                # https://github.com/owner/repo -> https://raw.githubusercontent.com/owner/repo
+                raw_base = repo_url.replace("github.com", "raw.githubusercontent.com")
+                raw_base = raw_base.rstrip(".git")
+            else:
+                logger.warning(f"Non-GitHub repo URL, cannot construct raw URL: {repo_url}")
+                return BackfillResult(
+                    success=False,
+                    target="rar_fixtures",
+                    source=repo_url,
+                    destination=str(rar_dest),
+                    error="Only GitHub repos supported for raw file fetching",
+                    duration_seconds=(datetime.now() - start_time).total_seconds()
+                )
+
+            for rar_file in rar_fixtures:
+                dest_file = rar_dest / rar_file
+
+                if dest_file.exists() and not force:
+                    logger.debug(f"RAR fixture already exists: {rar_file}")
+                    files_fetched += 1
+                    continue
+
+                # Construct raw URL for this file
+                raw_url = f"{raw_base}/{ref}/{test_data_path}/{rar_file}"
+                logger.info(f"Attempting to fetch RAR fixture: {raw_url}")
+
+                try:
+                    response = requests.get(raw_url, timeout=30)
+                    if response.status_code == 200 and len(response.content) > 0:
+                        # Verify it's not an error page
+                        if response.content[:4] == b'Rar!' or response.content[:7] == b'Rar!\x1a\x07\x00':
+                            # Valid RAR file
+                            assert_write_allowed(dest_file, reason=f"backfill RAR fixture {rar_file}")
+                            dest_file.write_bytes(response.content)
+                            files_fetched += 1
+                            logger.info(f"Successfully fetched RAR fixture: {rar_file}")
+                        else:
+                            # Not a valid RAR file
+                            errors.append(f"{rar_file}: Not a valid RAR file (invalid header)")
+                    else:
+                        errors.append(f"{rar_file}: HTTP {response.status_code}")
+                except requests.RequestException as e:
+                    errors.append(f"{rar_file}: {str(e)}")
+
+            return BackfillResult(
+                success=files_fetched > 0 or len(errors) == 0,
+                target="rar_fixtures",
+                source=repo_url,
+                destination=str(rar_dest),
+                files_copied=files_fetched,
+                error="; ".join(errors) if errors else None,
+                duration_seconds=(datetime.now() - start_time).total_seconds(),
+                items_processed=len(rar_fixtures),
+                items_downloaded=files_fetched,
+                items_failed=len(errors),
+            )
+
+        except Exception as e:
+            logger.exception(f"Error backfilling RAR fixtures for {family}")
+            return BackfillResult(
+                success=False,
+                target="rar_fixtures",
+                source="",
+                destination="",
+                error=str(e),
+                duration_seconds=(datetime.now() - start_time).total_seconds()
+            )

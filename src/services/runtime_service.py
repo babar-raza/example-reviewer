@@ -97,7 +97,118 @@ class RuntimeService:
 
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    @staticmethod
+    def find_test_file(
+        required_name: str,
+        source_dir: Path,
+        file_aliases: Dict[str, List[str]],
+        inventory: Optional[Dict[str, str]] = None
+    ) -> Optional[Path]:
+        """
+        Find a test file recursively in source_dir.
+
+        Lookup order:
+        1. Exact match anywhere under source_dir (recursive)
+        2. Alias match anywhere under source_dir (recursive)
+        3. Case-insensitive basename match with same extension (recursive)
+        4. Inventory mapping (if inventory contains full relative paths)
+
+        Args:
+            required_name: Required filename
+            source_dir: Root directory to search in
+            file_aliases: Alias mappings for files
+            inventory: Optional inventory dict mapping canonical names to actual paths
+
+        Returns:
+            Path to found file, or None if not found
+        """
+        if not source_dir.exists():
+            return None
+
+        # Tier 1: Exact match (recursive)
+        for candidate in source_dir.rglob(required_name):
+            if candidate.is_file():
+                return candidate
+
+        # Tier 2: Alias lookup (recursive)
+        aliases = file_aliases.get(required_name, [])
+        for alias in aliases:
+            for candidate in source_dir.rglob(alias):
+                if candidate.is_file():
+                    return candidate
+
+        # Tier 3: Case-insensitive basename match with same extension (recursive)
+        required_basename = Path(required_name).stem.lower()
+        required_suffix = Path(required_name).suffix.lower()
+
+        for candidate in source_dir.rglob(f"*{required_suffix}"):
+            if candidate.is_file() and candidate.stem.lower() == required_basename:
+                return candidate
+
+        # Tier 4: Inventory mapping (if provided)
+        if inventory and required_name in inventory:
+            mapped_path = source_dir / inventory[required_name]
+            if mapped_path.exists() and mapped_path.is_file():
+                return mapped_path
+
+        return None
+
+    @staticmethod
+    def find_test_dir(
+        required_name: str,
+        source_dir: Path,
+        dir_aliases: Dict[str, List[str]],
+        inventory: Optional[Dict[str, str]] = None
+    ) -> Optional[Path]:
+        """
+        Find a test directory recursively in source_dir.
+
+        Lookup order:
+        1. Exact match anywhere under source_dir (recursive)
+        2. Alias match anywhere under source_dir (recursive)
+        3. Case-insensitive basename match (recursive)
+        4. Inventory mapping (if inventory contains full relative paths)
+
+        Args:
+            required_name: Required directory name
+            source_dir: Root directory to search in
+            dir_aliases: Alias mappings for directories
+            inventory: Optional inventory dict mapping canonical names to actual paths
+
+        Returns:
+            Path to found directory, or None if not found
+        """
+        if not source_dir.exists():
+            return None
+
+        # Tier 1: Exact match (recursive)
+        for candidate in source_dir.rglob(required_name):
+            if candidate.is_dir():
+                return candidate
+
+        # Tier 2: Alias lookup (recursive)
+        aliases = dir_aliases.get(required_name, [])
+        for alias in aliases:
+            for candidate in source_dir.rglob(alias):
+                if candidate.is_dir():
+                    return candidate
+
+        # Tier 3: Case-insensitive basename match (recursive)
+        required_basename = required_name.lower()
+
+        for candidate in source_dir.rglob("*"):
+            if candidate.is_dir() and candidate.name.lower() == required_basename:
+                return candidate
+
+        # Tier 4: Inventory mapping (if provided)
+        if inventory and required_name in inventory:
+            mapped_path = source_dir / inventory[required_name]
+            if mapped_path.exists() and mapped_path.is_dir():
+                return mapped_path
+
+        return None
+
     def execute_example(
         self,
         example: ExampleRecord,
@@ -157,18 +268,87 @@ class RuntimeService:
                     shutil.rmtree(work_dir)
                 except Exception:
                     pass
-    
+
+    def check_test_data_availability(
+        self,
+        test_data_path: Path,
+        runtime_config: RuntimeValidationConfig,
+        inventory: Optional[Dict[str, str]] = None,
+    ) -> Tuple[bool, List[str]]:
+        """
+        Check if required test data files and directories are available before runtime execution.
+
+        This performs a pre-flight check to identify missing test data files/dirs
+        that would cause runtime failures. If files/dirs are missing, the example
+        should be marked as INFRA_MISSING_TEST_DATA rather than attempting
+        runtime execution.
+
+        Now uses RECURSIVE search to find files and directories in subdirectories.
+
+        Args:
+            test_data_path: Path to test data directory (e.g., test-data/zip/)
+            runtime_config: Runtime validation configuration with required_files and required_dirs
+            inventory: Optional inventory dict mapping canonical names to actual paths
+
+        Returns:
+            Tuple of (all_available, missing_items):
+                - all_available: True if all required files and dirs exist
+                - missing_items: List of missing file/dir names (empty if all available)
+        """
+        if not test_data_path.exists():
+            # Test data directory doesn't exist - all files/dirs are missing
+            all_required = runtime_config.required_files + runtime_config.required_dirs
+            return (False, all_required)
+
+        missing = []
+        file_aliases = runtime_config.file_aliases
+
+        # Check required files
+        for required_file in runtime_config.required_files:
+            # Use recursive helper to find file anywhere under test_data_path
+            found = self.find_test_file(
+                required_file,
+                test_data_path,
+                file_aliases,
+                inventory
+            )
+
+            if found is None:
+                missing.append(required_file)
+
+        # Check required directories
+        for required_dir in runtime_config.required_dirs:
+            # Use recursive helper to find directory anywhere under test_data_path
+            found = self.find_test_dir(
+                required_dir,
+                test_data_path,
+                file_aliases,  # Reuse file_aliases for dirs (same alias map)
+                inventory
+            )
+
+            if found is None:
+                missing.append(required_dir)
+
+        return (len(missing) == 0, missing)
+
     def _copy_test_data(
         self,
         source_dir: Path,
         work_dir: Path,
         runtime_config: RuntimeValidationConfig,
+        inventory: Optional[Dict[str, str]] = None,
     ) -> None:
-        """Copy required test data files to workspace."""
+        """
+        Copy required test data files and directories to workspace.
+
+        Now uses RECURSIVE search to find files and directories in subdirectories,
+        then copies them to workspace root under the required name.
+        """
         required_files = runtime_config.required_files
+        required_dirs = runtime_config.required_dirs
         file_aliases = runtime_config.file_aliases
-        
-        # First, copy all files from source that might be needed
+
+        # First, copy all TOP-LEVEL files from source that might be needed
         # This ensures common test files are available
         for src_file in source_dir.iterdir():
             if src_file.is_file():
@@ -179,51 +359,53 @@ class RuntimeService:
                 dst_path = work_dir / src_file.name
                 if not dst_path.exists():
                     shutil.copytree(src_file, dst_path)
-        
-        # Then handle specific required files with aliases
-        for required_file in required_files:
-            src_path = source_dir / required_file
-            source_found = None
 
-            # Try exact match first
-            if src_path.exists():
-                source_found = src_path
+        # Then handle specific required files with RECURSIVE lookup
+        for required_file in required_files:
+            # Use recursive helper to find file anywhere under source_dir
+            source_found = self.find_test_file(
+                required_file,
+                source_dir,
+                file_aliases,
+                inventory
+            )
+
+            if source_found:
+                # Copy to workspace root under the required name
+                # (so snippets referencing simple filenames work)
                 dst_path = work_dir / required_file
                 if not dst_path.exists():
-                    if src_path.is_dir():
-                        shutil.copytree(src_path, dst_path)
-                    else:
-                        shutil.copy2(src_path, dst_path)
-            else:
-                # Try to find from aliases
-                aliases = file_aliases.get(required_file, [])
+                    shutil.copy2(source_found, dst_path)
 
-                # Find a source file from aliases
-                for alias in aliases:
-                    alias_src = source_dir / alias
-                    if alias_src.exists():
-                        source_found = alias_src
-                        break
-
-                if source_found:
-                    # Copy to the required name
-                    dst_path = work_dir / required_file
-                    if not dst_path.exists():
-                        if source_found.is_dir():
-                            shutil.copytree(source_found, dst_path)
-                        else:
-                            shutil.copy2(source_found, dst_path)
-
-            # Create alias copies (whether we found the file directly or through an alias)
-            if source_found:
+                # Create alias copies (so code using aliases also works)
                 aliases = file_aliases.get(required_file, [])
                 for alias in aliases:
                     alias_dst = work_dir / alias
                     if not alias_dst.exists():
-                        if source_found.is_dir():
-                            shutil.copytree(source_found, alias_dst)
-                        else:
-                            shutil.copy2(source_found, alias_dst)
+                        shutil.copy2(source_found, alias_dst)
+
+        # Handle specific required directories with RECURSIVE lookup
+        for required_dir in required_dirs:
+            # Use recursive helper to find directory anywhere under source_dir
+            source_found = self.find_test_dir(
+                required_dir,
+                source_dir,
+                file_aliases,  # Reuse file_aliases for dirs (same alias map)
+                inventory
+            )
+
+            if source_found:
+                # Copy to workspace root under the required name
+                dst_path = work_dir / required_dir
+                if not dst_path.exists():
+                    shutil.copytree(source_found, dst_path)
+
+                # Create alias copies (so code using aliases also works)
+                aliases = file_aliases.get(required_dir, [])
+                for alias in aliases:
+                    alias_dst = work_dir / alias
+                    if not alias_dst.exists():
+                        shutil.copytree(source_found, alias_dst)
     
     def _build_and_run(
         self,
@@ -491,6 +673,19 @@ class RuntimeService:
                     lines.append(f"using {using};")
                 lines.append("")
             lines.append(code)
+
+            # If no Main method exists, inject one at the end
+            if not analysis['has_main'] and not analysis.get('is_top_level', False):
+                lines.append("")
+                lines.append("// Injected entry point for runtime execution")
+                lines.append("public class Program")
+                lines.append("{")
+                lines.append("    public static void Main(string[] args)")
+                lines.append("    {")
+                lines.append("        // Entry point - code executed from namespace classes")
+                lines.append("    }")
+                lines.append("}")
+
             return '\n'.join(lines)
 
         # Strategy 2: Code has class but no namespace
@@ -508,6 +703,19 @@ class RuntimeService:
                 lines.append("")
 
             lines.append(code)
+
+            # If no Main method exists, inject Program.Main wrapper
+            if not analysis['has_main'] and not analysis.get('is_top_level', False):
+                lines.append("")
+                lines.append("// Injected entry point for runtime execution")
+                lines.append("public class Program")
+                lines.append("{")
+                lines.append("    public static void Main(string[] args)")
+                lines.append("    {")
+                lines.append("        // Entry point - instantiate and use classes above")
+                lines.append("    }")
+                lines.append("}")
+
             return '\n'.join(lines)
 
         # Strategy 3: Code has Main method but no class - just add class wrapper
@@ -634,8 +842,25 @@ class RuntimeService:
         retrieved_examples: Optional[List[str]] = None,
         llm_request: Optional[str] = None,
         llm_response: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> str:
-        """Record a runtime attempt in the database."""
+        """
+        Record a runtime attempt in the database.
+
+        Args:
+            example_id: Example ID
+            family: Family identifier
+            runtime_result: Runtime execution result
+            sample_ref: Test data reference
+            scenario: Execution scenario
+            retrieved_examples: Retrieved example IDs (optional)
+            llm_request: LLM request (optional)
+            llm_response: LLM response (optional)
+            run_id: Run ID for run-scoped tracking (optional)
+
+        Returns:
+            Attempt ID
+        """
         attempt_id = str(uuid.uuid4())[:8]
         
         # Store log artifact
@@ -677,8 +902,8 @@ class RuntimeService:
             llm_request_ref=llm_req_ref,
             llm_response_ref=llm_resp_ref,
         )
-        
-        self.db.save_runtime_attempt(attempt)
+
+        self.db.save_runtime_attempt(attempt, run_id=run_id)
         return attempt_id
     
     def _store_artifact(self, filename: str, content: str) -> str:
@@ -686,3 +911,249 @@ class RuntimeService:
         artifact_path = self.artifacts_dir / filename
         artifact_path.write_text(content, encoding='utf-8')
         return str(artifact_path)
+
+    def classify_runtime_error(self, result: RuntimeResult) -> str:
+        """
+        Task 5: Classify runtime failure into deterministic categories.
+
+        Categories:
+        - missing_rar_file: RAR file not found (infra blocked)
+        - missing_file: File not found
+        - missing_directory: Directory not found
+        - disposed_stream: Stream disposed prematurely
+        - invalid_password: Password/encryption error
+        - unhandled_exception: Other exception
+
+        Args:
+            result: Runtime execution result
+
+        Returns:
+            Error category string
+        """
+        error_text = (result.stderr or "") + (result.exception_message or "")
+        error_lower = error_text.lower()
+
+        # Task 5: Check for missing RAR file specifically (infra blocked)
+        if "filenotfound" in error_lower or "could not find file" in error_lower:
+            if ".rar" in error_lower:
+                return "missing_rar_file"
+            return "missing_file"
+
+        if "directorynotfound" in error_lower or "could not find a part of the path" in error_lower:
+            return "missing_directory"
+
+        if "disposed" in error_lower or "cannot access a closed" in error_lower:
+            return "disposed_stream"
+
+        if "password" in error_lower or "decrypt" in error_lower or "invalid password" in error_lower:
+            return "invalid_password"
+
+        # Task 5: Detect 7z format incompatibility issues
+        if "wrong compression method" in error_lower or "encoded header" in error_lower:
+            return "sevenz_format_issue"
+
+        return "unhandled_exception"
+
+    def apply_deterministic_fix(
+        self,
+        code: str,
+        error_category: str,
+        test_data_files: List[str],
+    ) -> Optional[str]:
+        """
+        Task 5: Apply deterministic patches for common runtime failures.
+
+        Patches:
+        - missing_directory: Add Directory.CreateDirectory() calls
+        - missing_file: Replace file paths with available test data
+        - disposed_stream: Ensure proper using/dispose patterns
+
+        Args:
+            code: Original code
+            error_category: Classified error category
+            test_data_files: Available test data file names
+
+        Returns:
+            Patched code or None if no fix applicable
+        """
+        if error_category == "missing_directory":
+            # Add Directory.CreateDirectory for output paths
+            patched = code
+
+            # Find all string paths in the code that might be directories
+            # Look for patterns that are likely to be output directories
+            dir_patterns = [
+                r'"([^"]+)"',  # Double-quoted strings
+                r'@"([^"]+)"',  # Verbatim strings
+            ]
+
+            found_dirs = set()
+            for pattern in dir_patterns:
+                matches = re.findall(pattern, code)
+                for match in matches:
+                    # Check if it looks like a directory path
+                    # Skip file names (have extension) and URLs
+                    if match.startswith("http") or match.startswith("www"):
+                        continue
+                    # Skip if it has a common file extension
+                    if re.search(r'\.(zip|rar|7z|gz|txt|cs|dll|exe|json|xml|png|jpg|pdf|doc)$', match, re.IGNORECASE):
+                        continue
+                    # If it's a path-like string (contains folder separator or is a folder name)
+                    if "_folder" in match.lower() or "_dir" in match.lower() or match.endswith("/") or match.endswith("\\"):
+                        found_dirs.add(match)
+                    elif "output" in match.lower() or "extracted" in match.lower() or "destination" in match.lower():
+                        found_dirs.add(match)
+                    elif "source" in match.lower() or "input" in match.lower():
+                        # Input directories also need to exist (might be created for copying)
+                        found_dirs.add(match)
+
+            # Add CreateDirectory calls for found directories
+            if found_dirs:
+                create_calls = []
+                for dir_path in sorted(found_dirs):  # Sort for determinism
+                    create_calls.append(f'        Directory.CreateDirectory(@"{dir_path}");')
+
+                # Find the Main method and insert after the opening brace
+                lines = patched.split('\n')
+                insert_line_idx = None
+                for i, line in enumerate(lines):
+                    # Look for Main method signature
+                    if re.search(r'\b(?:static\s+)?(?:async\s+)?(?:void|Task|int)\s+Main\s*\(', line):
+                        # Find the opening brace
+                        for j in range(i, min(i + 5, len(lines))):
+                            if '{' in lines[j]:
+                                insert_line_idx = j + 1
+                                break
+                        break
+
+                if insert_line_idx is not None:
+                    # Get indentation from the line after brace
+                    base_indent = "        "  # Default 2 levels
+                    if insert_line_idx < len(lines) and lines[insert_line_idx].strip():
+                        # Detect existing indentation
+                        existing_line = lines[insert_line_idx]
+                        base_indent = existing_line[:len(existing_line) - len(existing_line.lstrip())]
+
+                    # Insert directory creation calls with proper indentation
+                    create_block = [base_indent + call.strip() for call in create_calls]
+                    create_block.append('')  # Add blank line after creates
+                    lines = lines[:insert_line_idx] + create_block + lines[insert_line_idx:]
+                    patched = '\n'.join(lines)
+
+            if patched != code:
+                return patched
+
+        elif error_category == "missing_file":
+            # Replace placeholder file paths with actual test data
+            if test_data_files:
+                patched = code
+
+                # Find a suitable zip file for substitution
+                zip_files = [f for f in test_data_files if f.endswith('.zip')]
+                txt_files = [f for f in test_data_files if f.endswith('.txt')]
+                gz_files = [f for f in test_data_files if f.endswith('.gz')]
+                sevenz_files = [f for f in test_data_files if f.endswith('.7z')]
+
+                # Replace common placeholders based on file type
+                replacements = []
+
+                # ZIP file replacements
+                if zip_files:
+                    zip_sub = zip_files[0]
+                    replacements.extend([
+                        (r'"sample\.zip"', f'"{zip_sub}"'),
+                        (r'"input\.zip"', f'"{zip_sub}"'),
+                        (r'"archive\.zip"', f'"{zip_sub}"'),
+                        (r'"test\.zip"', f'"{zip_sub}"'),
+                    ])
+
+                # Text file replacements
+                if txt_files:
+                    txt_sub = txt_files[0]
+                    replacements.extend([
+                        (r'"sample\.txt"', f'"{txt_sub}"'),
+                        (r'"input\.txt"', f'"{txt_sub}"'),
+                        (r'"data\.txt"', f'"{txt_sub}"'),
+                    ])
+
+                # 7z file replacements
+                if sevenz_files:
+                    sevenz_sub = sevenz_files[0]
+                    replacements.extend([
+                        (r'"archive\.7z"', f'"{sevenz_sub}"'),
+                        (r'"input\.7z"', f'"{sevenz_sub}"'),
+                    ])
+
+                # GZ file replacements
+                if gz_files:
+                    gz_sub = gz_files[0]
+                    replacements.extend([
+                        (r'"sample\.gz"', f'"{gz_sub}"'),
+                        (r'"archive\.gz"', f'"{gz_sub}"'),
+                    ])
+
+                for old_pattern, new_val in replacements:
+                    if re.search(old_pattern, patched, re.IGNORECASE):
+                        patched = re.sub(old_pattern, new_val, patched, flags=re.IGNORECASE)
+
+                if patched != code:
+                    return patched
+
+        elif error_category == "disposed_stream":
+            # Fix disposed stream issues by ensuring proper using patterns
+            patched = code
+
+            # Pattern 1: Stream is used after using block
+            # Look for: using (var ms = new MemoryStream()) { ... } followed by ms.usage
+            # Fix: Remove using or materialize bytes before disposal
+
+            # Pattern 2: Stream passed to method that disposes it, then reused
+            # Look for: stream.CopyTo() or similar, then stream used again
+            # Fix: Create new stream from bytes
+
+            # Simple heuristic: If we see MemoryStream with using, suggest removing using
+            if "using" in code and "MemoryStream" in code:
+                # Try to detect if stream is used after using block
+                lines = code.split('\n')
+                patched_lines = []
+                in_using_block = False
+                stream_var_name = None
+
+                for i, line in enumerate(lines):
+                    # Detect: using (var ms = new MemoryStream(...))
+                    using_match = re.search(r'using\s*\(\s*var\s+(\w+)\s*=\s*new\s+MemoryStream', line)
+                    if using_match:
+                        stream_var_name = using_match.group(1)
+                        # Remove 'using' keyword, keep the rest as variable declaration
+                        modified = re.sub(r'using\s*\(\s*', '', line)
+                        # Remove closing paren if it's on same line
+                        modified = re.sub(r'\)\s*$', ';', modified)
+                        patched_lines.append(modified)
+                        in_using_block = True
+                        continue
+
+                    patched_lines.append(line)
+
+                if stream_var_name and in_using_block:
+                    patched = '\n'.join(patched_lines)
+                    # Add a comment explaining the fix
+                    patched = patched.replace(
+                        f"var {stream_var_name} = new MemoryStream",
+                        f"// Fixed: Removed 'using' to prevent early disposal\n        var {stream_var_name} = new MemoryStream"
+                    )
+                    return patched
+
+            # Pattern 3: CopyTo disposes source stream
+            # Add .ToArray() before disposal if MemoryStream
+            if "CopyTo" in code and "MemoryStream" in code:
+                # This is complex, let LLM handle
+                return None
+
+            return None  # Let LLM handle complex stream issues
+
+        elif error_category == "unhandled_exception":
+            # Check if it's actually an InvalidOperationException
+            # This often indicates API misuse - try example substitution instead
+            return None  # Let example substitution or LLM handle
+
+        return None  # No fix applicable

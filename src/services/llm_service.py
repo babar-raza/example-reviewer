@@ -709,8 +709,36 @@ If you cannot fix the code without major changes, return the original code uncha
         )
 
         # Clean up response - remove markdown code blocks if present
+        # Note: Using new validation with format correction retry
         if response.success and response.content:
-            response.content = self._clean_code_response(response.content)
+            original_content = response.content
+            cleaned, rejection_reason = self._clean_code_response(
+                response.content,
+                error_category="compile",
+                db=None,  # Not available in this context
+                run_id=None,
+                family=None,
+                example_id=None,
+            )
+            response.content = cleaned
+
+            # Optional: Attempt format correction if rejected due to format issue
+            if not cleaned and rejection_reason:
+                logger.warning(f"LLM response rejected: {rejection_reason}, attempting format correction")
+                corrected = self._retry_with_format_correction(original_content, rejection_reason)
+                if corrected:
+                    # Re-validate corrected content
+                    cleaned, _ = self._clean_code_response(
+                        corrected,
+                        error_category="compile",
+                        db=None,
+                        run_id=None,
+                        family=None,
+                        example_id=None,
+                    )
+                    response.content = cleaned
+                    if cleaned:
+                        logger.info(f"Format correction successful for rejection: {rejection_reason}")
 
         return response
     
@@ -881,28 +909,86 @@ If you cannot fix the code without major changes, return the original code uncha
         )
 
         # Clean up response - remove markdown code blocks if present
+        # Note: Using new validation with format correction retry
         if response.success and response.content:
-            response.content = self._clean_code_response(response.content)
+            original_content = response.content
+            cleaned, rejection_reason = self._clean_code_response(
+                response.content,
+                error_category="compile",
+                db=None,  # Not available in this context
+                run_id=None,
+                family=None,
+                example_id=None,
+            )
+            response.content = cleaned
+
+            # Optional: Attempt format correction if rejected due to format issue
+            if not cleaned and rejection_reason:
+                logger.warning(f"LLM response rejected: {rejection_reason}, attempting format correction")
+                corrected = self._retry_with_format_correction(original_content, rejection_reason)
+                if corrected:
+                    # Re-validate corrected content
+                    cleaned, _ = self._clean_code_response(
+                        corrected,
+                        error_category="compile",
+                        db=None,
+                        run_id=None,
+                        family=None,
+                        example_id=None,
+                    )
+                    response.content = cleaned
+                    if cleaned:
+                        logger.info(f"Format correction successful for rejection: {rejection_reason}")
 
         return response
     
-    def _validate_code_response(self, content: str) -> bool:
+    def _validate_code_response(self, content: str, error_category: Optional[str] = None) -> tuple[bool, Optional[str]]:
         """
-        Basic validation that LLM response looks like actual C# code.
+        Validate that LLM response looks like actual C# code.
 
         This prevents accepting prose explanations or malformed responses
-        as valid code fixes.
+        as valid code fixes. Validation is deterministic and category-aware.
 
         Args:
             content: The cleaned response content
+            error_category: Optional error category for category-specific validation
 
         Returns:
-            True if content appears to be valid C# code
+            Tuple of (is_valid, rejection_reason)
+            - is_valid: True if content appears to be valid C# code
+            - rejection_reason: String describing why rejected, or None if valid
         """
         if not content or not content.strip():
-            return False
+            return (False, "empty_response")
 
         content = content.strip()
+
+        # Check for common LLM refusal patterns FIRST (highest priority)
+        refusal_patterns = [
+            "I cannot", "I can't", "I'm unable", "I apologize",
+            "As an AI", "I don't have", "I'm sorry"
+        ]
+        if any(pattern.lower() in content[:100].lower() for pattern in refusal_patterns):
+            return (False, "llm_refusal_detected")
+
+        # Reject if it looks like prose (starts with common explanation patterns)
+        prose_patterns = [
+            'I ', "I'm ", 'The ', 'This ', 'Here ', 'To ', 'You ',
+            'Sorry', 'Unfortunately', 'Note:', 'Note that',
+        ]
+        first_word = content.split()[0] if content.split() else ""
+        if any(content.startswith(p) for p in prose_patterns):
+            return (False, "prose_explanation_detected")
+
+        # Category-aware validation rules
+        min_indicators = 2  # Default
+        if error_category == "missing_type":
+            # For missing type errors, expect 'using' statements
+            min_indicators = 1
+        elif error_category == "top_level_statements_error":
+            # For top-level statement errors, expect class/Main wrapper
+            if 'class ' not in content or 'Main' not in content:
+                return (False, "missing_class_wrapper")
 
         # Must contain at least some code indicators
         code_indicators = [
@@ -912,25 +998,43 @@ If you cannot fix the code without major changes, return the original code uncha
         ]
         indicator_count = sum(1 for ind in code_indicators if ind in content)
 
-        # Require at least 2 code indicators to be considered code
-        if indicator_count < 2:
-            return False
+        # Require minimum code indicators to be considered code
+        if indicator_count < min_indicators:
+            return (False, f"insufficient_code_indicators ({indicator_count}/{min_indicators})")
 
-        # Reject if it looks like prose (starts with common explanation patterns)
-        prose_patterns = [
-            'I ', "I'm ", 'The ', 'This ', 'Here ', 'To ', 'You ',
-            'Sorry', 'Unfortunately', 'Note:', 'Note that',
-        ]
-        first_word = content.split()[0] if content.split() else ""
-        if any(content.startswith(p) for p in prose_patterns):
-            return False
+        return (True, None)
 
-        return True
+    def _clean_code_response(
+        self,
+        content: str,
+        error_category: Optional[str] = None,
+        db: Optional[Any] = None,
+        run_id: Optional[str] = None,
+        family: Optional[str] = None,
+        example_id: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
+        """
+        Remove markdown code blocks from LLM response and validate.
 
-    def _clean_code_response(self, content: str) -> str:
-        """Remove markdown code blocks from LLM response and validate."""
+        Args:
+            content: Raw LLM response content
+            error_category: Optional error category for category-aware validation
+            db: Optional database instance for telemetry tracking
+            run_id: Optional run ID for telemetry
+            family: Optional family for telemetry
+            example_id: Optional example ID for telemetry
+
+        Returns:
+            Tuple of (cleaned_content, rejection_reason)
+            - cleaned_content: Cleaned code string (empty if rejected)
+            - rejection_reason: String describing why rejected, or None if valid
+        """
         content = content.strip()
+
+        # Track whether we removed markdown formatting
+        had_markdown = False
         if content.startswith("```"):
+            had_markdown = True
             lines = content.split("\n")
             # Remove first line (```csharp or ```)
             if lines:
@@ -941,12 +1045,179 @@ If you cannot fix the code without major changes, return the original code uncha
             content = "\n".join(lines)
 
         # Validate that the response looks like code
-        if not self._validate_code_response(content):
-            # Return empty string to trigger retry
-            return ""
+        is_valid, rejection_reason = self._validate_code_response(content, error_category)
 
-        return content
-    
+        if not is_valid:
+            # Track rejection with telemetry
+            rejection_details = {
+                'reason': rejection_reason,
+                'had_markdown': had_markdown,
+                'error_category': error_category,
+                'content_length': len(content),
+                'content_preview': content[:200] if content else '',
+            }
+
+            # Emit telemetry event if database is available
+            if db and run_id and family:
+                self._track_llm_rejection(
+                    db=db,
+                    run_id=run_id,
+                    family=family,
+                    example_id=example_id,
+                    rejection_reason=rejection_reason,
+                    rejection_details=rejection_details,
+                )
+            else:
+                # Log rejection even without telemetry
+                logger.warning(
+                    f"LLM response rejected: {rejection_reason} "
+                    f"(category={error_category}, had_markdown={had_markdown})"
+                )
+
+            # Return empty string to trigger retry, with rejection reason
+            return ("", rejection_reason)
+
+        return (content, None)
+
+    def _retry_with_format_correction(
+        self,
+        original_content: str,
+        rejection_reason: str,
+    ) -> Optional[str]:
+        """
+        Attempt to fix format issues with a deterministic format correction prompt.
+
+        This is a special retry for format-related rejections like:
+        - prose_explanation_detected
+        - insufficient_code_indicators
+        - llm_refusal_detected
+
+        Args:
+            original_content: The rejected LLM response
+            rejection_reason: Why it was rejected
+
+        Returns:
+            Corrected code string, or None if correction failed
+        """
+        # Only retry format issues
+        format_issues = [
+            "prose_explanation_detected",
+            "insufficient_code_indicators",
+            "llm_refusal_detected",
+        ]
+
+        if rejection_reason not in format_issues:
+            return None
+
+        # Deterministic format correction prompt
+        system_prompt = """You are a code extraction expert.
+Your ONLY job is to extract valid C# code from text.
+Return ONLY the C# code, nothing else - no explanations, no markdown, no commentary."""
+
+        prompt = f"""Extract ONLY the C# code from this text.
+
+Input text:
+{original_content[:1000]}
+
+Rules:
+1. Return ONLY C# code
+2. Remove ALL explanatory text, prose, comments about what you're doing
+3. Remove markdown code fences if present
+4. Do NOT add explanations
+
+Return the C# code now:"""
+
+        try:
+            response = self.complete(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=2048,
+                temperature=0.0,  # Deterministic
+            )
+
+            if response.success and response.content:
+                # Clean without validation to avoid recursion
+                content = response.content.strip()
+                if content.startswith("```"):
+                    lines = content.split("\n")
+                    if lines:
+                        lines = lines[1:]
+                    if lines and lines[-1].strip() == "```":
+                        lines = lines[:-1]
+                    content = "\n".join(lines)
+
+                return content if content else None
+
+        except Exception as e:
+            logger.warning(f"Format correction retry failed: {e}")
+
+        return None
+
+    def _track_llm_rejection(
+        self,
+        db: Any,
+        run_id: str,
+        family: str,
+        example_id: Optional[str],
+        rejection_reason: str,
+        rejection_details: Dict[str, Any],
+    ) -> None:
+        """
+        Track LLM response rejection in telemetry and failure_details.
+
+        Ensures no silent rejections by:
+        1. Emitting telemetry event: llm_response_rejected
+        2. Inserting row in failure_details table
+
+        Args:
+            db: Database instance
+            run_id: Pipeline run ID
+            family: Product family
+            example_id: Optional example ID
+            rejection_reason: Short reason code (e.g., "empty_response")
+            rejection_details: Full structured details
+        """
+        from datetime import datetime
+        from .models import TelemetryEvent
+
+        try:
+            # 1. Emit telemetry event
+            event = TelemetryEvent(
+                run_id=run_id,
+                family=family,
+                event_type="llm_response_rejected",
+                phase="validation",
+                example_id=example_id,
+                duration_ms=0,
+                success=False,
+                metadata={
+                    'rejection_reason': rejection_reason,
+                    **rejection_details,
+                },
+                timestamp=datetime.utcnow(),
+            )
+            db.save_telemetry_event(event)
+
+            # 2. Insert failure_details row using new failure tracking API
+            from ..pipeline.failure_tracker import track_llm_rejection
+            track_llm_rejection(
+                db=db,
+                run_id=run_id,
+                phase="validation",
+                example_id=example_id,
+                rejection_reason=rejection_reason,
+                metadata=rejection_details,
+            )
+
+            logger.info(
+                f"Tracked LLM rejection: {rejection_reason} "
+                f"(example={example_id}, run={run_id[:8]})"
+            )
+
+        except Exception as e:
+            # Don't fail the pipeline if telemetry fails, but log loudly
+            logger.error(f"Failed to track LLM rejection telemetry: {e}")
+
     def review_markdown(
         self,
         markdown_content: str,
