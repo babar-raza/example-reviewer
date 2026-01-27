@@ -479,6 +479,51 @@ class TimeoutsConfig(BaseModel):
     allow_timeout_override: bool = Field(default=False, description="Allow CLI timeout overrides")
 
 
+class SubstitutionConfig(BaseModel):
+    """
+    Example substitution configuration.
+
+    Phase-2 Gate B: Controls automatic substitution of failing examples
+    with verified examples from the example repository.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    same_context_only: bool = Field(
+        default=False,
+        description="Only substitute with examples from the same app_context (console, aspnet, mvc, etc.). Default False for backward compatibility."
+    )
+
+
+class ContextEnforcementConfig(BaseModel):
+    """
+    Context enforcement configuration for LLM fixes.
+
+    Phase-2 Gate B: Prevents LLM from changing app_context type during fixes
+    (e.g., console → ASP.NET, ASP.NET → console).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description="Reject LLM fixes that change app_context type. Default False for backward compatibility."
+    )
+
+
+class ContextHarnessConfig(BaseModel):
+    """
+    Context-specific build harness configuration.
+
+    Phase-2 Gate B: Compiles examples in their native app context
+    (ASP.NET as ASP.NET projects, not console apps).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description="Use context-specific project templates (ASP.NET SDK for ASP.NET code, etc.). Default False for backward compatibility."
+    )
+
+
 class GlobalConfig(BaseModel):
     """Global configuration settings."""
     model_config = ConfigDict(extra="forbid")
@@ -496,6 +541,9 @@ class GlobalConfig(BaseModel):
     final_review: FinalReviewConfig = Field(default_factory=FinalReviewConfig)
     drift: DriftConfig = Field(default_factory=DriftConfig)
     timeouts: TimeoutsConfig = Field(default_factory=TimeoutsConfig)
+    substitution: SubstitutionConfig = Field(default_factory=SubstitutionConfig)
+    context_enforcement: ContextEnforcementConfig = Field(default_factory=ContextEnforcementConfig)
+    context_harness: ContextHarnessConfig = Field(default_factory=ContextHarnessConfig)
 
     # Paths
     artifact_store_path: str = Field(default="./artifacts")
@@ -534,6 +582,7 @@ class RuntimeValidationConfig(BaseModel):
     mode: str = Field(default="strict", pattern="^(strict|lenient)$")
     timeout_seconds: int = Field(default=30, ge=1)
     required_files: List[str] = Field(default_factory=list)
+    required_dirs: List[str] = Field(default_factory=list)
     file_aliases: Dict[str, List[str]] = Field(default_factory=dict)
     expected_outputs: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
@@ -545,6 +594,7 @@ class TestDataConfig(BaseModel):
 
     local_path: str = ""
     download_if_missing: bool = True
+    inventory_path: str = ""
 
 
 class ExampleRepoConfig(BaseModel):
@@ -589,7 +639,8 @@ class FamilyConfig(BaseModel):
     # External resources
     example_repo: ExampleRepoConfig = Field(default_factory=ExampleRepoConfig)
     api_reference: ApiReferenceConfig = Field(default_factory=ApiReferenceConfig)
-    
+    gist: Optional[GistConfig] = None
+
     # Patterns and hints
     patterns: List[Dict[str, Any]] = Field(default_factory=list)
     api_patterns: Dict[str, Any] = Field(default_factory=dict)
@@ -691,6 +742,15 @@ class ConfigurationManager:
 
         if 'timeouts' in data:
             parsed['timeouts'] = TimeoutsConfig(**data['timeouts'])
+
+        if 'substitution' in data:
+            parsed['substitution'] = SubstitutionConfig(**data['substitution'])
+
+        if 'context_enforcement' in data:
+            parsed['context_enforcement'] = ContextEnforcementConfig(**data['context_enforcement'])
+
+        if 'context_harness' in data:
+            parsed['context_harness'] = ContextHarnessConfig(**data['context_harness'])
 
         if 'artifact_store_path' in data:
             parsed['artifact_store_path'] = data['artifact_store_path']

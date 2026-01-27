@@ -7,6 +7,7 @@ import sqlite3
 import json
 import logging
 import hashlib
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -16,7 +17,8 @@ from .models import (
     ExampleRecord, ExampleStatus, SourceType, Location, GistInfo,
     CompileAttempt, RuntimeAttempt, MarkdownEdit, CommitRecord,
     RunRecord, TelemetryEvent, TelemetryRun, EditType,
-    ReviewResult, ReviewIssue, IssueSeverity, IssueType
+    ReviewResult, ReviewIssue, IssueSeverity, IssueType,
+    FailureDetail, FailureCategory, FailureResolution
 )
 
 logger = logging.getLogger(__name__)
@@ -37,7 +39,15 @@ class Database:
     """
     
     SCHEMA = """
-    -- Example records table
+    -- Schema migrations tracking table
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+        migration_id TEXT PRIMARY KEY,
+        description TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+    );
+
+    -- Example records table (canonical per-example metadata)
+    -- Note: run_id is NOT here - it's in example_run_state
     CREATE TABLE IF NOT EXISTS example_records (
         example_id TEXT PRIMARY KEY,
         family TEXT NOT NULL,
@@ -52,31 +62,53 @@ class Database:
         gist_id TEXT,
         gist_filename TEXT,
         original_code TEXT NOT NULL,
-        compilable_code TEXT,
-        verified_code TEXT,
-        status TEXT NOT NULL DEFAULT 'DISCOVERED',
-        failure_reason TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         section_heading TEXT,
         description_context TEXT,
         topic TEXT,
-        drift_score REAL,
-        drift_similarity REAL,
-        example_key TEXT
+        example_key TEXT,
+        app_context TEXT DEFAULT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_examples_family ON example_records(family);
-    CREATE INDEX IF NOT EXISTS idx_examples_status ON example_records(status);
     CREATE INDEX IF NOT EXISTS idx_examples_file_path ON example_records(file_path);
-    CREATE INDEX IF NOT EXISTS idx_examples_drift ON example_records(drift_score);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_example_key ON example_records(family, example_key);
+
+    -- Example run state table (per-run state for each example)
+    -- This is the production-grade approach: keyed by (run_id, example_id)
+    CREATE TABLE IF NOT EXISTS example_run_state (
+        run_id TEXT NOT NULL,
+        example_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'discovered',
+        failure_reason TEXT,
+        escalation_reason TEXT,
+        compilable_code TEXT,
+        verified_code TEXT,
+        drift_score REAL DEFAULT 0.0,
+        drift_similarity REAL DEFAULT 0.0,
+        needs_human_review INTEGER DEFAULT 0,
+        app_context TEXT DEFAULT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, example_id),
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id) ON DELETE CASCADE,
+        FOREIGN KEY (example_id) REFERENCES example_records(example_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_run_state_run ON example_run_state(run_id);
+    CREATE INDEX IF NOT EXISTS idx_run_state_example ON example_run_state(example_id);
+    CREATE INDEX IF NOT EXISTS idx_run_state_status ON example_run_state(run_id, status);
+    CREATE INDEX IF NOT EXISTS idx_run_state_drift ON example_run_state(run_id, drift_score);
+    CREATE INDEX IF NOT EXISTS idx_example_records_app_context ON example_records(app_context);
+    CREATE INDEX IF NOT EXISTS idx_example_run_state_app_context ON example_run_state(run_id, app_context);
 
     -- Compile attempts table
     CREATE TABLE IF NOT EXISTS compile_attempts (
         attempt_id TEXT PRIMARY KEY,
         example_id TEXT NOT NULL,
         family TEXT NOT NULL,
+        run_id TEXT,
         dll_version TEXT,
         success INTEGER NOT NULL DEFAULT 0,
         compiler_log_ref TEXT,
@@ -87,17 +119,21 @@ class Database:
         error_messages TEXT,
         warnings TEXT,
         timestamp TEXT NOT NULL,
-        FOREIGN KEY (example_id) REFERENCES example_records(example_id)
+        FOREIGN KEY (example_id) REFERENCES example_records(example_id),
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id) ON DELETE CASCADE
     );
-    
+
     CREATE INDEX IF NOT EXISTS idx_compile_example ON compile_attempts(example_id);
     CREATE INDEX IF NOT EXISTS idx_compile_family ON compile_attempts(family);
-    
+    CREATE INDEX IF NOT EXISTS idx_compile_run ON compile_attempts(run_id);
+    CREATE INDEX IF NOT EXISTS idx_compile_example_run ON compile_attempts(example_id, run_id);
+
     -- Runtime attempts table
     CREATE TABLE IF NOT EXISTS runtime_attempts (
         attempt_id TEXT PRIMARY KEY,
         example_id TEXT NOT NULL,
         family TEXT NOT NULL,
+        run_id TEXT,
         sample_ref TEXT,
         scenario TEXT,
         success INTEGER NOT NULL DEFAULT 0,
@@ -113,28 +149,34 @@ class Database:
         llm_request_ref TEXT,
         llm_response_ref TEXT,
         timestamp TEXT NOT NULL,
-        FOREIGN KEY (example_id) REFERENCES example_records(example_id)
+        FOREIGN KEY (example_id) REFERENCES example_records(example_id),
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id) ON DELETE CASCADE
     );
-    
+
     CREATE INDEX IF NOT EXISTS idx_runtime_example ON runtime_attempts(example_id);
     CREATE INDEX IF NOT EXISTS idx_runtime_family ON runtime_attempts(family);
-    
+    CREATE INDEX IF NOT EXISTS idx_runtime_run ON runtime_attempts(run_id);
+    CREATE INDEX IF NOT EXISTS idx_runtime_example_run ON runtime_attempts(example_id, run_id);
+
     -- Markdown edits table
     CREATE TABLE IF NOT EXISTS markdown_edits (
         edit_id TEXT PRIMARY KEY,
         file_path TEXT NOT NULL,
         example_id TEXT NOT NULL,
         family TEXT NOT NULL,
+        run_id TEXT,
         edit_type TEXT NOT NULL DEFAULT 'inline_replace',
         diff_ref TEXT,
         old_code TEXT,
         new_code TEXT,
         timestamp TEXT NOT NULL,
-        FOREIGN KEY (example_id) REFERENCES example_records(example_id)
+        FOREIGN KEY (example_id) REFERENCES example_records(example_id),
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id) ON DELETE CASCADE
     );
-    
+
     CREATE INDEX IF NOT EXISTS idx_edits_example ON markdown_edits(example_id);
     CREATE INDEX IF NOT EXISTS idx_edits_file ON markdown_edits(file_path);
+    CREATE INDEX IF NOT EXISTS idx_edits_run ON markdown_edits(run_id);
     
     -- Commit records table
     CREATE TABLE IF NOT EXISTS commit_records (
@@ -199,6 +241,47 @@ class Database:
 
     CREATE INDEX IF NOT EXISTS idx_api_family ON api_reference_cache(family);
     CREATE INDEX IF NOT EXISTS idx_api_namespace ON api_reference_cache(namespace);
+
+    -- Failure details table (Track all failure reasons, including LLM rejections)
+    -- Schema from Migration 007
+    CREATE TABLE IF NOT EXISTS failure_details (
+        failure_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        example_id TEXT,
+        phase TEXT NOT NULL,
+        failure_category TEXT NOT NULL CHECK(failure_category IN (
+            'timeout',
+            'drift_exceeded',
+            'api_context_missing',
+            'llm_response_rejected',
+            'escalated_to_review',
+            'compile_error',
+            'runtime_error',
+            'review_failed',
+            'infra_missing_test_data',
+            'infra_blocked_rar_fixture',
+            'infra_blocked_7z_fixture',
+            'infra_blocked_password',
+            'infra_blocked_format',
+            'infra_blocked_external',
+            'precheck_only',
+            'other'
+        )),
+        error_category TEXT,
+        error_message TEXT,
+        resolution TEXT CHECK(resolution IN ('fixed', 'needs_review', 'abandoned', 'pending')),
+        metadata TEXT,
+        timestamp TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id) ON DELETE CASCADE,
+        FOREIGN KEY (example_id) REFERENCES example_records(example_id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_failure_run_phase ON failure_details(run_id, phase);
+    CREATE INDEX IF NOT EXISTS idx_failure_category ON failure_details(failure_category);
+    CREATE INDEX IF NOT EXISTS idx_failure_error_category ON failure_details(error_category);
+    CREATE INDEX IF NOT EXISTS idx_failure_resolution ON failure_details(resolution);
+    CREATE INDEX IF NOT EXISTS idx_failure_timestamp ON failure_details(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_failure_example ON failure_details(example_id);
 
     -- Review results table (Phase E: Final Review)
     CREATE TABLE IF NOT EXISTS review_results (
@@ -319,24 +402,55 @@ class Database:
     CREATE INDEX IF NOT EXISTS idx_fingerprints_selection_hash ON run_fingerprints(selection_hash);
     """
     
-    def __init__(self, db_path: Optional[Path] = None):
+    def __init__(
+        self,
+        db_path: Optional[Path] = None,
+        busy_timeout_ms: int = 120000,
+        wal_enabled: bool = True
+    ):
         """
         Initialize database connection.
-        
+
         Args:
             db_path: Path to SQLite database file
+            busy_timeout_ms: SQLite busy timeout in milliseconds (default: 120000)
+            wal_enabled: Enable WAL mode (default: True)
         """
         self.db_path = Path(db_path) if db_path else Path("data/example_reviewer.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: Optional[sqlite3.Connection] = None
-    
+        self.busy_timeout_ms = busy_timeout_ms
+        self.wal_enabled = wal_enabled
+
+        # Task 2B: Single-writer protection lock
+        self._write_lock = threading.RLock()
+
+        logger.info(
+            f"Database initialized: path={self.db_path}, "
+            f"busy_timeout={busy_timeout_ms}ms, wal_enabled={wal_enabled}"
+        )
+
+
     @contextmanager
     def get_connection(self):
-        """Get a database connection with context management."""
-        conn = sqlite3.connect(str(self.db_path))
+        """
+        Get a database connection with context management.
+
+        Task 2A: Enforces WAL mode and sane pragmas on every connection.
+        """
+        # Convert milliseconds to seconds for SQLite timeout
+        timeout_seconds = self.busy_timeout_ms / 1000.0
+        conn = sqlite3.connect(str(self.db_path), timeout=timeout_seconds)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+
+        # Task 2A: Enforce all required pragmas
+        if self.wal_enabled:
+            conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
         conn.execute("PRAGMA foreign_keys=ON")
+
         try:
             yield conn
             conn.commit()
@@ -350,7 +464,7 @@ class Database:
     def conn(self) -> sqlite3.Connection:
         """Get persistent connection (for backward compatibility)."""
         if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path))
+            self._conn = sqlite3.connect(str(self.db_path), timeout=120.0)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
@@ -361,11 +475,204 @@ class Database:
         return self.conn
     
     def initialize_schema(self) -> None:
-        """Initialize database schema."""
+        """
+        Initialize database schema and apply migrations.
+
+        This method:
+        1. Creates base schema (all tables with CREATE TABLE IF NOT EXISTS)
+        2. Applies any pending migrations from migrations/ directory
+        """
         with self.get_connection() as conn:
             conn.executescript(self.SCHEMA)
-        logger.info(f"Database initialized at {self.db_path}")
-    
+        logger.info(f"Database schema initialized at {self.db_path}")
+
+        # Apply migrations
+        self.apply_migrations()
+
+    def apply_migrations(self) -> None:
+        """
+        Apply pending migrations from migrations/ directory.
+
+        Migrations are SQL files named XXX_description.sql (e.g., 008_run_scoping.sql).
+        Each migration is applied once and recorded in schema_migrations table.
+
+        Fresh DB Bootstrap:
+        If this is a fresh database (only schema_migrations exists after SCHEMA),
+        all migrations are marked as applied (baseline) without execution.
+        This prevents applying upgrade scripts to a latest-schema DB.
+        """
+        # Resolve migrations directory relative to repo root
+        # database.py is at <repo>/src/core/database.py, so repo root is 2 levels up
+        repo_root = Path(__file__).parent.parent.parent
+        migrations_dir = repo_root / "migrations"
+
+        if not migrations_dir.exists():
+            logger.debug(f"No migrations directory found at {migrations_dir}, skipping migrations")
+            return
+
+        # Get all migration files (exclude _legacy subdirectory)
+        migration_files = sorted([f for f in migrations_dir.glob("*.sql") if f.is_file()])
+        if not migration_files:
+            logger.debug("No migration files found")
+            return
+
+        with self.get_connection() as conn:
+            # Get applied migrations
+            applied = set()
+            try:
+                rows = conn.execute("SELECT migration_id FROM schema_migrations").fetchall()
+                applied = {row["migration_id"] for row in rows}
+            except sqlite3.OperationalError:
+                # schema_migrations table doesn't exist yet (very first run)
+                logger.debug("schema_migrations table not found, will be created by SCHEMA")
+
+            # Check if this is a fresh database (only schema_migrations exists after base SCHEMA)
+            is_fresh_db = self._is_fresh_database(conn)
+
+            if is_fresh_db:
+                logger.info("Fresh database detected - marking all migrations as applied (baseline)")
+                # Mark all migrations as applied without executing them
+                for migration_file in migration_files:
+                    migration_id = migration_file.stem
+                    if migration_id not in applied:
+                        self._record_migration(conn, migration_id, f"Baseline (fresh DB)")
+                        logger.debug(f"Migration {migration_id} marked as applied (baseline)")
+                return
+
+            # Apply pending migrations for existing databases
+            for migration_file in migration_files:
+                migration_id = migration_file.stem  # e.g., "008_run_scoping"
+
+                if migration_id in applied:
+                    logger.debug(f"Migration {migration_id} already applied, skipping")
+                    continue
+
+                logger.info(f"Applying migration: {migration_id}")
+                try:
+                    migration_sql = migration_file.read_text(encoding='utf-8')
+                    conn.executescript(migration_sql)
+
+                    # Record migration in schema_migrations (engine records it, not the SQL)
+                    self._record_migration(conn, migration_id, f"Applied from {migration_file.name}")
+
+                    # Verify migration 010 specifically (app_context column must exist)
+                    if migration_id == "010_add_app_context":
+                        self._verify_migration_010(conn)
+
+                    logger.info(f"Migration {migration_id} applied successfully")
+                except Exception as e:
+                    logger.error(f"Failed to apply migration {migration_id}: {e}")
+                    raise
+
+    def _is_fresh_database(self, conn: sqlite3.Connection) -> bool:
+        """
+        Check if database is fresh (only schema_migrations and base schema tables exist).
+
+        A fresh database has base schema tables but no run-scoped data.
+
+        Returns:
+            True if fresh database, False otherwise
+        """
+        try:
+            # Get all user tables (exclude sqlite internal tables)
+            cursor = conn.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                ORDER BY name
+            """)
+            tables = {row["name"] for row in cursor.fetchall()}
+
+            # Expected base schema tables (from SCHEMA constant)
+            base_tables = {
+                'schema_migrations',
+                'example_records',
+                'example_run_state',
+                'compile_attempts',
+                'runtime_attempts',
+                'markdown_edits',
+                'commit_records',
+                'run_records',
+                'telemetry_events',
+                'telemetry_runs',
+                'api_reference_cache',
+                'failure_details',
+                'review_results',
+                'review_issues',
+                'gist_publications',
+                'run_fingerprints',
+            }
+
+            # Check if we have the base schema tables (or subset)
+            if not tables.issubset(base_tables):
+                # Has tables not in base schema = not fresh
+                return False
+
+            # Check if run_records table exists
+            if 'run_records' not in tables:
+                # Very fresh - no tables created yet (shouldn't happen after SCHEMA runs)
+                return True
+
+            # Check if run_records is empty (no runs have been executed)
+            cursor = conn.execute("SELECT COUNT(*) as count FROM run_records")
+            run_count = cursor.fetchone()["count"]
+
+            # Fresh if no runs have been recorded AND example_records is empty
+            # (i.e., no data has been loaded yet)
+            if run_count == 0:
+                # Also check if example_records is empty
+                cursor = conn.execute("SELECT COUNT(*) as count FROM example_records")
+                example_count = cursor.fetchone()["count"]
+                return example_count == 0
+
+            return False
+
+        except sqlite3.OperationalError as e:
+            # If query fails, log and assume NOT fresh (safer default)
+            logger.debug(f"_is_fresh_database check failed: {e}")
+            return False
+
+    def _record_migration(self, conn: sqlite3.Connection, migration_id: str, description: str) -> None:
+        """
+        Record a migration in schema_migrations table.
+
+        Args:
+            conn: Database connection
+            migration_id: Migration identifier (e.g., "008_run_scoping")
+            description: Migration description
+        """
+        now = datetime.utcnow().isoformat()
+        conn.execute("""
+            INSERT OR IGNORE INTO schema_migrations (migration_id, description, applied_at)
+            VALUES (?, ?, ?)
+        """, (migration_id, description, now))
+
+    def _verify_migration_010(self, conn: sqlite3.Connection) -> None:
+        """
+        Verify that migration 010 (app_context) was applied correctly.
+
+        Raises:
+            RuntimeError: If app_context column is missing from required tables
+        """
+        # Check example_records table
+        cursor = conn.execute("PRAGMA table_info(example_records)")
+        example_cols = {row[1] for row in cursor.fetchall()}
+        if 'app_context' not in example_cols:
+            raise RuntimeError(
+                "Migration 010 verification failed: app_context column missing from example_records table. "
+                "Available columns: " + ", ".join(sorted(example_cols))
+            )
+
+        # Check example_run_state table
+        cursor = conn.execute("PRAGMA table_info(example_run_state)")
+        run_state_cols = {row[1] for row in cursor.fetchall()}
+        if 'app_context' not in run_state_cols:
+            raise RuntimeError(
+                "Migration 010 verification failed: app_context column missing from example_run_state table. "
+                "Available columns: " + ", ".join(sorted(run_state_cols))
+            )
+
+        logger.info("Migration 010 verification passed: app_context columns exist in all required tables")
+
     def close(self) -> None:
         """Close persistent connection."""
         if self._conn:
@@ -376,55 +683,81 @@ class Database:
     # EXAMPLE RECORDS
     # =========================================================================
     
-    def save_example(self, example: ExampleRecord) -> str:
-        """Save or update an example record."""
-        with self.get_connection() as conn:
-            existing = conn.execute(
-                "SELECT family FROM example_records WHERE example_id = ?",
-                (example.example_id,),
-            ).fetchone()
-            if existing and existing["family"] != example.family:
-                example.example_id = example.generate_id()
+    def save_example(self, example: ExampleRecord, run_id: Optional[str] = None) -> str:
+        """
+        Save or update an example record.
 
-            # Ensure example_key is populated
-            if not example.example_key:
-                example.example_key = example.generate_example_key()
+        This method saves ONLY canonical fields to example_records (no status, code, etc.).
+        If run_id is provided, it also creates/updates example_run_state with run-scoped fields.
 
-            conn.execute("""
-                INSERT OR REPLACE INTO example_records (
-                    example_id, family, file_path, source_type, language,
-                    location_block_index, location_start_line, location_end_line, location_anchor,
-                    gist_owner, gist_id, gist_filename,
-                    original_code, compilable_code, verified_code,
-                    status, failure_reason, created_at, updated_at,
-                    section_heading, description_context, topic, example_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                example.example_id,
-                example.family,
-                example.file_path,
-                example.source_type.value,
-                example.language,
-                example.location.block_index,
-                example.location.start_line,
-                example.location.end_line,
-                example.location.anchor,
-                example.gist.owner if example.gist else None,
-                example.gist.gist_id if example.gist else None,
-                example.gist.filename if example.gist else None,
-                example.original_code,
-                example.compilable_code,
-                example.verified_code,
-                example.status.value,
-                example.failure_reason,
-                example.created_at.isoformat(),
-                example.updated_at.isoformat(),
-                example.section_heading,
-                example.description_context,
-                example.topic,
-                example.example_key,
-            ))
-        return example.example_id
+        Args:
+            example: Example record to save
+            run_id: Optional run_id for run-scoped tracking
+
+        Returns:
+            example_id
+        """
+        # Task 2B: Single-writer protection
+        with self._write_lock:
+            with self.get_connection() as conn:
+                existing = conn.execute(
+                    "SELECT family FROM example_records WHERE example_id = ?",
+                    (example.example_id,),
+                ).fetchone()
+                if existing and existing["family"] != example.family:
+                    example.example_id = example.generate_id()
+
+                # Ensure example_key is populated
+                if not example.example_key:
+                    example.example_key = example.generate_example_key()
+
+                # Save ONLY canonical fields to example_records
+                conn.execute("""
+                    INSERT OR REPLACE INTO example_records (
+                        example_id, family, file_path, source_type, language,
+                        location_block_index, location_start_line, location_end_line, location_anchor,
+                        gist_owner, gist_id, gist_filename,
+                        original_code, created_at, updated_at,
+                        section_heading, description_context, topic, app_context, example_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    example.example_id,
+                    example.family,
+                    example.file_path,
+                    example.source_type.value,
+                    example.language,
+                    example.location.block_index,
+                    example.location.start_line,
+                    example.location.end_line,
+                    example.location.anchor,
+                    example.gist.owner if example.gist else None,
+                    example.gist.gist_id if example.gist else None,
+                    example.gist.filename if example.gist else None,
+                    example.original_code,
+                    example.created_at.isoformat(),
+                    example.updated_at.isoformat(),
+                    example.section_heading,
+                    example.description_context,
+                    example.topic,
+                    example.app_context,
+                    example.example_key,
+                ))
+
+            # If run_id provided, also save/update run-scoped state (outside conn context)
+            if run_id:
+                # Note: save_example_run_state will acquire its own write lock
+                self.save_example_run_state(
+                    run_id=run_id,
+                    example_id=example.example_id,
+                    status=example.status,
+                    failure_reason=example.failure_reason,
+                    escalation_reason=example.escalation_reason,
+                    compilable_code=example.compilable_code,
+                    verified_code=example.verified_code,
+                    app_context=example.app_context,
+                )
+
+            return example.example_id
     
     def get_example(self, example_id: str) -> Optional[ExampleRecord]:
         """Get an example by ID."""
@@ -443,78 +776,190 @@ class Database:
         family: str,
         status: Optional[ExampleStatus] = None,
         limit: Optional[int] = None,
+        run_id: Optional[str] = None,
     ) -> List[ExampleRecord]:
-        """Get examples for a family, optionally filtered by status."""
+        """
+        Get examples for a family, optionally filtered by status and run_id.
+
+        If run_id is provided, this method JOINs with example_run_state to get
+        run-scoped status and code fields. Otherwise, it returns canonical records only.
+
+        Args:
+            family: Product family
+            status: Optional status filter (applied to run_state if run_id provided)
+            limit: Optional result limit
+            run_id: Optional run_id for run-scoped queries
+
+        Returns:
+            List of example records with run-scoped fields populated if run_id provided
+        """
         with self.get_connection() as conn:
-            query = "SELECT * FROM example_records WHERE family = ?"
-            params = [family]
+            if run_id:
+                # Run-scoped query: JOIN with example_run_state
+                query = """
+                    SELECT
+                        er.*,
+                        ers.status as run_status,
+                        ers.failure_reason as run_failure_reason,
+                        ers.escalation_reason as run_escalation_reason,
+                        ers.compilable_code as run_compilable_code,
+                        ers.verified_code as run_verified_code
+                    FROM example_records er
+                    INNER JOIN example_run_state ers ON er.example_id = ers.example_id
+                    WHERE er.family = ? AND ers.run_id = ?
+                """
+                params = [family, run_id]
 
-            if status:
-                query += " AND status = ?"
-                params.append(status.value)
+                if status:
+                    query += " AND ers.status = ?"
+                    params.append(status.value)
 
-            # Deterministic ordering: example_key (primary), then example_id (tie-breaker)
-            query += " ORDER BY example_key ASC, example_id ASC"
+                query += " ORDER BY er.example_key ASC, er.example_id ASC"
 
-            if limit:
-                query += " LIMIT ?"
-                params.append(limit)
+                if limit:
+                    query += " LIMIT ?"
+                    params.append(limit)
 
-            rows = conn.execute(query, params).fetchall()
-            return [self._row_to_example(row) for row in rows]
+                rows = conn.execute(query, params).fetchall()
+                return [self._row_to_example_with_run_state(row) for row in rows]
+            else:
+                # Canonical query: no run state
+                query = "SELECT * FROM example_records WHERE family = ?"
+                params = [family]
+
+                # Without run_id, we can't filter by status (status is per-run)
+                if status:
+                    logger.warning(f"Status filter ignored without run_id in get_examples_by_family")
+
+                query += " ORDER BY example_key ASC, example_id ASC"
+
+                if limit:
+                    query += " LIMIT ?"
+                    params.append(limit)
+
+                rows = conn.execute(query, params).fetchall()
+                return [self._row_to_example(row) for row in rows]
     
-    def get_examples_by_file(self, file_path: str) -> List[ExampleRecord]:
-        """Get all examples from a specific file."""
+    def get_examples_by_file(self, file_path: str, run_id: Optional[str] = None) -> List[ExampleRecord]:
+        """
+        Get all examples from a specific file.
+
+        If run_id is provided, this method JOINs with example_run_state to get
+        run-scoped status and code fields.
+
+        Args:
+            file_path: File path to filter by
+            run_id: Optional run_id for run-scoped queries
+
+        Returns:
+            List of example records with run-scoped fields populated if run_id provided
+        """
         with self.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM example_records WHERE file_path = ? ORDER BY location_block_index, example_key ASC, example_id ASC",
-                (file_path,)
-            ).fetchall()
-            return [self._row_to_example(row) for row in rows]
+            if run_id:
+                # Run-scoped query: JOIN with example_run_state
+                query = """
+                    SELECT
+                        er.*,
+                        ers.status as run_status,
+                        ers.failure_reason as run_failure_reason,
+                        ers.escalation_reason as run_escalation_reason,
+                        ers.compilable_code as run_compilable_code,
+                        ers.verified_code as run_verified_code
+                    FROM example_records er
+                    INNER JOIN example_run_state ers ON er.example_id = ers.example_id
+                    WHERE er.file_path = ? AND ers.run_id = ?
+                    ORDER BY er.location_block_index, er.example_key ASC, er.example_id ASC
+                """
+                rows = conn.execute(query, (file_path, run_id)).fetchall()
+                return [self._row_to_example_with_run_state(row) for row in rows]
+            else:
+                # Canonical query: no run state
+                rows = conn.execute(
+                    "SELECT * FROM example_records WHERE file_path = ? ORDER BY location_block_index, example_key ASC, example_id ASC",
+                    (file_path,)
+                ).fetchall()
+                return [self._row_to_example(row) for row in rows]
     
     def update_example_status(
         self,
         example_id: str,
         status: ExampleStatus,
         failure_reason: Optional[str] = None,
+        run_id: Optional[str] = None,
+        escalation_reason: Optional[str] = None,
     ) -> bool:
-        """Update example status."""
-        with self.get_connection() as conn:
-            conn.execute("""
-                UPDATE example_records
-                SET status = ?, failure_reason = ?, updated_at = ?
-                WHERE example_id = ?
-            """, (status.value, failure_reason, datetime.utcnow().isoformat(), example_id))
-            return conn.total_changes > 0
+        """
+        Update example status (run-scoped).
+
+        Args:
+            example_id: Example identifier
+            status: New status
+            failure_reason: Optional failure reason
+            run_id: Run identifier (required for run-scoped updates)
+            escalation_reason: Optional escalation reason (controlled vocabulary)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not run_id:
+            logger.warning(f"update_example_status called without run_id for {example_id}")
+            return False
+
+        # Task 2B: Single-writer protection
+        with self._write_lock:
+            with self.get_connection() as conn:
+                now = datetime.utcnow().isoformat()
+                conn.execute("""
+                    UPDATE example_run_state
+                    SET status = ?, failure_reason = ?, escalation_reason = ?, updated_at = ?
+                    WHERE run_id = ? AND example_id = ?
+                """, (status.value, failure_reason, escalation_reason, now, run_id, example_id))
+                return conn.total_changes > 0
     
     def update_example_code(
         self,
         example_id: str,
         compilable_code: Optional[str] = None,
         verified_code: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> bool:
-        """Update example code fields."""
+        """
+        Update example code fields (run-scoped).
+
+        Args:
+            example_id: Example identifier
+            compilable_code: Optional compiled code
+            verified_code: Optional verified code
+            run_id: Run identifier (required for run-scoped updates)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not run_id:
+            logger.warning(f"update_example_code called without run_id for {example_id}")
+            return False
+
         with self.get_connection() as conn:
             updates = []
             params = []
-            
+
             if compilable_code is not None:
                 updates.append("compilable_code = ?")
                 params.append(compilable_code)
-            
+
             if verified_code is not None:
                 updates.append("verified_code = ?")
                 params.append(verified_code)
-            
+
             if not updates:
                 return False
-            
+
             updates.append("updated_at = ?")
             params.append(datetime.utcnow().isoformat())
-            params.append(example_id)
-            
+            params.extend([run_id, example_id])
+
             conn.execute(
-                f"UPDATE example_records SET {', '.join(updates)} WHERE example_id = ?",
+                f"UPDATE example_run_state SET {', '.join(updates)} WHERE run_id = ? AND example_id = ?",
                 params
             )
             return conn.total_changes > 0
@@ -543,6 +988,251 @@ class Database:
                 WHERE example_id = ?
             """, (original_code, datetime.utcnow().isoformat(), example_id))
             return conn.total_changes > 0
+
+    # =========================================================================
+    # EXAMPLE RUN STATE (Per-run state management)
+    # =========================================================================
+
+    def save_example_run_state(
+        self,
+        run_id: str,
+        example_id: str,
+        status: ExampleStatus = ExampleStatus.DISCOVERED,
+        failure_reason: Optional[str] = None,
+        escalation_reason: Optional[str] = None,
+        compilable_code: Optional[str] = None,
+        verified_code: Optional[str] = None,
+        drift_score: float = 0.0,
+        drift_similarity: float = 0.0,
+        app_context: Optional[str] = None,
+    ) -> bool:
+        """
+        Save or update example run state for a specific run.
+
+        Args:
+            run_id: Run identifier
+            example_id: Example identifier
+            status: Example status
+            failure_reason: Optional failure reason
+            escalation_reason: Optional escalation reason
+            compilable_code: Code after compilation fixes
+            verified_code: Code after runtime verification
+            drift_score: Drift score
+            drift_similarity: Drift similarity score
+            app_context: Application architecture context
+
+        Returns:
+            True if successful
+        """
+        # Task 2B: Single-writer protection
+        with self._write_lock:
+            with self.get_connection() as conn:
+                now = datetime.utcnow().isoformat()
+                conn.execute("""
+                    INSERT OR REPLACE INTO example_run_state (
+                        run_id, example_id, status, failure_reason, escalation_reason,
+                        compilable_code, verified_code, drift_score, drift_similarity,
+                        app_context, needs_human_review, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    run_id,
+                    example_id,
+                    status.value,
+                    failure_reason,
+                    escalation_reason,
+                    compilable_code,
+                    verified_code,
+                    drift_score,
+                    drift_similarity,
+                    app_context,
+                    1 if status == ExampleStatus.NEEDS_REVIEW else 0,
+                    now,
+                    now,
+                ))
+                return True
+
+    def get_example_run_state(
+        self,
+        run_id: str,
+        example_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get example run state for a specific run.
+
+        Args:
+            run_id: Run identifier
+            example_id: Example identifier
+
+        Returns:
+            Dictionary with run state or None if not found
+        """
+        with self.get_connection() as conn:
+            row = conn.execute("""
+                SELECT * FROM example_run_state
+                WHERE run_id = ? AND example_id = ?
+            """, (run_id, example_id)).fetchone()
+
+            if row:
+                return dict(row)
+        return None
+
+    def get_run_states_by_status(
+        self,
+        run_id: str,
+        status: ExampleStatus,
+        family: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all example run states for a run filtered by status.
+
+        Args:
+            run_id: Run identifier
+            status: Status filter
+            family: Optional family filter
+            limit: Optional result limit
+
+        Returns:
+            List of run state dictionaries
+        """
+        with self.get_connection() as conn:
+            query = """
+                SELECT ers.*, er.family, er.file_path, er.original_code
+                FROM example_run_state ers
+                JOIN example_records er ON ers.example_id = er.example_id
+                WHERE ers.run_id = ? AND ers.status = ?
+            """
+            params = [run_id, status.value]
+
+            if family:
+                query += " AND er.family = ?"
+                params.append(family)
+
+            query += " ORDER BY er.example_key ASC, er.example_id ASC"
+
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
+            return [dict(row) for row in rows]
+
+    def update_example_run_state_status(
+        self,
+        run_id: str,
+        example_id: str,
+        status: ExampleStatus,
+        failure_reason: Optional[str] = None,
+        escalation_reason: Optional[str] = None,
+    ) -> bool:
+        """
+        Update status for an example in a specific run.
+
+        Args:
+            run_id: Run identifier
+            example_id: Example identifier
+            status: New status
+            failure_reason: Optional failure reason
+            escalation_reason: Optional escalation reason
+
+        Returns:
+            True if successful
+        """
+        with self.get_connection() as conn:
+            conn.execute("""
+                UPDATE example_run_state
+                SET status = ?, failure_reason = ?, escalation_reason = ?, updated_at = ?
+                WHERE run_id = ? AND example_id = ?
+            """, (
+                status.value,
+                failure_reason,
+                escalation_reason,
+                datetime.utcnow().isoformat(),
+                run_id,
+                example_id,
+            ))
+            return conn.total_changes > 0
+
+    def update_example_run_state_code(
+        self,
+        run_id: str,
+        example_id: str,
+        compilable_code: Optional[str] = None,
+        verified_code: Optional[str] = None,
+    ) -> bool:
+        """
+        Update code fields for an example in a specific run.
+
+        Args:
+            run_id: Run identifier
+            example_id: Example identifier
+            compilable_code: Code after compilation fixes
+            verified_code: Code after runtime verification
+
+        Returns:
+            True if successful
+        """
+        with self.get_connection() as conn:
+            updates = []
+            params = []
+
+            if compilable_code is not None:
+                updates.append("compilable_code = ?")
+                params.append(compilable_code)
+
+            if verified_code is not None:
+                updates.append("verified_code = ?")
+                params.append(verified_code)
+
+            if not updates:
+                return False
+
+            updates.append("updated_at = ?")
+            params.append(datetime.utcnow().isoformat())
+            params.extend([run_id, example_id])
+
+            conn.execute(
+                f"UPDATE example_run_state SET {', '.join(updates)} WHERE run_id = ? AND example_id = ?",
+                params
+            )
+            return conn.total_changes > 0
+
+    def count_run_states_by_status(
+        self,
+        run_id: str,
+        family: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """
+        Count example run states grouped by status for a run.
+
+        Args:
+            run_id: Run identifier
+            family: Optional family filter
+
+        Returns:
+            Dictionary mapping status to count
+        """
+        with self.get_connection() as conn:
+            query = """
+                SELECT ers.status, COUNT(*) as count
+                FROM example_run_state ers
+            """
+
+            params = [run_id]
+
+            if family:
+                query += """
+                    JOIN example_records er ON ers.example_id = er.example_id
+                    WHERE ers.run_id = ? AND er.family = ?
+                """
+                params.append(family)
+            else:
+                query += " WHERE ers.run_id = ?"
+
+            query += " GROUP BY ers.status"
+
+            rows = conn.execute(query, params).fetchall()
+            return {row['status']: row['count'] for row in rows}
 
     def update_snippet(
         self,
@@ -591,9 +1281,47 @@ class Database:
         with self.get_connection() as conn:
             conn.execute("DELETE FROM example_records WHERE family = ?", (family,))
             return conn.total_changes
-    
+
+    def get_needs_review_examples(
+        self,
+        family: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[ExampleRecord]:
+        """
+        Get all examples in NEEDS_REVIEW state.
+
+        Args:
+            family: Optional family filter
+            limit: Optional limit on results
+
+        Returns:
+            List of ExampleRecord instances requiring human review
+        """
+        with self.get_connection() as conn:
+            query = "SELECT * FROM example_records WHERE status = ?"
+            params = [ExampleStatus.NEEDS_REVIEW.value]
+
+            if family:
+                query += " AND family = ?"
+                params.append(family)
+
+            # Deterministic ordering: example_key (primary), then example_id (tie-breaker)
+            query += " ORDER BY example_key ASC, example_id ASC"
+
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
+            return [self._row_to_example(row) for row in rows]
+
     def _row_to_example(self, row: sqlite3.Row) -> ExampleRecord:
-        """Convert database row to ExampleRecord."""
+        """
+        Convert database row to ExampleRecord (canonical fields only).
+
+        This method reads ONLY canonical fields from example_records.
+        Run-scoped fields (status, code, etc.) are set to defaults.
+        """
         gist = None
         if row['gist_owner'] or row['gist_id']:
             gist = GistInfo(
@@ -622,10 +1350,68 @@ class Database:
             ),
             gist=gist,
             original_code=row['original_code'],
-            compilable_code=row['compilable_code'],
-            verified_code=row['verified_code'],
-            status=ExampleStatus(row['status']),
-            failure_reason=row['failure_reason'],
+            # Run-scoped fields default to None/DISCOVERED
+            compilable_code=None,
+            verified_code=None,
+            status=ExampleStatus.DISCOVERED,
+            failure_reason=None,
+            escalation_reason=None,
+            created_at=datetime.fromisoformat(row['created_at']),
+            updated_at=datetime.fromisoformat(row['updated_at']),
+            section_heading=section_heading,
+            description_context=description_context,
+            topic=topic,
+            example_key=example_key,
+        )
+
+    def _row_to_example_with_run_state(self, row: sqlite3.Row) -> ExampleRecord:
+        """
+        Convert database row to ExampleRecord with run-scoped fields.
+
+        This method reads canonical fields from example_records and
+        run-scoped fields from the JOIN with example_run_state.
+        """
+        gist = None
+        if row['gist_owner'] or row['gist_id']:
+            gist = GistInfo(
+                owner=row['gist_owner'] or '',
+                gist_id=row['gist_id'] or '',
+                filename=row['gist_filename'] or '',
+            )
+
+        # Handle context fields
+        section_heading = row['section_heading'] if 'section_heading' in row.keys() else None
+        description_context = row['description_context'] if 'description_context' in row.keys() else None
+        topic = row['topic'] if 'topic' in row.keys() else None
+        example_key = row['example_key'] if 'example_key' in row.keys() else ""
+
+        # Read run-scoped fields (prefixed with run_)
+        status = ExampleStatus(row['run_status']) if 'run_status' in row.keys() else ExampleStatus.DISCOVERED
+        failure_reason = row['run_failure_reason'] if 'run_failure_reason' in row.keys() else None
+        escalation_reason = row['run_escalation_reason'] if 'run_escalation_reason' in row.keys() else None
+        compilable_code = row['run_compilable_code'] if 'run_compilable_code' in row.keys() else None
+        verified_code = row['run_verified_code'] if 'run_verified_code' in row.keys() else None
+
+        return ExampleRecord(
+            example_id=row['example_id'],
+            family=row['family'],
+            file_path=row['file_path'],
+            source_type=SourceType(row['source_type']),
+            language=row['language'],
+            location=Location(
+                block_index=row['location_block_index'],
+                start_line=row['location_start_line'],
+                end_line=row['location_end_line'],
+                anchor=row['location_anchor'] or '',
+            ),
+            gist=gist,
+            original_code=row['original_code'],
+            # Run-scoped fields from example_run_state
+            compilable_code=compilable_code,
+            verified_code=verified_code,
+            status=status,
+            failure_reason=failure_reason,
+            escalation_reason=escalation_reason,
             created_at=datetime.fromisoformat(row['created_at']),
             updated_at=datetime.fromisoformat(row['updated_at']),
             section_heading=section_heading,
@@ -638,41 +1424,68 @@ class Database:
     # COMPILE ATTEMPTS
     # =========================================================================
     
-    def save_compile_attempt(self, attempt: CompileAttempt) -> str:
-        """Save a compile attempt."""
-        with self.get_connection() as conn:
-            conn.execute("""
-                INSERT INTO compile_attempts (
-                    attempt_id, example_id, family, dll_version, success,
-                    compiler_log_ref, input_code_ref, output_code_ref,
-                    llm_request_ref, llm_response_ref,
-                    error_messages, warnings, timestamp
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                attempt.attempt_id,
-                attempt.example_id,
-                attempt.family,
-                attempt.dll_version,
-                1 if attempt.success else 0,
-                attempt.compiler_log_ref,
-                attempt.input_code_ref,
-                attempt.output_code_ref,
-                attempt.llm_request_ref,
-                attempt.llm_response_ref,
-                json.dumps(attempt.error_messages),
-                json.dumps(attempt.warnings),
-                attempt.timestamp.isoformat(),
-            ))
-        return attempt.attempt_id
+    def save_compile_attempt(self, attempt: CompileAttempt, run_id: Optional[str] = None) -> str:
+        """
+        Save a compile attempt.
+
+        Args:
+            attempt: Compile attempt to save
+            run_id: Optional run_id for run-scoped tracking
+
+        Returns:
+            attempt_id
+        """
+        # Task 2B: Single-writer protection
+        with self._write_lock:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO compile_attempts (
+                        attempt_id, example_id, family, dll_version, success,
+                        compiler_log_ref, input_code_ref, output_code_ref,
+                        llm_request_ref, llm_response_ref,
+                        error_messages, warnings, timestamp, run_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    attempt.attempt_id,
+                    attempt.example_id,
+                    attempt.family,
+                    attempt.dll_version,
+                    1 if attempt.success else 0,
+                    attempt.compiler_log_ref,
+                    attempt.input_code_ref,
+                    attempt.output_code_ref,
+                    attempt.llm_request_ref,
+                    attempt.llm_response_ref,
+                    json.dumps(attempt.error_messages),
+                    json.dumps(attempt.warnings),
+                    attempt.timestamp.isoformat(),
+                    run_id,  # NEW: run_id parameter
+                ))
+            return attempt.attempt_id
     
-    def get_compile_attempts(self, example_id: str) -> List[CompileAttempt]:
-        """Get all compile attempts for an example."""
+    def get_compile_attempts(self, example_id: str, run_id: Optional[str] = None) -> List[CompileAttempt]:
+        """
+        Get all compile attempts for an example, optionally filtered by run_id.
+
+        Args:
+            example_id: Example identifier
+            run_id: Optional run_id filter for run-scoped queries
+
+        Returns:
+            List of compile attempts
+        """
         with self.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM compile_attempts WHERE example_id = ? ORDER BY timestamp",
-                (example_id,)
-            ).fetchall()
-            
+            query = "SELECT * FROM compile_attempts WHERE example_id = ?"
+            params = [example_id]
+
+            # NEW: Filter by run_id if provided
+            if run_id:
+                query += " AND run_id = ?"
+                params.append(run_id)
+
+            query += " ORDER BY timestamp"
+
+            rows = conn.execute(query, params).fetchall()
             return [self._row_to_compile_attempt(row) for row in rows]
     
     def _row_to_compile_attempt(self, row: sqlite3.Row) -> CompileAttempt:
@@ -697,46 +1510,74 @@ class Database:
     # RUNTIME ATTEMPTS
     # =========================================================================
     
-    def save_runtime_attempt(self, attempt: RuntimeAttempt) -> str:
-        """Save a runtime attempt."""
-        with self.get_connection() as conn:
-            conn.execute("""
-                INSERT INTO runtime_attempts (
-                    attempt_id, example_id, family, sample_ref, scenario,
-                    success, runtime_log_ref, exit_code, stdout, stderr,
-                    exception_type, exception_message, output_files,
-                    environment, retrieved_examples_refs,
-                    llm_request_ref, llm_response_ref, timestamp
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                attempt.attempt_id,
-                attempt.example_id,
-                attempt.family,
-                attempt.sample_ref,
-                attempt.scenario,
-                1 if attempt.success else 0,
-                attempt.runtime_log_ref,
-                attempt.exit_code,
-                attempt.stdout,
-                attempt.stderr,
-                attempt.exception_type,
-                attempt.exception_message,
-                json.dumps(attempt.output_files),
-                json.dumps(attempt.environment),
-                json.dumps(attempt.retrieved_examples_refs),
-                attempt.llm_request_ref,
-                attempt.llm_response_ref,
-                attempt.timestamp.isoformat(),
-            ))
-        return attempt.attempt_id
+    def save_runtime_attempt(self, attempt: RuntimeAttempt, run_id: Optional[str] = None) -> str:
+        """
+        Save a runtime attempt.
+
+        Args:
+            attempt: Runtime attempt to save
+            run_id: Optional run_id for run-scoped tracking
+
+        Returns:
+            attempt_id
+        """
+        # Task 2B: Single-writer protection
+        with self._write_lock:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO runtime_attempts (
+                        attempt_id, example_id, family, sample_ref, scenario,
+                        success, runtime_log_ref, exit_code, stdout, stderr,
+                        exception_type, exception_message, output_files,
+                        environment, retrieved_examples_refs,
+                        llm_request_ref, llm_response_ref, timestamp, run_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    attempt.attempt_id,
+                    attempt.example_id,
+                    attempt.family,
+                    attempt.sample_ref,
+                    attempt.scenario,
+                    1 if attempt.success else 0,
+                    attempt.runtime_log_ref,
+                    attempt.exit_code,
+                    attempt.stdout,
+                    attempt.stderr,
+                    attempt.exception_type,
+                    attempt.exception_message,
+                    json.dumps(attempt.output_files),
+                    json.dumps(attempt.environment),
+                    json.dumps(attempt.retrieved_examples_refs),
+                    attempt.llm_request_ref,
+                    attempt.llm_response_ref,
+                    attempt.timestamp.isoformat(),
+                    run_id,  # NEW: run_id parameter
+                ))
+            return attempt.attempt_id
     
-    def get_runtime_attempts(self, example_id: str) -> List[RuntimeAttempt]:
-        """Get all runtime attempts for an example."""
+    def get_runtime_attempts(self, example_id: str, run_id: Optional[str] = None) -> List[RuntimeAttempt]:
+        """
+        Get all runtime attempts for an example, optionally filtered by run_id.
+
+        Args:
+            example_id: Example identifier
+            run_id: Optional run_id filter for run-scoped queries
+
+        Returns:
+            List of runtime attempts
+        """
         with self.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM runtime_attempts WHERE example_id = ? ORDER BY timestamp",
-                (example_id,)
-            ).fetchall()
+            query = "SELECT * FROM runtime_attempts WHERE example_id = ?"
+            params = [example_id]
+
+            # NEW: Filter by run_id if provided
+            if run_id:
+                query += " AND run_id = ?"
+                params.append(run_id)
+
+            query += " ORDER BY timestamp"
+
+            rows = conn.execute(query, params).fetchall()
             
             return [self._row_to_runtime_attempt(row) for row in rows]
     
@@ -764,17 +1605,93 @@ class Database:
         )
     
     # =========================================================================
+    # FAILURE DETAILS (Track 2: Agent C - Multi-Level Timeouts)
+    # =========================================================================
+
+    def insert_failure_detail(
+        self,
+        example_id: str,
+        family: str,
+        phase: Optional[str],
+        failure_type: str,
+        failure_reason: str,
+        operation: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        DEPRECATED: Use failure_tracking.FailureTracker.save_failure_detail() instead.
+
+        This method is kept for backward compatibility but will be removed in a future version.
+        The new failure tracking API uses FailureDetail model with failure_category instead of failure_type.
+        """
+        logger.warning(
+            "insert_failure_detail() is deprecated. Use failure_tracking.FailureTracker.save_failure_detail() instead"
+        )
+        raise NotImplementedError(
+            "insert_failure_detail() has been deprecated. "
+            "Use failure_tracking.FailureTracker.save_failure_detail() with FailureDetail model instead. "
+            "See migrations/007_failure_details_tracking.sql for the new schema."
+        )
+
+    def get_failure_details(self, example_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all failure details for an example.
+
+        Args:
+            example_id: Example identifier
+
+        Returns:
+            List of failure detail records
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM failure_details WHERE example_id = ? ORDER BY timestamp",
+                (example_id,)
+            ).fetchall()
+
+            return [dict(row) for row in rows]
+
+    def get_timeout_failures(self, run_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all timeout failures for a run.
+
+        Args:
+            run_id: Run identifier
+
+        Returns:
+            List of timeout failure records
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT * FROM failure_details
+                WHERE run_id = ? AND failure_category = 'timeout'
+                ORDER BY timestamp DESC
+            """, (run_id,)).fetchall()
+
+            return [dict(row) for row in rows]
+
+    # =========================================================================
     # MARKDOWN EDITS
     # =========================================================================
     
-    def save_markdown_edit(self, edit: MarkdownEdit) -> str:
-        """Save a markdown edit."""
+    def save_markdown_edit(self, edit: MarkdownEdit, run_id: Optional[str] = None) -> str:
+        """
+        Save a markdown edit.
+
+        Args:
+            edit: Markdown edit to save
+            run_id: Optional run_id for run-scoped tracking
+
+        Returns:
+            edit_id
+        """
         with self.get_connection() as conn:
             conn.execute("""
                 INSERT INTO markdown_edits (
                     edit_id, file_path, example_id, family,
-                    edit_type, diff_ref, old_code, new_code, timestamp
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    edit_type, diff_ref, old_code, new_code, timestamp, run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 edit.edit_id,
                 edit.file_path,
@@ -785,6 +1702,7 @@ class Database:
                 edit.old_code,
                 edit.new_code,
                 edit.timestamp.isoformat(),
+                run_id,  # NEW: run_id parameter
             ))
         return edit.edit_id
     
@@ -848,26 +1766,39 @@ class Database:
         """
         Compute run statistics from actual DB state (not stale counters).
 
-        Queries example_records to get accurate counts based on status.
+        Queries example_run_state to get accurate counts based on status.
         This ensures stats reflect true DB state, not accumulated counters.
 
         Args:
             family: Family identifier
-            run_id: Optional run ID to filter by (for future multi-run tracking)
+            run_id: Optional run ID to filter by (for run-scoped tracking)
 
         Returns:
             Dictionary with total_processed, verified, failed counts
         """
         with self.get_connection() as conn:
-            # Count examples by status for this family
-            counts = conn.execute("""
-                SELECT
-                    COUNT(*) as total,
-                    SUM(CASE WHEN status = 'VERIFIED' OR status = 'MD_UPDATED' OR status = 'FINAL_REVIEW_PASSED' THEN 1 ELSE 0 END) as verified,
-                    SUM(CASE WHEN status LIKE '%FAILED%' THEN 1 ELSE 0 END) as failed
-                FROM example_records
-                WHERE family = ?
-            """, (family,)).fetchone()
+            # Count examples by status for this family and run
+            if run_id:
+                counts = conn.execute("""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN ers.status = 'VERIFIED' OR ers.status = 'MD_UPDATED' OR ers.status = 'FINAL_REVIEW_PASSED' THEN 1 ELSE 0 END) as verified,
+                        SUM(CASE WHEN ers.status LIKE '%FAILED%' THEN 1 ELSE 0 END) as failed
+                    FROM example_records er
+                    JOIN example_run_state ers ON er.example_id = ers.example_id
+                    WHERE er.family = ? AND ers.run_id = ?
+                """, (family, run_id)).fetchone()
+            else:
+                # Fallback: count all examples for family across all runs
+                counts = conn.execute("""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN ers.status = 'VERIFIED' OR ers.status = 'MD_UPDATED' OR ers.status = 'FINAL_REVIEW_PASSED' THEN 1 ELSE 0 END) as verified,
+                        SUM(CASE WHEN ers.status LIKE '%FAILED%' THEN 1 ELSE 0 END) as failed
+                    FROM example_records er
+                    JOIN example_run_state ers ON er.example_id = ers.example_id
+                    WHERE er.family = ?
+                """, (family,)).fetchone()
 
             return {
                 'total_processed': counts['total'] or 0,
@@ -1270,6 +2201,283 @@ class Database:
                 stats[family] = self.get_family_stats(family)
 
             return stats
+
+    def get_runtime_kpis(self, run_id: Optional[str] = None, family: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Calculate runtime KPIs excluding infrastructure failures.
+
+        This method calculates key performance indicators for runtime validation
+        while excluding examples that failed due to infrastructure issues
+        (missing test data). This provides a clearer picture of actual runtime
+        success rate vs infrastructure blockers.
+
+        Args:
+            run_id: Optional run_id to filter by specific run
+            family: Optional family to filter by specific family
+
+        Returns:
+            Dict with KPIs:
+                - total_runtime_attempted: Total examples that reached runtime phase
+                - verified_count: Examples that passed runtime validation
+                - infra_blocked_count: Examples blocked by missing test data
+                - runtime_error_count: Examples that failed runtime (excluding infra)
+                - runtime_verified_rate_excluding_infra: verified / (total - infra_blocked)
+                - infra_blocked_rate: infra_blocked / total
+        """
+        with self.get_connection() as conn:
+            # Build query conditions
+            where_conditions = []
+            params = []
+
+            if run_id:
+                where_conditions.append("fd.run_id = ?")
+                params.append(run_id)
+            if family:
+                where_conditions.append("er.family = ?")
+                params.append(family)
+
+            # Proper WHERE clause construction with parentheses
+            where_clause = ""
+            if where_conditions:
+                where_clause = " AND (" + " AND ".join(where_conditions) + ")"
+
+            # Get failure counts by category
+            # Uses failure_details (which has run_id) joined with example_records (for family)
+            query = f"""
+                SELECT
+                    fd.failure_category,
+                    COUNT(*) as count
+                FROM failure_details fd
+                JOIN example_records er ON fd.example_id = er.example_id
+                WHERE (fd.phase = 'Phase C (Pre-Runtime)' OR fd.phase LIKE 'Phase C%')
+                {where_clause}
+                GROUP BY fd.failure_category
+            """
+
+            failure_rows = conn.execute(query, tuple(params)).fetchall()
+            failure_counts = {row['failure_category']: row['count'] for row in failure_rows}
+
+            # Get verified count from example_run_state (not example_records!)
+            # FIXED: Query from example_run_state which has run_id and status
+            verified_where_conditions = []
+            verified_params = []
+
+            if run_id and family:
+                # Both run_id and family - need to join with example_records
+                verified_query = """
+                    SELECT COUNT(*) as count
+                    FROM example_run_state ers
+                    JOIN example_records er ON ers.example_id = er.example_id
+                    WHERE ers.run_id = ? AND ers.status = 'VERIFIED' AND er.family = ?
+                """
+                verified_params = [run_id, family]
+            elif run_id:
+                # Only run_id - can query example_run_state directly
+                verified_query = """
+                    SELECT COUNT(*) as count
+                    FROM example_run_state ers
+                    WHERE ers.run_id = ? AND ers.status = 'VERIFIED'
+                """
+                verified_params = [run_id]
+            elif family:
+                # Only family - need to join with example_records but no run filter
+                # This queries across ALL runs for this family
+                verified_query = """
+                    SELECT COUNT(*) as count
+                    FROM example_run_state ers
+                    JOIN example_records er ON ers.example_id = er.example_id
+                    WHERE ers.status = 'VERIFIED' AND er.family = ?
+                """
+                verified_params = [family]
+            else:
+                # No filters - count all VERIFIED across all runs
+                verified_query = """
+                    SELECT COUNT(*) as count
+                    FROM example_run_state ers
+                    WHERE ers.status = 'VERIFIED'
+                """
+                verified_params = []
+
+            verified_count = conn.execute(verified_query, tuple(verified_params)).fetchone()['count']
+
+            # Calculate metrics
+            infra_blocked = failure_counts.get('infra_missing_test_data', 0)
+            runtime_errors = sum(
+                count for category, count in failure_counts.items()
+                if category in ['runtime_error', 'timeout', 'compile_error']
+            )
+            total_attempted = verified_count + infra_blocked + runtime_errors
+
+            # Calculate rates
+            total_excluding_infra = total_attempted - infra_blocked
+            runtime_verified_rate_excluding_infra = (
+                (verified_count / total_excluding_infra * 100) if total_excluding_infra > 0 else 0.0
+            )
+            infra_blocked_rate = (
+                (infra_blocked / total_attempted * 100) if total_attempted > 0 else 0.0
+            )
+
+            return {
+                'total_runtime_attempted': total_attempted,
+                'verified_count': verified_count,
+                'infra_blocked_count': infra_blocked,
+                'runtime_error_count': runtime_errors,
+                'runtime_verified_rate_excluding_infra': round(runtime_verified_rate_excluding_infra, 2),
+                'infra_blocked_rate': round(infra_blocked_rate, 2),
+                'total_excluding_infra': total_excluding_infra,
+            }
+
+    def get_phase2_metrics(self, run_id: str, family: str) -> Dict[str, Any]:
+        """
+        Calculate comprehensive Phase-2 metrics including all 3 required rates.
+
+        Phase-2 Metrics:
+        1. overall_verified_rate = VERIFIED / total_examples
+        2. eligible_verified_rate = VERIFIED / eligible_examples
+        3. runtime_verified_rate = verified_runtime / runtime_attempted
+
+        Where:
+        - eligible_examples = total_examples - INFRA_BLOCKED - NEEDS_REVIEW(precheck_only)
+        - INFRA_BLOCKED includes: missing fixtures, password issues, unsupported formats
+        - NEEDS_REVIEW(precheck_only) includes: empty code, comments only, incomplete
+
+        Args:
+            run_id: Pipeline run ID
+            family: Product family
+
+        Returns:
+            Dict with all Phase-2 metrics and denominators
+        """
+        with self.get_connection() as conn:
+            # Get total examples in run
+            total_row = conn.execute("""
+                SELECT COUNT(*) as count
+                FROM example_run_state ers
+                JOIN example_records er ON ers.example_id = er.example_id
+                WHERE ers.run_id = ? AND er.family = ?
+            """, (run_id, family)).fetchone()
+            total_examples = total_row['count'] if total_row else 0
+
+            # Get status counts
+            status_rows = conn.execute("""
+                SELECT ers.status, COUNT(*) as count
+                FROM example_run_state ers
+                JOIN example_records er ON ers.example_id = er.example_id
+                WHERE ers.run_id = ? AND er.family = ?
+                GROUP BY ers.status
+            """, (run_id, family)).fetchall()
+            status_counts = {row['status']: row['count'] for row in status_rows}
+
+            # Get verified count
+            verified_count = status_counts.get('VERIFIED', 0)
+
+            # Get INFRA_BLOCKED count (from status)
+            infra_blocked_status = status_counts.get('INFRA_BLOCKED', 0)
+
+            # Get NEEDS_REVIEW count
+            needs_review_count = status_counts.get('NEEDS_REVIEW', 0)
+
+            # Get detailed failure breakdown by category
+            failure_rows = conn.execute("""
+                SELECT fd.failure_category, COUNT(*) as count
+                FROM failure_details fd
+                JOIN example_records er ON fd.example_id = er.example_id
+                WHERE fd.run_id = ? AND er.family = ?
+                GROUP BY fd.failure_category
+            """, (run_id, family)).fetchall()
+            failure_counts = {row['failure_category']: row['count'] for row in failure_rows}
+
+            # Calculate INFRA_BLOCKED from failures (may be more accurate than status)
+            infra_blocked_failures = (
+                failure_counts.get('infra_missing_test_data', 0) +
+                failure_counts.get('infra_blocked_rar_fixture', 0) +
+                failure_counts.get('infra_blocked_7z_fixture', 0) +
+                failure_counts.get('infra_blocked_password', 0) +
+                failure_counts.get('infra_blocked_format', 0) +
+                failure_counts.get('infra_blocked_external', 0)
+            )
+            infra_blocked_count = max(infra_blocked_status, infra_blocked_failures)
+
+            # Get NEEDS_REVIEW that are precheck_only failures
+            precheck_count = failure_counts.get('precheck_only', 0)
+            # Also count NEEDS_REVIEW with precheck-related escalation reasons
+            precheck_escalation_row = conn.execute("""
+                SELECT COUNT(*) as count
+                FROM example_run_state ers
+                JOIN example_records er ON ers.example_id = er.example_id
+                WHERE ers.run_id = ? AND er.family = ?
+                  AND ers.status = 'NEEDS_REVIEW'
+                  AND (
+                      ers.escalation_reason IN (
+                          'empty_code', 'only_comments', 'no_csharp_code_block',
+                          'snippet_too_incomplete'
+                      )
+                  )
+            """, (run_id, family)).fetchone()
+            precheck_escalation_count = precheck_escalation_row['count'] if precheck_escalation_row else 0
+            precheck_only_count = max(precheck_count, precheck_escalation_count)
+
+            # Calculate eligible examples
+            eligible_examples = total_examples - infra_blocked_count - precheck_only_count
+
+            # Get runtime-specific metrics
+            # Runtime attempted = COMPILABLE that entered runtime phase
+            compilable_count = status_counts.get('COMPILABLE', 0)
+            runtime_failed_count = status_counts.get('RUNTIME_FAILED', 0)
+            runtime_attempted = verified_count + runtime_failed_count
+
+            # Calculate the 3 required rates
+            overall_verified_rate = (
+                (verified_count / total_examples * 100) if total_examples > 0 else 0.0
+            )
+            eligible_verified_rate = (
+                (verified_count / eligible_examples * 100) if eligible_examples > 0 else 0.0
+            )
+            runtime_verified_rate = (
+                (verified_count / runtime_attempted * 100) if runtime_attempted > 0 else 0.0
+            )
+
+            # Closure gate evaluation
+            gate_a_pass = overall_verified_rate >= 90.0
+            gate_b_pass = eligible_verified_rate >= 90.0
+
+            return {
+                # Counts
+                'total_examples': total_examples,
+                'eligible_examples': eligible_examples,
+                'verified_count': verified_count,
+                'infra_blocked_count': infra_blocked_count,
+                'precheck_only_count': precheck_only_count,
+                'needs_review_count': needs_review_count,
+                'compile_failed_count': status_counts.get('COMPILE_FAILED', 0),
+                'compilable_count': compilable_count,
+                'runtime_failed_count': runtime_failed_count,
+                'runtime_attempted': runtime_attempted,
+
+                # The 3 required rates (as percentages)
+                'overall_verified_rate': round(overall_verified_rate, 2),
+                'eligible_verified_rate': round(eligible_verified_rate, 2),
+                'runtime_verified_rate': round(runtime_verified_rate, 2),
+
+                # Closure gate results
+                'gate_a_pass': gate_a_pass,
+                'gate_b_pass': gate_b_pass,
+                'gate_selected': 'B',  # Gate B is recommended
+                'gate_pass': gate_b_pass,
+
+                # Status breakdown
+                'status_counts': status_counts,
+
+                # Infra blockers breakdown
+                'infra_breakdown': {
+                    'missing_test_data': failure_counts.get('infra_missing_test_data', 0),
+                    'missing_rar_fixture': failure_counts.get('infra_blocked_rar_fixture', 0),
+                    'missing_7z_fixture': failure_counts.get('infra_blocked_7z_fixture', 0),
+                    'requires_password': failure_counts.get('infra_blocked_password', 0),
+                    'unsupported_format': failure_counts.get('infra_blocked_format', 0),
+                    'external_dependency': failure_counts.get('infra_blocked_external', 0),
+                },
+            }
 
     # =========================================================================
     # TELEMETRY AGGREGATION
@@ -1846,4 +3054,235 @@ class Database:
             severity=IssueSeverity(row['severity']),
             resolved=bool(row['resolved']),
             created_at=datetime.fromisoformat(row['created_at']),
+        )
+
+    # =========================================================================
+    # FAILURE TRACKING
+    # =========================================================================
+
+    def save_failure_detail(self, failure: 'FailureDetail') -> str:
+        """
+        Save a failure detail record.
+
+        Args:
+            failure: FailureDetail instance
+
+        Returns:
+            failure_id
+        """
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO failure_details (
+                    failure_id, run_id, example_id, phase,
+                    failure_category, error_category, error_message,
+                    resolution, metadata, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                failure.failure_id,
+                failure.run_id,
+                failure.example_id,
+                failure.phase,
+                failure.failure_category.value,
+                failure.error_category,
+                failure.error_message,
+                failure.resolution.value,
+                json.dumps(failure.metadata),
+                failure.timestamp.isoformat(),
+            ))
+        return failure.failure_id
+
+    def get_failure_details_by_run(self, run_id: str) -> List['FailureDetail']:
+        """
+        Get all failure details for a run.
+
+        Args:
+            run_id: Pipeline run ID
+
+        Returns:
+            List of FailureDetail instances
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM failure_details WHERE run_id = ? ORDER BY timestamp",
+                (run_id,)
+            ).fetchall()
+
+            return [self._row_to_failure_detail(row) for row in rows]
+
+    def get_failure_breakdown(self, run_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get failure breakdown by category.
+
+        Args:
+            run_id: Optional run ID filter
+
+        Returns:
+            Dictionary with failure counts and breakdowns
+        """
+        with self.get_connection() as conn:
+            query = """
+                SELECT
+                    failure_category,
+                    COUNT(*) as failure_count,
+                    COUNT(DISTINCT example_id) as affected_examples,
+                    COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) as fixed_count,
+                    COUNT(CASE WHEN resolution = 'needs_review' THEN 1 END) as needs_review_count,
+                    COUNT(CASE WHEN resolution = 'abandoned' THEN 1 END) as abandoned_count
+                FROM failure_details
+            """
+            params = []
+
+            if run_id:
+                query += " WHERE run_id = ?"
+                params.append(run_id)
+
+            query += " GROUP BY failure_category ORDER BY failure_count DESC"
+
+            rows = conn.execute(query, params).fetchall()
+
+            return {
+                'failure_categories': [
+                    {
+                        'category': row['failure_category'],
+                        'count': row['failure_count'],
+                        'affected_examples': row['affected_examples'],
+                        'fixed': row['fixed_count'],
+                        'needs_review': row['needs_review_count'],
+                        'abandoned': row['abandoned_count'],
+                    }
+                    for row in rows
+                ],
+                'total_failures': sum(row['failure_count'] for row in rows),
+            }
+
+    def get_top_error_types(self, limit: int = 10, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get top error types by occurrence count.
+
+        Args:
+            limit: Maximum number of error types to return
+            run_id: Optional run ID filter
+
+        Returns:
+            List of error type statistics
+        """
+        with self.get_connection() as conn:
+            query = """
+                SELECT
+                    error_category,
+                    failure_category,
+                    COUNT(*) as occurrence_count,
+                    COUNT(DISTINCT example_id) as affected_examples,
+                    COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) as fixed_count,
+                    ROUND(100.0 * COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) / COUNT(*), 2) as fix_rate_pct
+                FROM failure_details
+                WHERE error_category IS NOT NULL
+            """
+            params = []
+
+            if run_id:
+                query += " AND run_id = ?"
+                params.append(run_id)
+
+            query += """
+                GROUP BY error_category, failure_category
+                ORDER BY occurrence_count DESC
+                LIMIT ?
+            """
+            params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
+
+            return [
+                {
+                    'error_category': row['error_category'],
+                    'failure_category': row['failure_category'],
+                    'occurrence_count': row['occurrence_count'],
+                    'affected_examples': row['affected_examples'],
+                    'fixed_count': row['fixed_count'],
+                    'fix_rate_pct': row['fix_rate_pct'],
+                }
+                for row in rows
+            ]
+
+    def get_resolution_rates(self, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get resolution success rates by phase and category.
+
+        Args:
+            run_id: Optional run ID filter
+
+        Returns:
+            List of resolution statistics
+        """
+        with self.get_connection() as conn:
+            query = """
+                SELECT
+                    phase,
+                    failure_category,
+                    COUNT(*) as total_failures,
+                    COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) as fixed,
+                    COUNT(CASE WHEN resolution = 'needs_review' THEN 1 END) as needs_review,
+                    COUNT(CASE WHEN resolution = 'abandoned' THEN 1 END) as abandoned,
+                    COUNT(CASE WHEN resolution = 'pending' THEN 1 END) as pending,
+                    ROUND(100.0 * COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) / COUNT(*), 2) as fix_rate_pct
+                FROM failure_details
+            """
+            params = []
+
+            if run_id:
+                query += " WHERE run_id = ?"
+                params.append(run_id)
+
+            query += " GROUP BY phase, failure_category ORDER BY phase, total_failures DESC"
+
+            rows = conn.execute(query, params).fetchall()
+
+            return [
+                {
+                    'phase': row['phase'],
+                    'failure_category': row['failure_category'],
+                    'total_failures': row['total_failures'],
+                    'fixed': row['fixed'],
+                    'needs_review': row['needs_review'],
+                    'abandoned': row['abandoned'],
+                    'pending': row['pending'],
+                    'fix_rate_pct': row['fix_rate_pct'],
+                }
+                for row in rows
+            ]
+
+    def update_failure_resolution(self, failure_id: str, resolution: 'FailureResolution') -> bool:
+        """
+        Update the resolution status of a failure.
+
+        Args:
+            failure_id: Failure identifier
+            resolution: New resolution status
+
+        Returns:
+            True if updated successfully
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE failure_details SET resolution = ? WHERE failure_id = ?",
+                (resolution.value, failure_id)
+            )
+            return conn.total_changes > 0
+
+    def _row_to_failure_detail(self, row: sqlite3.Row) -> 'FailureDetail':
+        """Convert database row to FailureDetail."""
+        from .models import FailureDetail, FailureCategory, FailureResolution
+
+        return FailureDetail(
+            failure_id=row['failure_id'],
+            run_id=row['run_id'],
+            example_id=row['example_id'],
+            phase=row['phase'],
+            failure_category=FailureCategory(row['failure_category']),
+            error_category=row['error_category'],
+            error_message=row['error_message'],
+            resolution=FailureResolution(row['resolution']),
+            metadata=json.loads(row['metadata']) if row['metadata'] else {},
+            timestamp=datetime.fromisoformat(row['timestamp']),
         )

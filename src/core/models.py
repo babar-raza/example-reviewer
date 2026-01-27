@@ -11,6 +11,13 @@ import hashlib
 import socket
 import uuid
 
+# Import AppContext for application architecture classification
+try:
+    from .app_context import AppContext
+except ImportError:
+    # Fallback for cases where app_context module is not yet available
+    AppContext = None
+
 
 class ExampleStatus(str, Enum):
     """Status state machine for examples."""
@@ -22,7 +29,17 @@ class ExampleStatus(str, Enum):
     MD_UPDATED = "MD_UPDATED"
     FINAL_REVIEW_PASSED = "FINAL_REVIEW_PASSED"
     FINAL_REVIEW_FAILED = "FINAL_REVIEW_FAILED"
+    NEEDS_REVIEW = "NEEDS_REVIEW"  # Track 2: Risk routing escalation state
+    INFRA_BLOCKED = "INFRA_BLOCKED"  # Phase-2: Infrastructure blocker (missing fixtures, etc.)
     COMMITTED = "COMMITTED"
+
+
+class ErrorRisk(str, Enum):
+    """Risk level for error routing (Track 2: D.4)."""
+    LOW = "LOW"  # Auto-fix with limited retries
+    MEDIUM = "MEDIUM"  # Auto-fix with drift + validation gates
+    HIGH = "HIGH"  # One attempt then NEEDS_REVIEW
+    CRITICAL = "CRITICAL"  # Immediate NEEDS_REVIEW
 
 
 class SourceType(str, Enum):
@@ -93,6 +110,7 @@ class ExampleRecord(BaseModel):
     verified_code: Optional[str] = Field(default=None, description="Code after runtime verification")
     status: ExampleStatus = Field(default=ExampleStatus.DISCOVERED)
     failure_reason: Optional[str] = None
+    escalation_reason: Optional[str] = Field(default=None, description="Reason for NEEDS_REVIEW escalation")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -100,6 +118,9 @@ class ExampleRecord(BaseModel):
     section_heading: Optional[str] = Field(default=None, description="Markdown heading above code block")
     description_context: Optional[str] = Field(default=None, description="Paragraphs before code block")
     topic: Optional[str] = Field(default=None, description="Topic inferred from file path")
+
+    # Application context classification (Phase-2 Gate B: prevent cross-context substitution)
+    app_context: Optional[str] = Field(default=None, description="Application architecture type (console, aspnet_core_minimal, mvc, webapi, library)")
 
     # Deterministic key for stable ordering (Track 1 requirement)
     example_key: str = Field(default="", description="Deterministic hash for stable ordering")
@@ -155,14 +176,16 @@ class ExampleRecord(BaseModel):
     def can_transition_to(self, new_status: ExampleStatus) -> bool:
         """Check if transition to new status is valid."""
         valid_transitions = {
-            ExampleStatus.DISCOVERED: [ExampleStatus.COMPILE_FAILED, ExampleStatus.COMPILABLE],
-            ExampleStatus.COMPILE_FAILED: [ExampleStatus.COMPILABLE],
-            ExampleStatus.COMPILABLE: [ExampleStatus.RUNTIME_FAILED, ExampleStatus.VERIFIED],
-            ExampleStatus.RUNTIME_FAILED: [ExampleStatus.VERIFIED],
+            ExampleStatus.DISCOVERED: [ExampleStatus.COMPILE_FAILED, ExampleStatus.COMPILABLE, ExampleStatus.NEEDS_REVIEW, ExampleStatus.INFRA_BLOCKED],
+            ExampleStatus.COMPILE_FAILED: [ExampleStatus.COMPILABLE, ExampleStatus.NEEDS_REVIEW, ExampleStatus.INFRA_BLOCKED],
+            ExampleStatus.COMPILABLE: [ExampleStatus.RUNTIME_FAILED, ExampleStatus.VERIFIED, ExampleStatus.NEEDS_REVIEW, ExampleStatus.INFRA_BLOCKED],
+            ExampleStatus.RUNTIME_FAILED: [ExampleStatus.VERIFIED, ExampleStatus.NEEDS_REVIEW, ExampleStatus.INFRA_BLOCKED],
             ExampleStatus.VERIFIED: [ExampleStatus.MD_UPDATED],
             ExampleStatus.MD_UPDATED: [ExampleStatus.FINAL_REVIEW_PASSED, ExampleStatus.FINAL_REVIEW_FAILED],
             ExampleStatus.FINAL_REVIEW_PASSED: [ExampleStatus.COMMITTED],
             ExampleStatus.FINAL_REVIEW_FAILED: [],
+            ExampleStatus.NEEDS_REVIEW: [],  # Terminal state - requires human review
+            ExampleStatus.INFRA_BLOCKED: [],  # Terminal state - requires infrastructure fix
             ExampleStatus.COMMITTED: [],
         }
         return new_status in valid_transitions.get(self.status, [])
@@ -324,6 +347,53 @@ class TelemetryEvent(BaseModel):
         if not self.event_id:
             content = f"{self.run_id}:{self.event_type}:{self.timestamp.isoformat()}"
             self.event_id = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+class FailureCategory(str, Enum):
+    """Categories of failures tracked in the pipeline."""
+    TIMEOUT = "timeout"
+    DRIFT_EXCEEDED = "drift_exceeded"
+    API_CONTEXT_MISSING = "api_context_missing"
+    LLM_RESPONSE_REJECTED = "llm_response_rejected"
+    ESCALATED_TO_REVIEW = "escalated_to_review"
+    COMPILE_ERROR = "compile_error"
+    RUNTIME_ERROR = "runtime_error"
+    REVIEW_FAILED = "review_failed"
+    INFRA_MISSING_TEST_DATA = "infra_missing_test_data"  # Infrastructure: test data files missing
+    INFRA_BLOCKED_RAR_FIXTURE = "infra_blocked_rar_fixture"  # Phase-2: RAR fixture unavailable
+    INFRA_BLOCKED_7Z_FIXTURE = "infra_blocked_7z_fixture"  # Phase-2: 7z fixture incompatible
+    INFRA_BLOCKED_PASSWORD = "infra_blocked_password"  # Phase-2: Password/secret required
+    INFRA_BLOCKED_FORMAT = "infra_blocked_format"  # Phase-2: Unsupported archive format
+    INFRA_BLOCKED_EXTERNAL = "infra_blocked_external"  # Phase-2: External dependency missing
+    PRECHECK_ONLY = "precheck_only"  # Phase-2: Pre-compilation check failed (empty/incomplete)
+    OTHER = "other"
+
+
+class FailureResolution(str, Enum):
+    """Resolution status for tracked failures."""
+    FIXED = "fixed"
+    NEEDS_REVIEW = "needs_review"
+    ABANDONED = "abandoned"
+    PENDING = "pending"
+
+
+class FailureDetail(BaseModel):
+    """Record of a failure for analytics tracking."""
+    failure_id: str = Field(default="", description="Unique failure ID")
+    run_id: str = Field(..., description="Pipeline run ID")
+    example_id: Optional[str] = Field(default=None, description="Example that failed")
+    phase: str = Field(..., description="Phase where failure occurred")
+    failure_category: FailureCategory = Field(..., description="Category of failure")
+    error_category: Optional[str] = Field(default=None, description="Specific error type")
+    error_message: Optional[str] = Field(default=None, description="Error message text")
+    resolution: FailureResolution = Field(default=FailureResolution.PENDING)
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional context")
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    def model_post_init(self, __context) -> None:
+        if not self.failure_id:
+            content = f"{self.run_id}:{self.phase}:{self.failure_category.value}:{self.timestamp.isoformat()}"
+            self.failure_id = hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
 class TelemetryRun(BaseModel):
