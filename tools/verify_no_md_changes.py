@@ -1,225 +1,198 @@
-#!/usr/bin/env python3
 """
-Gate 4: Safety Verification Tool - No Markdown Changes
+Verify No Markdown Changes Outside Allowed Paths.
 
-Verify no markdown files were modified (safety check).
-
-Requirements (from Plan v2.1):
-- Run `git status --porcelain` and parse output
-- Check for any .md files with status M (modified)
-- Exit code 0 if clean, 1 if .md files modified
-- Print list of modified .md files (if any)
-- Accept optional --allow-paths argument to whitelist certain paths (e.g., reports/)
+This tool verifies that no markdown files (.md) have been modified outside
+the allowed paths (specs/, reports/, docs/, plans/) using git to detect changes.
 
 Usage:
     python tools/verify_no_md_changes.py
-    python tools/verify_no_md_changes.py --allow-paths reports/,docs/
+    python tools/verify_no_md_changes.py --allow-paths specs/,reports/,docs/,plans/
+
+Exit Codes:
+    0 - No violations found (clean)
+    1 - Violations found (markdown changes outside allowed paths)
+    2 - Error (git not available or other failure)
+
+Hard Rules:
+    - NO markdown changes outside: specs/, reports/, docs/, plans/
+    - Uses git to detect modifications
+    - Works on Windows
 """
 
 import argparse
+import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Set
+from typing import List, Tuple
 
 
-def parse_porcelain_line(line: str) -> tuple[str, str]:
+def setup_logging(verbose: bool = False) -> None:
+    """Configure logging."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - [%(levelname)s] %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+
+
+def get_git_status() -> Tuple[bool, str]:
     """
-    Parse a git status --porcelain line.
+    Get git status output.
 
-    Format: XY filename
-    Where X is index status, Y is working tree status
-
-    Returns: (status, filepath)
-    """
-    if len(line) < 3:
-        return "", ""
-
-    status = line[:2]
-    filepath = line[3:].strip()
-
-    # Handle renames (format: "R  old -> new")
-    if ' -> ' in filepath:
-        filepath = filepath.split(' -> ')[1]
-
-    return status, filepath
-
-
-def get_modified_files() -> List[tuple[str, str]]:
-    """
-    Get list of modified files from git status.
-
-    Returns list of (status, filepath) tuples.
+    Returns:
+        Tuple of (success: bool, output: str)
     """
     try:
         result = subprocess.run(
-            ['git', 'status', '--porcelain'],
+            ["git", "status", "--porcelain"],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
 
-        if result.returncode != 0:
-            print(f"ERROR: git status failed: {result.stderr}", file=sys.stderr)
-            sys.exit(1)
-
-        modified_files = []
-        for line in result.stdout.strip().split('\n'):
-            if not line:
-                continue
-
-            status, filepath = parse_porcelain_line(line)
-            if status:
-                modified_files.append((status, filepath))
-
-        return modified_files
+        return result.returncode == 0, result.stdout
 
     except FileNotFoundError:
-        print("ERROR: git command not found", file=sys.stderr)
-        sys.exit(1)
-    except subprocess.TimeoutExpired:
-        print("ERROR: git status timed out", file=sys.stderr)
-        sys.exit(1)
+        return False, "ERROR: git command not found"
     except Exception as e:
-        print(f"ERROR: Failed to run git status: {e}", file=sys.stderr)
-        sys.exit(1)
+        return False, f"ERROR: {str(e)}"
 
 
-def is_path_allowed(filepath: str, allowed_prefixes: Set[str]) -> bool:
+def get_modified_md_files(git_output: str) -> List[str]:
     """
-    Check if filepath starts with any allowed prefix.
+    Parse git status output to find modified .md files.
 
     Args:
-        filepath: Path to check
-        allowed_prefixes: Set of allowed path prefixes (e.g., {'reports/', 'docs/'})
+        git_output: Output from 'git status --porcelain'
 
     Returns:
-        True if filepath is in an allowed directory
+        List of modified .md file paths
     """
-    if not allowed_prefixes:
-        return False
+    modified_files = []
 
-    # Normalize path separators
-    normalized = filepath.replace('\\', '/')
+    for line in git_output.strip().split('\n'):
+        if not line:
+            continue
 
-    for prefix in allowed_prefixes:
-        if normalized.startswith(prefix):
-            return True
+        # Git status format: "XY filename"
+        # X = status in index, Y = status in working tree
+        # M = modified, A = added, D = deleted, R = renamed, etc.
+        status = line[:2].strip()
+        filepath = line[3:].strip()
 
-    return False
-
-
-def verify_no_md_changes(allowed_paths: List[str] = None) -> int:
-    """
-    Verify no markdown files were modified outside allowed paths.
-
-    Returns 0 if clean, 1 if .md files modified.
-    """
-    print("Safety Verification: No Markdown Changes")
-    print("="*60)
-
-    # Parse allowed paths
-    allowed_prefixes = set()
-    if allowed_paths:
-        for path in allowed_paths:
-            # Normalize to use forward slashes and ensure trailing slash
-            normalized = path.replace('\\', '/').rstrip('/') + '/'
-            allowed_prefixes.add(normalized)
-
-        print(f"Allowed paths: {', '.join(sorted(allowed_prefixes))}")
-    else:
-        print("No paths are allowed (strict mode)")
-
-    print()
-
-    # Get modified files
-    modified_files = get_modified_files()
-
-    if not modified_files:
-        print("PASS: No files modified")
-        print("="*60)
-        return 0
-
-    # Filter for .md files
-    modified_md_files = []
-    allowed_md_files = []
-
-    for status, filepath in modified_files:
+        # Check if it's a markdown file
         if filepath.endswith('.md'):
-            # Check if modified (M) or added (A) in index or working tree
-            # Status format: XY where X=index, Y=working tree
-            # M = modified, A = added, D = deleted, R = renamed, etc.
-            is_modified = 'M' in status or 'A' in status
+            modified_files.append(filepath)
 
-            if is_modified:
-                if is_path_allowed(filepath, allowed_prefixes):
-                    allowed_md_files.append((status, filepath))
-                else:
-                    modified_md_files.append((status, filepath))
-
-    # Report results
-    if allowed_md_files:
-        print(f"Allowed .md changes ({len(allowed_md_files)} files):")
-        for status, filepath in sorted(allowed_md_files):
-            print(f"  [{status}] {filepath}")
-        print()
-
-    if modified_md_files:
-        print(f"X FAIL: Forbidden .md files modified ({len(modified_md_files)} files):")
-        for status, filepath in sorted(modified_md_files):
-            print(f"  [{status}] {filepath}")
-        print("\n" + "="*60)
-        print("Markdown files were modified outside allowed paths!")
-        print("This violates the safety contract.")
-        print("="*60)
-        return 1
-
-    print("PASS: No forbidden markdown changes")
-    print("="*60)
-    return 0
+    return modified_files
 
 
-def main():
+def check_violations(
+    modified_files: List[str],
+    allowed_paths: List[str]
+) -> Tuple[List[str], List[str]]:
+    """
+    Check for violations (markdown files modified outside allowed paths).
+
+    Args:
+        modified_files: List of modified .md files
+        allowed_paths: List of allowed path prefixes (e.g., ['specs/', 'reports/'])
+
+    Returns:
+        Tuple of (violations: List[str], allowed: List[str])
+    """
+    violations = []
+    allowed = []
+
+    for filepath in modified_files:
+        # Normalize path separators for Windows
+        normalized_path = filepath.replace('\\', '/')
+
+        # Check if file is in any allowed path
+        is_allowed = any(
+            normalized_path.startswith(path)
+            for path in allowed_paths
+        )
+
+        if is_allowed:
+            allowed.append(filepath)
+        else:
+            violations.append(filepath)
+
+    return violations, allowed
+
+
+def main() -> int:
+    """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Verify no markdown files were modified (safety gate)",
+        description='Verify no markdown changes outside allowed paths',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Strict mode - no changes allowed
-  python tools/verify_no_md_changes.py
-
-  # Allow changes in reports/ and docs/
-  python tools/verify_no_md_changes.py --allow-paths reports/,docs/
-
-  # Allow changes in specific subdirectories
-  python tools/verify_no_md_changes.py --allow-paths "reports/track1/,plans/"
-
-Git status codes:
-  M  - Modified
-  A  - Added
-  D  - Deleted
-  R  - Renamed
-  ?? - Untracked (ignored by this tool)
-        """
     )
 
-    parser.add_argument(
-        '--allow-paths',
-        type=str,
-        default='',
-        help='Comma-separated list of allowed path prefixes (e.g., "reports/,docs/")'
-    )
+    parser.add_argument('--allow-paths', type=str,
+                        default='specs/,reports/,docs/,plans/',
+                        help='Comma-separated list of allowed path prefixes (default: specs/,reports/,docs/,plans/)')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help='Verbose output')
 
     args = parser.parse_args()
 
-    # Parse allowed paths
-    allowed_paths = []
-    if args.allow_paths:
-        allowed_paths = [p.strip() for p in args.allow_paths.split(',') if p.strip()]
+    setup_logging(args.verbose)
+    logger = logging.getLogger(__name__)
 
-    exit_code = verify_no_md_changes(allowed_paths)
-    sys.exit(exit_code)
+    # Parse allowed paths
+    allowed_paths = [p.strip() for p in args.allow_paths.split(',') if p.strip()]
+
+    logger.info("Markdown Change Verification")
+    logger.info("=" * 80)
+    logger.info(f"Allowed paths: {', '.join(allowed_paths)}")
+    logger.info("")
+
+    # Get git status
+    success, git_output = get_git_status()
+
+    if not success:
+        logger.error(git_output)
+        return 2
+
+    # Get modified markdown files
+    modified_files = get_modified_md_files(git_output)
+
+    if not modified_files:
+        logger.info("No markdown files modified.")
+        logger.info("")
+        logger.info("[OK] CLEAN - No markdown changes detected")
+        return 0
+
+    logger.info(f"Found {len(modified_files)} modified markdown file(s)")
+    logger.debug(f"Modified files: {modified_files}")
+    logger.info("")
+
+    # Check for violations
+    violations, allowed = check_violations(modified_files, allowed_paths)
+
+    # Report allowed changes
+    if allowed:
+        logger.info("Allowed markdown changes:")
+        for filepath in allowed:
+            logger.info(f"  [OK] {filepath}")
+        logger.info("")
+
+    # Report violations
+    if violations:
+        logger.error("VIOLATIONS - Markdown files modified outside allowed paths:")
+        for filepath in violations:
+            logger.error(f"  [VIOLATION] {filepath}")
+        logger.info("")
+        logger.error("[FAIL] Found markdown changes outside allowed paths")
+        logger.error(f"Allowed paths: {', '.join(allowed_paths)}")
+        return 1
+
+    logger.info("[OK] CLEAN - All markdown changes are in allowed paths")
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

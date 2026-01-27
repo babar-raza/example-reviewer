@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, 'src')
 
-from database import Database
+from src._legacy.database import Database
 from api_reference_service import ApiReferenceService
 
 # Initialize

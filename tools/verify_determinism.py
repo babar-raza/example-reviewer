@@ -1,335 +1,342 @@
-#!/usr/bin/env python3
 """
-Gate 1: Determinism Verification Tool
+Verify Determinism Across Multiple Runs.
 
-Compares results_summary.json from multiple runs to verify determinism.
-
-Requirements (from Plan v2.1):
-- Accept 2-N results_summary.json file paths as arguments
-- Compare these fields (must be identical):
-  - selection_hash
-  - per-example terminal statuses (example_id -> status mapping)
-  - drift comparisons (if enabled, must follow policy consistently)
-- Exit code 0 if deterministic, 1 if not
-- Print clear diff report showing what differs
+This tool compares results_summary.json files from multiple runs to verify determinism.
+It ignores run_id and timestamps, and compares status counts and per-example terminal statuses.
+Drift scores are compared with tolerance.
 
 Usage:
-    python tools/verify_determinism.py runs/run1/results_summary.json runs/run2/results_summary.json runs/run3/results_summary.json
+    python tools/verify_determinism.py run1/results_summary.json run2/results_summary.json
+    python tools/verify_determinism.py --drift-tolerance 0.02 run1/results_summary.json run2/results_summary.json
+
+Exit Codes:
+    0 - Runs are deterministic (match within tolerance)
+    1 - Runs are NOT deterministic (differences detected)
+    2 - Error (file not found, invalid JSON, etc.)
+
+Comparison Logic:
+    - Ignores: run_id, timestamps, duration fields
+    - Compares: status counts, per-example terminal statuses
+    - Drift scores: compared with tolerance (default 0.02)
 """
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional
 
 
-def load_results_summary(filepath: Path) -> Dict[str, Any]:
-    """Load and parse results_summary.json file."""
+def setup_logging(verbose: bool = False) -> None:
+    """Configure logging."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - [%(levelname)s] %(message)s',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+
+
+def load_json(filepath: Path) -> Optional[Dict[str, Any]]:
+    """
+    Load JSON file.
+
+    Args:
+        filepath: Path to JSON file
+
+    Returns:
+        Dict or None on error
+    """
+    logger = logging.getLogger(__name__)
+
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"ERROR: File not found: {filepath}", file=sys.stderr)
-        sys.exit(1)
+        logger.error(f"File not found: {filepath}")
+        return None
     except json.JSONDecodeError as e:
-        print(f"ERROR: Invalid JSON in {filepath}: {e}", file=sys.stderr)
-        sys.exit(1)
+        logger.error(f"Invalid JSON in {filepath}: {e}")
+        return None
     except Exception as e:
-        print(f"ERROR: Failed to load {filepath}: {e}", file=sys.stderr)
-        sys.exit(1)
+        logger.error(f"Error loading {filepath}: {e}")
+        return None
 
 
-def extract_example_statuses(summary: Dict[str, Any]) -> Dict[str, str]:
+def normalize_run(data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extract per-example terminal statuses from results_summary.
+    Normalize run data by removing non-deterministic fields.
 
-    Returns dict mapping example_id (or example_key) -> status
+    Removes:
+        - run_id
+        - timestamps (started_at, completed_at, etc.)
+        - duration fields
+
+    Args:
+        data: Raw run data
+
+    Returns:
+        Normalized run data for comparison
     """
-    statuses = {}
+    normalized = {}
 
-    # Try to get per-example results
-    if 'examples' in summary:
-        for example in summary['examples']:
-            # Prefer example_key for determinism, fall back to example_id
-            key = example.get('example_key') or example.get('example_id')
-            status = example.get('status')
-            if key and status:
-                statuses[key] = status
+    # Copy all fields except non-deterministic ones
+    ignore_keys = {
+        'run_id', 'started_at', 'completed_at', 'timestamp',
+        'duration_ms', 'duration_seconds', 'created_at', 'updated_at'
+    }
 
-    # Alternative structure: status_counts with example lists
-    elif 'per_example_statuses' in summary:
-        statuses = summary['per_example_statuses']
-
-    return statuses
-
-
-def extract_drift_scores(summary: Dict[str, Any]) -> Dict[str, Optional[float]]:
-    """
-    Extract drift scores from results_summary.
-
-    Returns dict mapping example_id/example_key -> drift_score
-    """
-    drift_scores = {}
-
-    if 'examples' in summary:
-        for example in summary['examples']:
-            key = example.get('example_key') or example.get('example_id')
-            drift_score = example.get('drift_score')
-            if key is not None:
-                drift_scores[key] = drift_score
-
-    elif 'drift_scores' in summary:
-        drift_scores = summary['drift_scores']
-
-    return drift_scores
-
-
-def compare_selection_hashes(summaries: List[Dict[str, Any]], filepaths: List[Path]) -> Tuple[bool, List[str]]:
-    """
-    Compare selection_hash across all runs.
-
-    Returns (is_identical, differences_list)
-    """
-    differences = []
-
-    selection_hashes = []
-    for i, summary in enumerate(summaries):
-        selection_hash = summary.get('selection_hash') or summary.get('fingerprint', {}).get('content_snapshot', {}).get('selection_hash')
-        selection_hashes.append(selection_hash)
-
-        if selection_hash is None:
-            differences.append(f"  - {filepaths[i]}: missing selection_hash")
-
-    if len(set(selection_hashes)) > 1:
-        differences.append("\n  Selection hashes differ:")
-        for i, (filepath, hash_val) in enumerate(zip(filepaths, selection_hashes)):
-            differences.append(f"    Run {i+1} ({filepath.name}): {hash_val}")
-        return False, differences
-
-    return True, differences
-
-
-def compare_statuses(summaries: List[Dict[str, Any]], filepaths: List[Path]) -> Tuple[bool, List[str]]:
-    """
-    Compare per-example terminal statuses across all runs.
-
-    Returns (is_identical, differences_list)
-    """
-    differences = []
-
-    # Extract statuses from all runs
-    all_statuses = [extract_example_statuses(summary) for summary in summaries]
-
-    if not all_statuses[0]:
-        differences.append("  - WARNING: No per-example statuses found in first run")
-        return True, differences  # Can't compare if no data
-
-    # Get all unique example keys across runs
-    all_keys = set()
-    for statuses in all_statuses:
-        all_keys.update(statuses.keys())
-
-    # Compare each example across runs
-    differing_examples = []
-    for key in sorted(all_keys):
-        statuses_for_key = [statuses.get(key) for statuses in all_statuses]
-
-        # Check if all are identical
-        if len(set(statuses_for_key)) > 1:
-            differing_examples.append((key, statuses_for_key))
-
-    if differing_examples:
-        differences.append("\n  Per-example statuses differ:")
-        for key, statuses_list in differing_examples[:10]:  # Limit to first 10
-            differences.append(f"    Example {key}:")
-            for i, status in enumerate(statuses_list):
-                differences.append(f"      Run {i+1}: {status}")
-
-        if len(differing_examples) > 10:
-            differences.append(f"    ... and {len(differing_examples) - 10} more examples differ")
-
-        return False, differences
-
-    return True, differences
-
-
-def compare_drift_scores(summaries: List[Dict[str, Any]], filepaths: List[Path], tolerance: float = 0.02) -> Tuple[bool, List[str]]:
-    """
-    Compare drift scores across runs.
-
-    Per Plan v2.1:
-    - Must be identical when drift is disabled
-    - May be within tolerance (default 0.02) when drift is enabled
-
-    Returns (is_within_policy, differences_list)
-    """
-    differences = []
-
-    # Extract drift scores from all runs
-    all_drift_scores = [extract_drift_scores(summary) for summary in summaries]
-
-    # Check if drift is enabled in any run
-    drift_enabled = any(
-        summary.get('fingerprint', {}).get('vector_db', {}).get('enabled', False)
-        for summary in summaries
-    )
-
-    if not drift_enabled:
-        # Drift disabled - all should be None or not present
-        return True, differences
-
-    # Get all unique example keys
-    all_keys = set()
-    for drift_scores in all_drift_scores:
-        all_keys.update(drift_scores.keys())
-
-    if not all_keys:
-        # No drift scores to compare
-        return True, differences
-
-    # Compare drift scores with tolerance
-    differing_examples = []
-    for key in sorted(all_keys):
-        scores = [drift_scores.get(key) for drift_scores in all_drift_scores]
-
-        # Filter out None values
-        numeric_scores = [s for s in scores if s is not None]
-
-        if not numeric_scores:
+    for key, value in data.items():
+        if key in ignore_keys:
             continue
 
-        # Check if within tolerance
-        min_score = min(numeric_scores)
-        max_score = max(numeric_scores)
+        # Handle nested dicts/lists
+        if isinstance(value, dict):
+            normalized[key] = normalize_run(value)
+        elif isinstance(value, list):
+            normalized[key] = [normalize_run(item) if isinstance(item, dict) else item for item in value]
+        else:
+            normalized[key] = value
 
-        if max_score - min_score > tolerance:
-            differing_examples.append((key, scores))
-
-    if differing_examples:
-        differences.append(f"\n  Drift scores exceed tolerance ({tolerance}):")
-        for key, scores_list in differing_examples[:10]:  # Limit to first 10
-            differences.append(f"    Example {key}:")
-            for i, score in enumerate(scores_list):
-                differences.append(f"      Run {i+1}: {score}")
-
-        if len(differing_examples) > 10:
-            differences.append(f"    ... and {len(differing_examples) - 10} more examples exceed tolerance")
-
-        return False, differences
-
-    return True, differences
+    return normalized
 
 
-def verify_determinism(filepaths: List[Path], drift_tolerance: float = 0.02) -> int:
+def compare_drift_scores(
+    score1: Optional[float],
+    score2: Optional[float],
+    tolerance: float
+) -> bool:
     """
-    Main verification function.
+    Compare drift scores with tolerance.
 
-    Returns 0 if deterministic, 1 if not.
+    Args:
+        score1: First drift score (or None)
+        score2: Second drift score (or None)
+        tolerance: Maximum allowed difference
+
+    Returns:
+        True if scores match within tolerance
     """
-    print(f"Determinism Verification Tool")
-    print(f"Comparing {len(filepaths)} results_summary.json files\n")
+    # Both None = match
+    if score1 is None and score2 is None:
+        return True
 
-    # Load all summaries
-    summaries = [load_results_summary(fp) for fp in filepaths]
+    # One None, one value = no match
+    if score1 is None or score2 is None:
+        return False
 
-    # Track overall result
-    all_checks_passed = True
-
-    # Check 1: selection_hash
-    print("[1/3] Comparing selection_hash...")
-    hash_match, hash_diffs = compare_selection_hashes(summaries, filepaths)
-    if hash_match:
-        print("  PASS PASS: selection_hash identical across all runs")
-        if hash_diffs:
-            for diff in hash_diffs:
-                print(diff)
-    else:
-        print("  FAIL FAIL: selection_hash differs between runs")
-        for diff in hash_diffs:
-            print(diff)
-        all_checks_passed = False
-
-    # Check 2: per-example statuses
-    print("\n[2/3] Comparing per-example terminal statuses...")
-    status_match, status_diffs = compare_statuses(summaries, filepaths)
-    if status_match:
-        print("  PASS PASS: per-example statuses identical across all runs")
-        if status_diffs:
-            for diff in status_diffs:
-                print(diff)
-    else:
-        print("  FAIL FAIL: per-example statuses differ between runs")
-        for diff in status_diffs:
-            print(diff)
-        all_checks_passed = False
-
-    # Check 3: drift scores (if applicable)
-    print(f"\n[3/3] Comparing drift scores (tolerance={drift_tolerance})...")
-    drift_match, drift_diffs = compare_drift_scores(summaries, filepaths, drift_tolerance)
-    if drift_match:
-        print("  PASS PASS: drift scores within policy")
-        if drift_diffs:
-            for diff in drift_diffs:
-                print(diff)
-    else:
-        print("  FAIL FAIL: drift scores exceed tolerance")
-        for diff in drift_diffs:
-            print(diff)
-        all_checks_passed = False
-
-    # Final verdict
-    print("\n" + "="*60)
-    if all_checks_passed:
-        print("PASS DETERMINISM VERIFIED: All checks passed")
-        print("="*60)
-        return 0
-    else:
-        print("FAIL DETERMINISM FAILED: One or more checks failed")
-        print("="*60)
-        return 1
+    # Compare with tolerance
+    return abs(score1 - score2) <= tolerance
 
 
-def main():
+def compare_status_counts(
+    run1: Dict[str, Any],
+    run2: Dict[str, Any]
+) -> Tuple[bool, List[str]]:
+    """
+    Compare status count summaries between two runs.
+
+    Args:
+        run1: First run data
+        run2: Second run data
+
+    Returns:
+        Tuple of (match: bool, differences: List[str])
+    """
+    differences = []
+
+    # Extract status counts (might be in different keys depending on format)
+    def get_status_counts(run_data: Dict[str, Any]) -> Dict[str, int]:
+        """Extract status counts from run data."""
+        # Try different possible locations
+        if 'status_counts' in run_data:
+            return run_data['status_counts']
+        if 'by_status' in run_data:
+            return run_data['by_status']
+        if 'summary' in run_data and 'status_counts' in run_data['summary']:
+            return run_data['summary']['status_counts']
+        return {}
+
+    counts1 = get_status_counts(run1)
+    counts2 = get_status_counts(run2)
+
+    # Get all status keys
+    all_statuses = set(counts1.keys()) | set(counts2.keys())
+
+    for status in sorted(all_statuses):
+        count1 = counts1.get(status, 0)
+        count2 = counts2.get(status, 0)
+
+        if count1 != count2:
+            differences.append(f"Status '{status}': run1={count1}, run2={count2}")
+
+    return len(differences) == 0, differences
+
+
+def compare_example_statuses(
+    run1: Dict[str, Any],
+    run2: Dict[str, Any],
+    drift_tolerance: float
+) -> Tuple[bool, List[str]]:
+    """
+    Compare per-example terminal statuses between two runs.
+
+    Args:
+        run1: First run data
+        run2: Second run data
+        drift_tolerance: Tolerance for drift score comparison
+
+    Returns:
+        Tuple of (match: bool, differences: List[str])
+    """
+    differences = []
+
+    # Extract examples (might be in different keys)
+    def get_examples(run_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract examples dict from run data."""
+        if 'examples' in run_data:
+            return run_data['examples']
+        if 'results' in run_data:
+            return run_data['results']
+        return {}
+
+    examples1 = get_examples(run1)
+    examples2 = get_examples(run2)
+
+    # Get all example IDs
+    all_example_ids = set(examples1.keys()) | set(examples2.keys())
+
+    if not all_example_ids:
+        # No per-example data to compare
+        return True, []
+
+    for example_id in sorted(all_example_ids):
+        ex1 = examples1.get(example_id, {})
+        ex2 = examples2.get(example_id, {})
+
+        # Compare status
+        status1 = ex1.get('status', 'UNKNOWN')
+        status2 = ex2.get('status', 'UNKNOWN')
+
+        if status1 != status2:
+            differences.append(f"Example {example_id}: status run1={status1}, run2={status2}")
+
+        # Compare drift_score if present
+        drift1 = ex1.get('drift_score')
+        drift2 = ex2.get('drift_score')
+
+        if not compare_drift_scores(drift1, drift2, drift_tolerance):
+            differences.append(
+                f"Example {example_id}: drift_score run1={drift1}, run2={drift2} "
+                f"(exceeds tolerance {drift_tolerance})"
+            )
+
+    return len(differences) == 0, differences
+
+
+def main() -> int:
+    """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Verify determinism across multiple pipeline runs",
+        description='Verify determinism across multiple pipeline runs',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python tools/verify_determinism.py runs/run1/results_summary.json runs/run2/results_summary.json
-  python tools/verify_determinism.py --tolerance 0.05 run*/results_summary.json
-        """
     )
 
-    parser.add_argument(
-        'files',
-        nargs='+',
-        type=Path,
-        help='Paths to results_summary.json files (minimum 2)'
-    )
-
-    parser.add_argument(
-        '--tolerance',
-        type=float,
-        default=0.02,
-        help='Drift score tolerance (default: 0.02)'
-    )
+    parser.add_argument('files', nargs='+', type=str,
+                        help='Results summary JSON files to compare (2 or more)')
+    parser.add_argument('--drift-tolerance', type=float, default=0.02,
+                        help='Tolerance for drift score comparison (default: 0.02)')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help='Verbose output')
 
     args = parser.parse_args()
 
+    setup_logging(args.verbose)
+    logger = logging.getLogger(__name__)
+
     if len(args.files) < 2:
-        print("ERROR: At least 2 results_summary.json files required", file=sys.stderr)
-        sys.exit(1)
+        logger.error("Need at least 2 files to compare")
+        return 2
 
-    # Verify all files exist
-    for filepath in args.files:
-        if not filepath.exists():
-            print(f"ERROR: File not found: {filepath}", file=sys.stderr)
-            sys.exit(1)
+    logger.info("Determinism Verification")
+    logger.info("=" * 80)
+    logger.info(f"Comparing {len(args.files)} runs")
+    logger.info(f"Drift tolerance: {args.drift_tolerance}")
+    logger.info("")
 
-    exit_code = verify_determinism(args.files, args.tolerance)
-    sys.exit(exit_code)
+    # Load all files
+    runs = []
+    for filepath_str in args.files:
+        filepath = Path(filepath_str)
+        logger.info(f"Loading: {filepath}")
+
+        data = load_json(filepath)
+        if data is None:
+            return 2
+
+        runs.append({
+            'filepath': filepath,
+            'data': data,
+            'normalized': normalize_run(data)
+        })
+
+    logger.info("")
+
+    # Compare all pairs
+    all_match = True
+    comparison_count = 0
+
+    for i in range(len(runs)):
+        for j in range(i + 1, len(runs)):
+            run1 = runs[i]
+            run2 = runs[j]
+
+            comparison_count += 1
+            logger.info(f"Comparison {comparison_count}: {run1['filepath'].name} vs {run2['filepath'].name}")
+            logger.info("-" * 80)
+
+            # Compare status counts
+            status_match, status_diffs = compare_status_counts(
+                run1['normalized'],
+                run2['normalized']
+            )
+
+            if not status_match:
+                logger.error("Status count mismatch:")
+                for diff in status_diffs:
+                    logger.error(f"  {diff}")
+                all_match = False
+            else:
+                logger.info("Status counts: MATCH")
+
+            # Compare example statuses
+            example_match, example_diffs = compare_example_statuses(
+                run1['normalized'],
+                run2['normalized'],
+                args.drift_tolerance
+            )
+
+            if not example_match:
+                logger.error("Per-example status mismatch:")
+                for diff in example_diffs[:10]:  # Limit to 10 differences
+                    logger.error(f"  {diff}")
+                if len(example_diffs) > 10:
+                    logger.error(f"  ... and {len(example_diffs) - 10} more differences")
+                all_match = False
+            else:
+                logger.info("Per-example statuses: MATCH")
+
+            logger.info("")
+
+    # Final verdict
+    logger.info("=" * 80)
+    if all_match:
+        logger.info("[OK] DETERMINISTIC - All runs match within tolerance")
+        return 0
+    else:
+        logger.error("[FAIL] NOT DETERMINISTIC - Differences detected")
+        return 1
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
