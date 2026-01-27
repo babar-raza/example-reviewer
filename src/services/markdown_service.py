@@ -14,6 +14,12 @@ from typing import Optional, List, Dict, Any, Tuple
 from ..core.models import ExampleRecord, ExampleStatus, MarkdownEdit, SourceType
 from ..core.database import Database
 from ..core.path_guard import assert_write_allowed, READ_ONLY_PREFIXES, is_read_only_path, get_workspace_path
+from ..core.provenance_guard import (
+    validate_batch_provenance,
+    check_provenance_enabled,
+    generate_provenance_report,
+    ProvenanceViolationError,
+)
 from ..utils.markdown_parser import parse_fenced_blocks, compute_code_signature, find_block_by_signature
 
 # Import GistPublisher - optional dependency
@@ -188,15 +194,54 @@ class MarkdownUpdateService:
         Returns:
             Tuple of (success, list of changes made)
         """
-        # Get all verified examples for this file
+        # Get all examples for this file
         examples = self.db.get_examples_by_file(file_path, run_id=self.run_id)
-        verified_examples = [
+
+        # Get examples that claim to be verified (based on status)
+        # Note: We check status first, BEFORE checking verified_code, so that
+        # the provenance guard can catch examples with VERIFIED status but missing code
+        examples_claiming_verified = [
             e for e in examples
             if e.status in (ExampleStatus.VERIFIED, ExampleStatus.MD_UPDATED)
-            and e.verified_code
         ]
-        
+
+        if not examples_claiming_verified:
+            return True, []
+
+        # PROVENANCE GUARD: Validate that all examples have proper provenance
+        # This prevents manual edits that bypass the verify→fix→verify loop
+        # This runs BEFORE filtering by verified_code, so it can catch status=VERIFIED
+        # but verified_code=None (anti-pattern: manually setting status without verification)
+        if check_provenance_enabled(self.allow_markdown_write, self.use_workspace_copy):
+            try:
+                provenance_signals = validate_batch_provenance(
+                    examples_claiming_verified,
+                    require_verified=True
+                )
+
+                # Log provenance validation success
+                logger.info(
+                    f"Provenance validated for {len(provenance_signals)} examples in {file_path}"
+                )
+
+                # Generate provenance report for audit trail
+                provenance_report = generate_provenance_report(provenance_signals, file_path)
+                self._store_provenance_report(file_path, provenance_report)
+
+            except ProvenanceViolationError as e:
+                logger.error(f"PROVENANCE VIOLATION in {file_path}: {e}")
+                raise  # Re-raise to block the update
+
+        # After provenance validation passes, filter to only examples with verified_code
+        # (This is now redundant with provenance guard but kept for safety)
+        verified_examples = [
+            e for e in examples_claiming_verified
+            if e.verified_code
+        ]
+
         if not verified_examples:
+            # This shouldn't happen if provenance guard is working, but handle it
+            logger.warning(f"No examples with verified_code found for {file_path} after provenance validation")
             return True, []
         
         # Read original file
@@ -729,12 +774,44 @@ class MarkdownUpdateService:
         safe_name = Path(file_path).name.replace('.', '_')
         diff_id = str(uuid.uuid4())[:8]
         diff_filename = f"{safe_name}_{diff_id}.diff"
-        
+
         diff_path = self.artifacts_dir / diff_filename
         diff_path.write_text(diff, encoding='utf-8')
-        
+
         return str(diff_path)
-    
+
+    def _store_provenance_report(self, file_path: str, report: Dict[str, Any]) -> str:
+        """
+        Store provenance report as JSON artifact.
+
+        This creates an audit trail showing that markdown updates were backed
+        by verified examples from the pipeline.
+
+        Args:
+            file_path: Original markdown file path
+            report: Provenance report dictionary
+
+        Returns:
+            Path to stored provenance report
+        """
+        import json
+
+        # Create provenance directory if it doesn't exist
+        provenance_dir = self.artifacts_dir / "provenance"
+        provenance_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create safe filename from path
+        safe_name = Path(file_path).name.replace('.', '_').replace('/', '_')
+        report_id = str(uuid.uuid4())[:8]
+        report_filename = f"{safe_name}_{report_id}_provenance.json"
+
+        report_path = provenance_dir / report_filename
+        report_path.write_text(json.dumps(report, indent=2), encoding='utf-8')
+
+        logger.debug(f"Stored provenance report: {report_path}")
+
+        return str(report_path)
+
     def update_all_files(
         self,
         family: str,
