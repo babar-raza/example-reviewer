@@ -5,9 +5,10 @@ Coordinates all pipeline phases as defined in the spec.
 
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 
 from ..core.models import (
@@ -19,14 +20,66 @@ from ..core.config import ConfigurationManager, FamilyConfig, GlobalConfig
 from ..core.telemetry import track_phase_timing, export_run_telemetry, log_resource_decision
 from ..services.discovery_service import DiscoveryService
 from ..services.resource_detection_service import ResourceDetectionService
-from ..services.compilation_service import CompilationService, check_dotnet_available
+from ..services.compilation_service import CompilationService, CompileResult, check_dotnet_available
 from ..services.runtime_service import RuntimeService
 from ..services.llm_service import LLMService, LLMServiceFactory
 from ..services.markdown_service import MarkdownUpdateService
 from ..services.vector_db_service import VectorDBService
 from ..services.telemetry_service import TelemetryService
+from ..services.example_substitution_service import ExampleSubstitutionService, apply_quick_fixes
+from .failure_tracker import track_infra_missing_test_data, track_failure, track_compile_failure
+from ..core.path_guard import is_read_only_path
+from .escalation_classifier import classify_escalation_reason, should_escalate_to_review
+from ..core.models import FailureCategory, FailureResolution
+
+try:
+    from .context_drift_validator import ContextDriftValidator
+except ImportError:
+    ContextDriftValidator = None
+
+try:
+    from ..services.context_harness_service import ContextHarnessService
+except ImportError:
+    ContextHarnessService = None
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_test_data_path(family: str, family_config: FamilyConfig) -> Optional[Path]:
+    """
+    Resolve the actual test data path for a family.
+
+    Priority order (Phase-2 policy: prefer backfill, then local_path):
+    1. If artifacts/backfill/<family>/test-data exists → use it (PREFERRED for generated fixtures)
+    2. Else if family_config.test_data.local_path exists → use it (read-only reference data)
+    3. Else None
+
+    Note: test-data/ paths are read-only (protected from writes) but can still be
+    used as a source for reading test data files during runtime verification.
+
+    Args:
+        family: Family identifier
+        family_config: Family configuration
+
+    Returns:
+        Path to test data or None if not available
+    """
+    # Priority 1: backfill artifacts directory (PREFERRED for Phase-2)
+    backfill_path = Path("artifacts/backfill") / family / "test-data"
+    if backfill_path.exists():
+        logger.debug(f"Using test data from backfill artifacts: {backfill_path}")
+        return backfill_path
+
+    # Priority 2: local_path if it exists (read-only is OK for reading)
+    if family_config.test_data.local_path:
+        local_path = Path(family_config.test_data.local_path)
+        if local_path.exists():
+            logger.debug(f"Using test data from configured local_path: {local_path}")
+            return local_path
+
+    # No test data available
+    logger.debug(f"No test data available for family: {family}")
+    return None
 
 
 class PipelineOrchestrator:
@@ -48,28 +101,43 @@ class PipelineOrchestrator:
         db_path: Optional[Path] = None,
         workspace_dir: Optional[Path] = None,
         artifacts_dir: Optional[Path] = None,
+        cli_overrides: Optional[Dict[str, Any]] = None,
+        use_workspace_copy: bool = False,
+        sqlite_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize pipeline orchestrator.
-        
+
         Args:
             config_dir: Directory containing family configs
             db_path: Path to SQLite database
             workspace_dir: Working directory for compilation/runtime
             artifacts_dir: Directory for storing artifacts
+            cli_overrides: CLI override dictionary for config hash computation
+            use_workspace_copy: Enable workspace copy mode (for test-content/ writes)
+            sqlite_config: SQLite configuration (busy_timeout_ms, wal_enabled)
         """
         self.config_dir = config_dir or Path("config/families")
         self.db_path = db_path or Path("data/example_reviewer.db")
         self.workspace_dir = workspace_dir or Path("workspace")
         self.artifacts_dir = artifacts_dir or Path("artifacts")
-        
+        self.cli_overrides = cli_overrides or {}
+        self.use_workspace_copy = use_workspace_copy
+        self.sqlite_config = sqlite_config or {}
+
         # Create directories
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize components
         self.config_manager = ConfigurationManager(self.config_dir)
-        self.db = Database(self.db_path)
+
+        # Initialize database with SQLite configuration (Task 2A, 2B)
+        self.db = Database(
+            db_path=self.db_path,
+            busy_timeout_ms=self.sqlite_config.get('busy_timeout_ms', 120000),
+            wal_enabled=self.sqlite_config.get('wal_enabled', True),
+        )
         self.db.initialize_schema()
         
         # Services (initialized lazily)
@@ -82,6 +150,9 @@ class PipelineOrchestrator:
         self._vector_db_service: Optional[VectorDBService] = None
         self._resource_detection_service: Optional[ResourceDetectionService] = None
         self._telemetry_service: Optional[TelemetryService] = None
+        self._substitution_service: Optional[ExampleSubstitutionService] = None
+        self._context_drift_validator: Optional['ContextDriftValidator'] = None
+        self._context_harness_service: Optional['ContextHarnessService'] = None
 
         # VectorDB and DriftDetector startup decision (Track 1: C.2)
         # Make a single decision at startup, never change mid-run
@@ -95,16 +166,35 @@ class PipelineOrchestrator:
         """Get or initialize LLM service."""
         if self._llm_service is None:
             global_config = self.config_manager.load_global_config()
+
+            # Apply CLI overrides to LLM config
+            llm_config_dict = {
+                'provider': global_config.llm.provider,
+                'model': global_config.llm.model,
+                'temperature': global_config.llm.temperature,
+                'max_retries': global_config.llm.max_retries,
+                'retry_backoff_seconds': global_config.llm.retry_backoff_seconds,
+                'timeout_seconds': global_config.llm.timeout_seconds,
+                'seed': global_config.llm.seed,
+                'deterministic_mode': global_config.llm.deterministic_mode,
+                'enforce_timeout': global_config.llm.enforce_timeout,
+            }
+
+            # Override with CLI values if present
+            if 'llm' in self.cli_overrides:
+                for key, value in self.cli_overrides['llm'].items():
+                    llm_config_dict[key] = value
+
             self._llm_service = LLMService(
-                provider=global_config.llm.provider,
-                model=global_config.llm.model,
-                temperature=global_config.llm.temperature,
-                max_retries=global_config.llm.max_retries,
-                retry_backoff_seconds=global_config.llm.retry_backoff_seconds,
-                timeout_seconds=global_config.llm.timeout_seconds,
-                seed=global_config.llm.seed,
-                deterministic_mode=global_config.llm.deterministic_mode,
-                enforce_timeout=global_config.llm.enforce_timeout,
+                provider=llm_config_dict['provider'],
+                model=llm_config_dict['model'],
+                temperature=llm_config_dict['temperature'],
+                max_retries=llm_config_dict['max_retries'],
+                retry_backoff_seconds=llm_config_dict['retry_backoff_seconds'],
+                timeout_seconds=llm_config_dict['timeout_seconds'],
+                seed=llm_config_dict['seed'],
+                deterministic_mode=llm_config_dict['deterministic_mode'],
+                enforce_timeout=llm_config_dict['enforce_timeout'],
             )
             # Detect provider capabilities on startup (Track 1: Agent F)
             if self._llm_service.is_available():
@@ -185,6 +275,7 @@ class PipelineOrchestrator:
                 self.db,
                 workspace_dir=self.workspace_dir / "compile",
                 artifacts_dir=self.artifacts_dir / "compile",
+                context_harness=self.context_harness_service,
             )
         return self._compilation_service
     
@@ -208,6 +299,9 @@ class PipelineOrchestrator:
                 self.db,
                 artifacts_dir=self.artifacts_dir / "diffs",
                 allow_markdown_write=global_config.markdown_write.allow_markdown_write,
+                use_workspace_copy=self.use_workspace_copy,
+                workspace_root=self.artifacts_dir / "workspace",
+                run_id="default",  # Will be overridden when run starts
             )
         return self._markdown_service
 
@@ -241,6 +335,21 @@ class PipelineOrchestrator:
         Decision is made once at orchestrator startup and recorded in telemetry.
         """
         global_config = self.config_manager.load_global_config()
+
+        # Guard against mocked/invalid config types (Phase-1 robustness)
+        if not isinstance(global_config, GlobalConfig):
+            decision = {
+                'vector_db_enabled_config': False,
+                'require_on_startup': False,
+                'drift_enabled_config': False,
+                'vector_db_available': False,
+                'drift_detector_available': False,
+                'decision': 'disabled_by_invalid_config',
+                'reason': 'global_config is not a GlobalConfig instance (likely mocked)',
+            }
+            self._vector_db_startup_decision = decision
+            logger.warning(f"VectorDB disabled: {decision['reason']}")
+            return
 
         decision = {
             'vector_db_enabled_config': global_config.vector_db.enabled,
@@ -332,6 +441,41 @@ class PipelineOrchestrator:
                 db=self.db,
             )
         return self._telemetry_service
+
+    @property
+    def substitution_service(self) -> ExampleSubstitutionService:
+        """Get or initialize example substitution service."""
+        if self._substitution_service is None:
+            # Use backfill directory for the current family
+            # Note: family is determined at runtime, so we'll use a generic path
+            # The service will be reinitialized per-family if needed
+            backfill_dir = self.artifacts_dir / "backfill" / "zip"  # Default to zip family
+            global_config = self.config_manager.load_global_config()
+            self._substitution_service = ExampleSubstitutionService(
+                backfill_dir=backfill_dir,
+                same_context_only=global_config.substitution.same_context_only
+            )
+        return self._substitution_service
+
+    @property
+    def context_drift_validator(self) -> Optional['ContextDriftValidator']:
+        """Get or initialize context drift validator."""
+        if self._context_drift_validator is None and ContextDriftValidator is not None:
+            global_config = self.config_manager.load_global_config()
+            self._context_drift_validator = ContextDriftValidator(
+                enabled=global_config.context_enforcement.enabled
+            )
+        return self._context_drift_validator
+
+    @property
+    def context_harness_service(self) -> Optional['ContextHarnessService']:
+        """Get or initialize context harness service."""
+        if self._context_harness_service is None and ContextHarnessService is not None:
+            global_config = self.config_manager.load_global_config()
+            self._context_harness_service = ContextHarnessService(
+                enabled=global_config.context_harness.enabled
+            )
+        return self._context_harness_service
 
     def _is_build_failure(self, stderr: Optional[str]) -> bool:
         """
@@ -521,7 +665,7 @@ class PipelineOrchestrator:
             # Phase A: Discovery
             logger.info(f"Phase A: Discovery for {family}")
             with track_phase_timing(self.db, run_id, family, "discovery"):
-                discovery_stats = self._run_discovery_phase(family, family_config, max_examples)
+                discovery_stats = self._run_discovery_phase(run_id, family, family_config, max_examples)
             results['phases']['discovery'] = discovery_stats
 
             if discovery_stats.get('error'):
@@ -532,7 +676,7 @@ class PipelineOrchestrator:
             logger.info(f"Phase B: Compilation verification for {family}")
             with track_phase_timing(self.db, run_id, family, "compilation"):
                 compile_stats = self._run_compilation_phase(
-                    family, family_config, max_examples, skip_llm_fixes
+                    run_id, family, family_config, max_examples, skip_llm_fixes
                 )
             results['phases']['compilation'] = compile_stats
 
@@ -541,7 +685,7 @@ class PipelineOrchestrator:
                 logger.info(f"Phase C: Runtime verification for {family}")
                 with track_phase_timing(self.db, run_id, family, "runtime"):
                     runtime_stats = self._run_runtime_phase(
-                        family, family_config, max_examples, skip_llm_fixes
+                        run_id, family, family_config, max_examples, skip_llm_fixes
                     )
                 results['phases']['runtime'] = runtime_stats
 
@@ -549,7 +693,7 @@ class PipelineOrchestrator:
             logger.info(f"Phase D: Markdown update for {family}")
             with track_phase_timing(self.db, run_id, family, "markdown_update"):
                 update_stats = self._run_markdown_update_phase(
-                    family, dry_run, allow_md_write=allow_md_write
+                    run_id, family, dry_run, allow_md_write=allow_md_write
                 )
             results['phases']['markdown_update'] = update_stats
 
@@ -557,7 +701,7 @@ class PipelineOrchestrator:
             if not skip_llm_fixes and self.llm_service.is_available():
                 logger.info(f"Phase E: Final LLM review for {family}")
                 with track_phase_timing(self.db, run_id, family, "final_review"):
-                    review_stats = self._run_final_review_phase(family)
+                    review_stats = self._run_final_review_phase(run_id, family)
                 results['phases']['final_review'] = review_stats
 
             # Phase F: Telemetry and Commit
@@ -629,6 +773,7 @@ class PipelineOrchestrator:
     
     def _run_discovery_phase(
         self,
+        run_id: str,
         family: str,
         family_config: FamilyConfig,
         max_examples: Optional[int],
@@ -638,11 +783,11 @@ class PipelineOrchestrator:
         if max_examples:
             # Estimate ~5 examples per file
             max_files = max(1, max_examples // 5)
-        
+
         stats = self.discovery_service.discover_family(
-            family, family_config, max_files
+            family, family_config, max_files, run_id=run_id
         )
-        
+
         return {
             'files_found': stats['files_found'],
             'files_processed': stats['files_processed'],
@@ -654,6 +799,7 @@ class PipelineOrchestrator:
     
     def _run_compilation_phase(
         self,
+        run_id: str,
         family: str,
         family_config: FamilyConfig,
         max_examples: Optional[int],
@@ -677,27 +823,81 @@ class PipelineOrchestrator:
         stats['dotnet_version'] = dotnet_version
         
         # Get examples to process
-        examples = self.db.get_examples_by_family(family, ExampleStatus.DISCOVERED, max_examples)
+        examples = self.db.get_examples_by_family(family, ExampleStatus.DISCOVERED, max_examples, run_id=run_id)
         
         global_config = self.config_manager.load_global_config()
         max_retries = global_config.llm.max_retries
         
         for example in examples:
             stats['total_processed'] += 1
-            
+
             try:
+                # Phase-2 Task 2: Check if example should be escalated to NEEDS_REVIEW immediately
+                should_escalate, escalation_reason = should_escalate_to_review(
+                    code=example.original_code,
+                    language=example.language,
+                    file_path=example.file_path,
+                    error_message=None,
+                )
+
+                if should_escalate:
+                    logger.info(f"Example {example.example_id} escalated to NEEDS_REVIEW: {escalation_reason}")
+                    self.db.update_example_status(
+                        example.example_id,
+                        ExampleStatus.NEEDS_REVIEW,
+                        escalation_reason=escalation_reason,
+                        run_id=run_id,
+                    )
+
+                    # Phase-2 Task 3: Record compile attempt even for pre-escalated examples
+                    # This ensures compile_attempts_count >= total_examples for accurate metrics
+                    precheck_result = CompileResult(
+                        success=False,
+                        exit_code=-1,
+                        stdout="",
+                        stderr=f"Pre-compilation check failed: {escalation_reason}",
+                        duration_ms=0,
+                        dll_version="",
+                        errors=[f"precheck_escalated:{escalation_reason}"],
+                        warnings=[],
+                    )
+                    self.compilation_service.record_attempt(
+                        example.example_id,
+                        precheck_result,
+                        example.original_code or "",
+                        output_code=None,
+                        llm_request=None,
+                        llm_response=None,
+                        run_id=run_id,
+                    )
+
+                    stats['failed'] += 1
+                    continue
+
                 # Try initial compilation
                 success, result = self.compilation_service.compile_example(
                     example, family_config
                 )
-                
+
+                # Record first-try compilation attempt (Task 1A: Phase-2)
+                self.compilation_service.record_attempt(
+                    example.example_id,
+                    result,
+                    example.original_code,
+                    output_code=None,  # No fix on first try
+                    llm_request=None,
+                    llm_response=None,
+                    run_id=run_id,
+                )
+
                 if success:
                     # Compiled on first try
                     stats['compiled_first_try'] += 1
-                    self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE)
+                    self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
                     self.db.update_example_code(
                         example.example_id,
                         compilable_code=example.original_code,
+                        run_id=run_id,
                     )
                     # Store compilable example in vector DB for future similarity search
                     if self.vector_db_service.is_available():
@@ -723,13 +923,126 @@ class PipelineOrchestrator:
                     self.db.update_example_status(
                         example.example_id,
                         ExampleStatus.COMPILE_FAILED,
-                        failure_reason='\n'.join(result.errors[:3])
+                        failure_reason='\n'.join(result.errors[:3]),
+                        run_id=run_id,
                     )
                     continue
-                
+
+                # Phase-2 Task 2 & 3: Try quick fixes and substitution before LLM fixes
+                current_code = example.original_code
+                substituted = False
+                quick_fix_applied = False
+
+                # Task 2: Apply quick fixes (DirectoryNotFoundException, missing usings)
+                fixed_code, applied_fixes = apply_quick_fixes(current_code, result.errors)
+                if applied_fixes:
+                    logger.info(f"Applied quick fixes for {example.example_id}: {', '.join(applied_fixes)}")
+                    quick_fix_applied = True
+                    current_code = fixed_code
+
+                    # Try recompiling with quick fixes
+                    example.compilable_code = fixed_code
+                    success, result = self.compilation_service.compile_example(
+                        example, family_config
+                    )
+
+                    # Record quick fix attempt
+                    self.compilation_service.record_attempt(
+                        example.example_id,
+                        result,
+                        example.original_code,
+                        output_code=fixed_code if success else None,
+                        llm_request=f"quick_fixes:{','.join(applied_fixes)}",
+                        llm_response=fixed_code if success else None,
+                        run_id=run_id,
+                    )
+
+                    if success:
+                        # Quick fix worked!
+                        stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
+                        stats['quick_fixes_applied'] = stats.get('quick_fixes_applied', 0) + 1
+                        self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                        self.db.update_example_code(
+                            example.example_id,
+                            compilable_code=fixed_code,
+                            run_id=run_id,
+                        )
+                        logger.info(f"Quick fix succeeded for {example.example_id}")
+                        continue
+
+                # Task 3: Check for substitution triggers
+                should_sub, trigger_info = self.substitution_service.should_substitute(result.errors)
+
+                if should_sub and trigger_info:
+                    logger.info(f"Substitution triggered for {example.example_id}: {trigger_info['reason']}")
+
+                    # Try to find a substitute example
+                    substitute_result = self.substitution_service.find_substitute_example(
+                        original_code=current_code,
+                        trigger_info=trigger_info,
+                        family=family,
+                        original_app_context=example.app_context,
+                    )
+
+                    if substitute_result:
+                        substitute_code, substitute_id, metadata = substitute_result
+                        metadata['original_example_id'] = example.example_id
+
+                        logger.info(
+                            f"Found substitute for {example.example_id}: {substitute_id} "
+                            f"(reason: {metadata['trigger_reason']})"
+                        )
+
+                        # Try compiling the substitute
+                        example.compilable_code = substitute_code
+                        success, result = self.compilation_service.compile_example(
+                            example, family_config
+                        )
+
+                        # Record substitution attempt
+                        self.compilation_service.record_attempt(
+                            example.example_id,
+                            result,
+                            example.original_code,
+                            output_code=substitute_code if success else None,
+                            llm_request=f"substitution:{metadata['trigger_reason']}",
+                            llm_response=substitute_code if success else None,
+                            run_id=run_id,
+                        )
+
+                        if success:
+                            # Substitution worked!
+                            substituted = True
+                            current_code = substitute_code
+                            stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
+                            stats['substitutions_applied'] = stats.get('substitutions_applied', 0) + 1
+                            self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                            self.db.update_example_code(
+                                example.example_id,
+                                compilable_code=substitute_code,
+                                run_id=run_id,
+                            )
+                            logger.info(f"Substitution succeeded for {example.example_id}")
+
+                            # Track successful substitution
+                            track_compile_failure(
+                                db=self.db,
+                                run_id=run_id,
+                                example_id=example.example_id,
+                                errors='\n'.join(result.errors[:3]),
+                                category='substitution_success',
+                                resolution=FailureResolution.FIXED,
+                                metadata=metadata,
+                            )
+                            continue
+                        else:
+                            logger.warning(
+                                f"Substitution failed to compile for {example.example_id}, "
+                                f"falling back to LLM fixes"
+                            )
+
                 # Try LLM fixes
                 fixed = False
-                current_code = example.original_code
 
                 # Load API reference context for LLM (LCE-01)
                 api_context = self._load_api_context(family_config)
@@ -752,13 +1065,49 @@ class PipelineOrchestrator:
                     except Exception as e:
                         logger.debug(f"Vector search failed for compilation: {e}")
 
+                # Track previous code for no-change detection
+                previous_code = None
+
                 for attempt in range(max_retries):
+                    # Track 2: Progressive Enrichment - Determine enrichment tier
+                    enrichment_tier = self._get_enrichment_tier(attempt, max_retries)
+
+                    # Track 2: Apply progressive context enrichment
+                    tier_api_context, tier_similar_examples, context_sources = self._apply_progressive_enrichment(
+                        enrichment_tier=enrichment_tier,
+                        base_api_context=api_context,
+                        base_similar_examples=similar_examples,
+                        error_logs='\n'.join(result.errors),
+                        family_config=family_config,
+                    )
+
+                    # Track 2: Emit telemetry for retry attempt
+                    try:
+                        from ..core.telemetry import emit_telemetry_event
+                        emit_telemetry_event(
+                            self.db,
+                            run_id,
+                            family,
+                            event_type='retry_enrichment',
+                            phase='compilation',
+                            metadata={
+                                'example_id': example.example_id,
+                                'retry_attempt': attempt + 1,
+                                'enrichment_tier': enrichment_tier,
+                                'context_sources': context_sources,
+                                'api_context_chars': len(tier_api_context) if tier_api_context else 0,
+                                'similar_examples_count': len(tier_similar_examples) if tier_similar_examples else 0,
+                            }
+                        )
+                    except Exception as e:
+                        logger.debug(f"Failed to emit retry telemetry: {e}")
+
                     # Create fix payload with full context (LCE-03)
                     payload = self.compilation_service.create_fix_payload(
                         example, result,
                         family_config=family_config,
-                        api_context=api_context,
-                        similar_examples=similar_examples,
+                        api_context=tier_api_context,
+                        similar_examples=tier_similar_examples,
                     )
 
                     # Get LLM fix with all context including content context for relevance
@@ -766,8 +1115,8 @@ class PipelineOrchestrator:
                         code=current_code,
                         error_logs='\n'.join(result.errors),
                         context_type="compile",
-                        api_context=api_context,
-                        similar_examples=similar_examples if similar_examples else None,
+                        api_context=tier_api_context,
+                        similar_examples=tier_similar_examples if tier_similar_examples else None,
                         scaffolding_hints=payload.scaffolding_hints,
                         family_config=family_config,
                         section_heading=example.section_heading,
@@ -777,10 +1126,68 @@ class PipelineOrchestrator:
                     
                     if not llm_response.success:
                         continue
-                    
+
                     fixed_code = llm_response.content.strip()
                     if not fixed_code:
                         continue
+
+                    # Phase-2 Gate B: Validate context drift if enabled
+                    if self.context_drift_validator is not None:
+                        drift_result = self.context_drift_validator.validate(
+                            original_code=current_code,
+                            fixed_code=fixed_code,
+                            original_context=example.app_context
+                        )
+
+                        if drift_result.should_reject:
+                            logger.warning(
+                                f"Rejecting LLM fix for {example.example_id} due to context drift: "
+                                f"{drift_result.original_context} → {drift_result.fixed_context}"
+                            )
+                            # Store drift evidence in failure details
+                            self.db.update_example_status(
+                                run_id=run_id,
+                                example_id=example.example_id,
+                                status=ExampleStatus.COMPILE_FAILED,
+                                failure_reason="context_drift_detected",
+                                failure_details={
+                                    "drift_detected": True,
+                                    "original_context": drift_result.original_context,
+                                    "fixed_context": drift_result.fixed_context,
+                                    "rejection_reason": drift_result.rejection_reason
+                                }
+                            )
+                            # Skip this fix attempt and continue to next retry
+                            continue
+
+                    # Track 2: No-change loop detection
+                    if previous_code is not None and self._is_code_identical(previous_code, fixed_code):
+                        logger.warning(
+                            f"No-change loop detected for {example.example_id} on attempt {attempt + 1}: "
+                            f"LLM returned identical code. Escalating early."
+                        )
+                        # Emit telemetry for no-change detection
+                        try:
+                            from ..core.telemetry import emit_telemetry_event
+                            emit_telemetry_event(
+                                self.db,
+                                run_id,
+                                family,
+                                event_type='no_change_loop_detected',
+                                phase='compilation',
+                                metadata={
+                                    'example_id': example.example_id,
+                                    'retry_attempt': attempt + 1,
+                                    'escalation_reason': 'identical_code_returned',
+                                }
+                            )
+                        except Exception as e:
+                            logger.debug(f"Failed to emit no-change telemetry: {e}")
+                        # Break early - no point retrying if LLM is stuck
+                        break
+
+                    # Update previous code for next iteration
+                    previous_code = fixed_code
 
                     # Drift detection: Compare fixed code against ORIGINAL code
                     # Use startup decision, not runtime check
@@ -814,7 +1221,8 @@ class PipelineOrchestrator:
                                 self.db.update_example_status(
                                     example.example_id,
                                     ExampleStatus.COMPILE_FAILED,
-                                    failure_reason=f"Drift threshold exceeded ({drift_score:.3f} > {global_config.drift.threshold})"
+                                    failure_reason=f"Drift threshold exceeded ({drift_score:.3f} > {global_config.drift.threshold})",
+                                    run_id=run_id,
                                 )
                                 stats['failed'] += 1
                                 logger.info(f"Example {example.example_id} marked as compile-failed due to drift")
@@ -834,6 +1242,7 @@ class PipelineOrchestrator:
                         fixed_code if success else None,
                         payload.to_prompt(),
                         llm_response.content,
+                        run_id=run_id,
                     )
                     
                     if success:
@@ -863,7 +1272,8 @@ class PipelineOrchestrator:
                                     self.db.update_example_status(
                                         example.example_id,
                                         ExampleStatus.COMPILE_FAILED,
-                                        failure_reason=drift_reason
+                                        failure_reason=drift_reason,
+                                        run_id=run_id,
                                     )
                                     logger.info(f"Example {example.example_id} marked as needs-fix due to intent drift")
                                     continue  # Skip to next example
@@ -885,8 +1295,8 @@ class PipelineOrchestrator:
                                 )
 
                         stats['compiled_with_fix'] += 1
-                        self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE)
-                        self.db.update_example_code(example.example_id, compilable_code=fixed_code)
+                        self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                        self.db.update_example_code(example.example_id, compilable_code=fixed_code, run_id=run_id)
 
                         # Store final drift score for successful fix
                         if self._drift_enabled and self._drift_detector:
@@ -928,28 +1338,100 @@ class PipelineOrchestrator:
                     current_code = fixed_code
                 
                 if not fixed:
+                    # Task 4: Try example-repo fallback for API mismatch errors
+                    error_text = '\n'.join(result.errors[:5])
+                    if self._is_api_mismatch_error(error_text):
+                        fallback = self._search_example_repo_fallback(
+                            example.original_code, family_config, error_text
+                        )
+                        if fallback:
+                            substitute_code, fix_strategy = fallback
+                            logger.info(
+                                f"Using {fix_strategy} for {example.example_id} (API mismatch)"
+                            )
+                            # Try compiling the substitute
+                            example.compilable_code = substitute_code
+                            sub_success, sub_result = self.compilation_service.compile_example(
+                                example, family_config
+                            )
+                            self.compilation_service.record_attempt(
+                                example.example_id,
+                                sub_result,
+                                example.original_code,
+                                substitute_code if sub_success else None,
+                                f"fix_strategy={fix_strategy}",
+                                substitute_code[:500],
+                                run_id=run_id,
+                            )
+                            if sub_success:
+                                stats['compiled_with_fix'] += 1
+                                self.db.update_example_status(
+                                    example.example_id, ExampleStatus.COMPILABLE, run_id=run_id
+                                )
+                                self.db.update_example_code(
+                                    example.example_id, compilable_code=substitute_code, run_id=run_id
+                                )
+                                continue  # Skip the failure path
+
                     stats['failed'] += 1
                     self.db.update_example_status(
                         example.example_id,
                         ExampleStatus.COMPILE_FAILED,
-                        failure_reason='\n'.join(result.errors[:3])
+                        failure_reason='\n'.join(result.errors[:3]),
+                        run_id=run_id,
                     )
                     
             except Exception as e:
                 logger.error(f"Error compiling {example.example_id}: {e}")
                 stats['errors'] += 1
-        
+
+                # Mark as NEEDS_REVIEW so it doesn't remain DISCOVERED
+                self.db.update_example_status(
+                    example.example_id,
+                    ExampleStatus.NEEDS_REVIEW,
+                    escalation_reason="unprocessed_in_run",
+                    failure_reason=f"Exception during processing: {str(e)[:200]}",
+                    run_id=run_id,
+                )
+
+        # CRITICAL: Ensure no examples remain in DISCOVERED state
+        # Any example that was retrieved but not processed must be marked NEEDS_REVIEW
+        remaining_discovered = self.db.get_examples_by_family(
+            family, ExampleStatus.DISCOVERED, limit=None, run_id=run_id
+        )
+        if remaining_discovered:
+            logger.warning(
+                f"Found {len(remaining_discovered)} examples still in DISCOVERED state - marking as NEEDS_REVIEW"
+            )
+            for leftover in remaining_discovered:
+                self.db.update_example_status(
+                    leftover.example_id,
+                    ExampleStatus.NEEDS_REVIEW,
+                    escalation_reason="unprocessed_in_run",
+                    failure_reason="Example was not processed during compilation phase",
+                    run_id=run_id,
+                )
+                stats['failed'] += 1
+
         stats['verified'] = stats['compiled_first_try'] + stats['compiled_with_fix']
         return stats
     
     def _run_runtime_phase(
         self,
+        run_id: str,
         family: str,
         family_config: FamilyConfig,
         max_examples: Optional[int],
         skip_llm_fixes: bool,
     ) -> Dict[str, Any]:
         """Run Phase C: Runtime Verification Loop."""
+        # Import failure tracking functions at function scope to avoid UnboundLocalError
+        from .failure_tracker import (
+            track_infra_missing_test_data,
+            track_infra_blocked_rar,
+            track_infra_blocked_7z,
+        )
+
         stats = {
             'total_processed': 0,
             'passed_first_try': 0,
@@ -963,10 +1445,10 @@ class PipelineOrchestrator:
         global_config = self.config_manager.load_global_config()
 
         if global_config.backfill.auto_enabled:
-            test_data_path = Path(family_config.test_data.local_path) if family_config.test_data.local_path else None
+            test_data_path = resolve_test_data_path(family, family_config)
 
             # Check if test data is missing
-            if test_data_path and not test_data_path.exists():
+            if test_data_path is None and family_config.test_data.local_path:
                 logger.info(f"Test data missing for {family}, attempting auto-backfill...")
 
                 try:
@@ -996,38 +1478,65 @@ class PipelineOrchestrator:
         # Get examples to process
         # When skip_llm_fixes=False, also process RUNTIME_FAILED examples for retry
         if skip_llm_fixes:
-            examples = self.db.get_examples_by_family(family, ExampleStatus.COMPILABLE, max_examples)
+            examples = self.db.get_examples_by_family(family, ExampleStatus.COMPILABLE, max_examples, run_id=run_id)
         else:
             # Get both COMPILABLE and RUNTIME_FAILED for LLM fixing
-            compilable = self.db.get_examples_by_family(family, ExampleStatus.COMPILABLE, max_examples)
-            failed = self.db.get_examples_by_family(family, ExampleStatus.RUNTIME_FAILED, max_examples)
+            compilable = self.db.get_examples_by_family(family, ExampleStatus.COMPILABLE, max_examples, run_id=run_id)
+            failed = self.db.get_examples_by_family(family, ExampleStatus.RUNTIME_FAILED, max_examples, run_id=run_id)
             examples = compilable + failed
         
-        # Get test data path and info
-        test_data_path = None
+        # Get test data path and info (using resolution helper)
+        test_data_path = resolve_test_data_path(family, family_config)
         test_data_info = ""
-        if family_config.test_data.local_path:
-            test_data_path = Path(family_config.test_data.local_path)
-            if test_data_path.exists():
-                # Build comprehensive test data info for LLM context
-                test_files = []
-                for f in test_data_path.iterdir():
-                    if f.is_file():
-                        test_files.append(f"- {f.name}")
-                    elif f.is_dir():
-                        test_files.append(f"- {f.name}/ (directory)")
+        if test_data_path:
+            # Build comprehensive test data info for LLM context
+            test_files = []
+            for f in test_data_path.iterdir():
+                if f.is_file():
+                    test_files.append(f"- {f.name}")
+                elif f.is_dir():
+                    test_files.append(f"- {f.name}/ (directory)")
 
-                test_data_info = "Available test files:\n" + "\n".join(test_files[:20])
+            test_data_info = "Available test files:\n" + "\n".join(test_files[:20])
 
-                # Add file aliases mapping if configured (CRITICAL for LLM placeholder replacement)
-                if family_config.runtime_validation.file_aliases:
-                    alias_lines = []
-                    for real_file, aliases in family_config.runtime_validation.file_aliases.items():
-                        alias_lines.append(f"  {real_file} → replaces: {', '.join(aliases)}")
-                    test_data_info += "\n\nFile Aliases (use the real file when you see these placeholder names):\n" + "\n".join(alias_lines)
-                    logger.info(f"Added {len(alias_lines)} file aliases to test_data_info for LLM context")
-                else:
-                    logger.warning("No file aliases configured - LLM will not know about placeholder mappings!")
+            # Add file aliases mapping if configured (CRITICAL for LLM placeholder replacement)
+            if family_config.runtime_validation.file_aliases:
+                alias_lines = []
+                for real_file, aliases in family_config.runtime_validation.file_aliases.items():
+                    alias_lines.append(f"  {real_file} → replaces: {', '.join(aliases)}")
+                test_data_info += "\n\nFile Aliases (use the real file when you see these placeholder names):\n" + "\n".join(alias_lines)
+                logger.info(f"Added {len(alias_lines)} file aliases to test_data_info for LLM context")
+            else:
+                logger.warning("No file aliases configured - LLM will not know about placeholder mappings!")
+
+            # Add tag summary from inventory if available
+            if family_config.test_data.inventory_path:
+                inventory_path = Path(family_config.test_data.inventory_path)
+                if inventory_path.exists():
+                    try:
+                        import json
+                        with open(inventory_path, 'r', encoding='utf-8') as f:
+                            inventory = json.load(f)
+
+                        # Add tag summary with example files
+                        tag_summary = inventory.get('tag_summary', {})
+                        if tag_summary:
+                            test_data_info += "\n\nTest Data Tags (with example files):"
+                            # Show top 5 tags with sample files
+                            for tag, count in list(tag_summary.items())[:5]:
+                                test_data_info += f"\n  {tag} ({count} files):"
+                                # Find up to 3 example files with this tag
+                                examples_shown = 0
+                                for entry in inventory.get('entries', []):
+                                    if tag in entry.get('tags', []) and examples_shown < 3:
+                                        test_data_info += f" {entry['path']}"
+                                        examples_shown += 1
+                                        if examples_shown < 3:
+                                            test_data_info += ","
+
+                            logger.info(f"Added tag summary from inventory ({len(tag_summary)} tags)")
+                    except Exception as e:
+                        logger.warning(f"Failed to load inventory: {e}")
 
         max_retries = global_config.llm.max_retries
         
@@ -1040,6 +1549,70 @@ class PipelineOrchestrator:
                 
                 # Copy compilable code to verified for execution
                 example.verified_code = example.compilable_code
+
+                # Pre-flight check: Verify test data availability before runtime execution
+                # This prevents wasting LLM calls on infrastructure issues
+                if test_data_path and family_config.runtime_validation.required_files:
+                    all_available, missing_files = self.runtime_service.check_test_data_availability(
+                        test_data_path=test_data_path,
+                        runtime_config=family_config.runtime_validation,
+                    )
+
+                    if not all_available:
+                        # Infrastructure failure: missing test data files
+                        # Classify the specific infra blocker type
+                        # (imports moved to top of function)
+
+                        # Detect specific infra blockers
+                        rar_missing = any(f.endswith('.rar') for f in missing_files)
+                        sevenz_missing = any(f.endswith('.7z') for f in missing_files)
+
+                        if rar_missing:
+                            # RAR fixture missing - deterministic INFRA_BLOCKED
+                            track_infra_blocked_rar(
+                                db=self.db,
+                                run_id=run_id,
+                                example_id=example.example_id,
+                                reason=f"Missing RAR fixtures: {', '.join(f for f in missing_files if f.endswith('.rar'))}",
+                            )
+                            infra_escalation_reason = "missing_rar_fixture"
+                        elif sevenz_missing:
+                            # 7z fixture missing - deterministic INFRA_BLOCKED
+                            track_infra_blocked_7z(
+                                db=self.db,
+                                run_id=run_id,
+                                example_id=example.example_id,
+                                reason=f"Missing 7z fixtures: {', '.join(f for f in missing_files if f.endswith('.7z'))}",
+                            )
+                            infra_escalation_reason = "missing_7z_fixture"
+                        else:
+                            # Generic missing test data
+                            track_infra_missing_test_data(
+                                db=self.db,
+                                run_id=run_id,
+                                example_id=example.example_id,
+                                missing_files=missing_files,
+                            )
+                            infra_escalation_reason = "missing_test_data"
+
+                        # Phase-2: Use INFRA_BLOCKED status instead of NEEDS_REVIEW
+                        example.escalation_reason = infra_escalation_reason
+
+                        # Mark example as INFRA_BLOCKED with specific reason
+                        self.db.update_example_status(
+                            example.example_id,
+                            ExampleStatus.INFRA_BLOCKED,
+                            escalation_reason=infra_escalation_reason,
+                            run_id=run_id,
+                        )
+
+                        # Log and skip to next example
+                        logger.warning(
+                            f"Example {example.example_id}: INFRA_BLOCKED - missing test data files: "
+                            f"{', '.join(missing_files[:5])} (reason: {infra_escalation_reason})"
+                        )
+                        stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
+                        continue
 
                 success, result = self.runtime_service.execute_example(
                     example, family_config, test_data_path
@@ -1057,14 +1630,16 @@ class PipelineOrchestrator:
                     retrieved_examples=None,
                     llm_request=None,
                     llm_response=None,
+                    run_id=run_id,
                 )
 
                 if success:
                     stats['passed_first_try'] += 1
-                    self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED)
+                    self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
                     self.db.update_example_code(
                         example.example_id,
                         verified_code=example.compilable_code,
+                        run_id=run_id,
                     )
                     # Store verified example in vector DB for future similarity search
                     if self.vector_db_service.is_available():
@@ -1084,7 +1659,304 @@ class PipelineOrchestrator:
                             logger.debug(f"Failed to add verified example to vector DB: {e}")
                     continue
                 
-                # Runtime failed - try LLM fixes if enabled
+                # Runtime failed - check for misclassified compile errors first (Phase-2 Task 4)
+                # If runtime output contains CS#### compiler errors, it's actually a compile failure
+                runtime_stderr = result.stderr if result else ""
+                runtime_stdout = result.stdout if result else ""
+                runtime_output = f"{runtime_stderr}\n{runtime_stdout}"
+
+                # Check for C# compiler error codes (CSxxxx)
+                compile_error_pattern = r'\bCS\d{4}\b'
+                has_compile_errors = re.search(compile_error_pattern, runtime_output)
+
+                if has_compile_errors:
+                    logger.warning(
+                        f"Runtime failure for {example.example_id} contains compile errors (CSxxxx). "
+                        f"Reclassifying as COMPILE_FAILED and routing through substitution."
+                    )
+
+                    # Extract the compile errors
+                    compile_errors = re.findall(r'error CS\d{4}:.*', runtime_output)
+                    if not compile_errors:
+                        compile_errors = [runtime_stderr[:200]]  # Fallback
+
+                    # Create a fake compile result for substitution
+                    fake_compile_result = CompileResult(
+                        success=False,
+                        exit_code=1,
+                        stdout="",
+                        stderr=runtime_stderr,
+                        duration_ms=0,
+                        dll_version="",
+                        errors=compile_errors,
+                        warnings=[],
+                    )
+
+                    # Try substitution first
+                    should_sub, trigger_info = self.substitution_service.should_substitute(compile_errors)
+
+                    if should_sub and trigger_info:
+                        logger.info(
+                            f"Substitution triggered for misclassified {example.example_id}: "
+                            f"{trigger_info['reason']}"
+                        )
+
+                        substitute_result = self.substitution_service.find_substitute_example(
+                            original_code=example.compilable_code,
+                            trigger_info=trigger_info,
+                            family=family,
+                            original_app_context=example.app_context,
+                        )
+
+                        if substitute_result:
+                            substitute_code, substitute_id, metadata = substitute_result
+                            metadata['original_example_id'] = example.example_id
+                            metadata['misclassified_from_runtime'] = True
+
+                            # Re-compile with substitute
+                            example.compilable_code = substitute_code
+                            comp_success, comp_result = self.compilation_service.compile_example(
+                                example, family_config
+                            )
+
+                            if comp_success:
+                                # Substitute compiled - now try runtime
+                                runtime_success, runtime_result = self.runtime_service.execute_example(
+                                    example, family_config, test_data_path
+                                )
+
+                                if runtime_success:
+                                    logger.info(
+                                        f"Substitution fixed misclassified compile error for {example.example_id}"
+                                    )
+                                    self.db.update_example_status(
+                                        example.example_id,
+                                        ExampleStatus.VERIFIED,
+                                        run_id=run_id,
+                                    )
+                                    self.db.update_example_code(
+                                        example.example_id,
+                                        verified_code=substitute_code,
+                                        run_id=run_id,
+                                    )
+                                    stats['passed_first_try'] = stats.get('passed_first_try', 0) + 1
+                                    stats['runtime_reclassified'] = stats.get('runtime_reclassified', 0) + 1
+                                    continue
+
+                    # Substitution didn't work - mark as COMPILE_FAILED
+                    logger.info(
+                        f"Reclassifying {example.example_id} as COMPILE_FAILED (contains CSxxxx errors)"
+                    )
+                    self.db.update_example_status(
+                        example.example_id,
+                        ExampleStatus.COMPILE_FAILED,
+                        failure_reason=f"Misclassified runtime failure (compile errors): {compile_errors[0][:100]}",
+                        run_id=run_id,
+                    )
+                    stats['failed'] = stats.get('failed', 0) + 1
+                    stats['runtime_reclassified'] = stats.get('runtime_reclassified', 0) + 1
+                    continue
+
+                # Runtime failed - try deterministic fixes first (Task 5)
+                deterministic_fixed = False
+                current_code = example.compilable_code
+
+                # Task 5: Classify runtime error and try deterministic fix
+                error_category = self.runtime_service.classify_runtime_error(result)
+                logger.debug(f"Runtime error category for {example.example_id}: {error_category}")
+
+                # Task 5: Escalate missing RAR file as INFRA_BLOCKED
+                # BUT ONLY if the fixture is TRULY missing (recursive lookup + inventory check fails)
+                if error_category == "missing_rar_file":
+                    from .escalation_classifier import EscalationReason
+
+                    # CRITICAL: Verify the RAR file is actually missing
+                    # Extract RAR filename from error message
+                    rar_filename = None
+                    error_text = (result.stderr or "") + (result.exception_message or "")
+                    # Look for .rar files in error message
+                    rar_match = re.search(r'(["\']?)([^"\']+\.rar)\1', error_text, re.IGNORECASE)
+                    if rar_match:
+                        rar_filename = rar_match.group(2).replace('\\', '/').split('/')[-1]
+
+                    # Check if this file exists anywhere in test-data (recursive)
+                    fixture_truly_missing = True
+                    if rar_filename and test_data_path and test_data_path.exists():
+                        found_path = self.runtime_service.find_test_file(
+                            required_name=rar_filename,
+                            source_dir=test_data_path,
+                            file_aliases=family_config.runtime_validation.file_aliases,
+                            inventory=None
+                        )
+                        if found_path is not None:
+                            # Fixture EXISTS but runtime still failed - this is a SYSTEM BUG
+                            fixture_truly_missing = False
+                            logger.warning(
+                                f"Example {example.example_id}: RAR file '{rar_filename}' exists at "
+                                f"{found_path} but runtime failed - marking as NEEDS_REVIEW (file_not_copied)"
+                            )
+
+                    if fixture_truly_missing:
+                        # RAR fixture is truly missing - mark INFRA_BLOCKED
+                        logger.info(f"Example {example.example_id}: INFRA_BLOCKED (missing_rar_fixture)")
+
+                        track_infra_blocked_rar(
+                            db=self.db,
+                            run_id=run_id,
+                            example_id=example.example_id,
+                            reason=f"Missing RAR fixture at runtime: {rar_filename or 'unknown'}",
+                        )
+
+                        self.db.update_example_status(
+                            example.example_id,
+                            ExampleStatus.INFRA_BLOCKED,
+                            escalation_reason=EscalationReason.INFRA_BLOCKED_RAR_FIXTURE,
+                            run_id=run_id,
+                        )
+                        stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
+                        continue
+                    else:
+                        # Fixture exists but wasn't copied - system bug
+                        # Continue to runtime failure handling below
+                        error_category = "file_not_copied"
+
+                # Task 5: Escalate password errors as INFRA_BLOCKED
+                if error_category == "invalid_password":
+                    from .escalation_classifier import EscalationReason
+                    logger.info(f"Example {example.example_id}: INFRA_BLOCKED (requires_password_secret)")
+
+                    # Track the infrastructure blocker
+                    track_failure(
+                        db=self.db,
+                        run_id=run_id,
+                        phase="Phase D (Runtime)",
+                        failure_category=FailureCategory.INFRA_BLOCKED_PASSWORD,
+                        example_id=example.example_id,
+                        error_category="requires_password",
+                        error_message="Password/secret required for archive",
+                        resolution=FailureResolution.ABANDONED,
+                        metadata={'infra_type': 'password_required'},
+                    )
+
+                    self.db.update_example_status(
+                        example.example_id,
+                        ExampleStatus.INFRA_BLOCKED,
+                        escalation_reason=EscalationReason.INFRA_BLOCKED_PASSWORD,
+                        run_id=run_id,
+                    )
+                    stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
+                    continue
+
+                # Task 5: Escalate 7z format issues as INFRA_BLOCKED
+                if error_category == "sevenz_format_issue":
+                    from .escalation_classifier import EscalationReason
+                    logger.info(f"Example {example.example_id}: INFRA_BLOCKED (missing_7z_fixture)")
+
+                    # Track the infrastructure blocker
+                    track_infra_blocked_7z(
+                        db=self.db,
+                        run_id=run_id,
+                        example_id=example.example_id,
+                        reason="7z format issue at runtime",
+                    )
+
+                    self.db.update_example_status(
+                        example.example_id,
+                        ExampleStatus.INFRA_BLOCKED,
+                        escalation_reason=EscalationReason.INFRA_BLOCKED_7Z_FIXTURE,
+                        run_id=run_id,
+                    )
+                    stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
+                    continue
+
+                if error_category in ("missing_file", "missing_directory"):
+                    # Get available test data files for substitution
+                    available_files = []
+                    if test_data_path and test_data_path.exists():
+                        for f in test_data_path.rglob("*"):
+                            if f.is_file():
+                                available_files.append(f.name)
+
+                    # Try deterministic fix
+                    fixed_code = self.runtime_service.apply_deterministic_fix(
+                        current_code, error_category, available_files
+                    )
+
+                    if fixed_code and fixed_code != current_code:
+                        logger.info(f"Applied deterministic {error_category} fix for {example.example_id}")
+
+                        # Re-run with fixed code
+                        example.compilable_code = fixed_code
+                        success, result = self.runtime_service.execute_example(
+                            example, family_config, test_data_path
+                        )
+
+                        # Record deterministic fix attempt
+                        self.runtime_service.record_attempt(
+                            example_id=example.example_id,
+                            family=family,
+                            runtime_result=result,
+                            sample_ref=str(test_data_path) if test_data_path else "none",
+                            scenario=f"deterministic_fix_{error_category}",
+                            retrieved_examples=None,
+                            llm_request=None,
+                            llm_response=None,
+                            run_id=run_id,
+                        )
+
+                        if success:
+                            deterministic_fixed = True
+                            stats['deterministic_fixes'] = stats.get('deterministic_fixes', 0) + 1
+                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                            self.db.update_example_code(
+                                example.example_id,
+                                verified_code=fixed_code,
+                                run_id=run_id,
+                            )
+                            logger.info(f"Deterministic fix succeeded for {example.example_id}")
+                            continue
+                        else:
+                            current_code = fixed_code  # Use fixed code for subsequent LLM attempts
+
+                if deterministic_fixed:
+                    continue
+
+                # If skip_llm_fixes is True and deterministic fix didn't work, mark as failed
+                if skip_llm_fixes:
+                    stats['failed'] += 1
+                    failure_reason = (
+                        result.exception_message
+                        or (result.stderr[:200] if result.stderr else None)
+                        or "Unknown runtime error"
+                    )
+
+                    # Check if this should be INFRA_BLOCKED instead of RUNTIME_FAILED
+                    # FileNotFoundException for missing fixtures should be INFRA_BLOCKED
+                    if error_category == "missing_file" and result.exception_type == "System.IO.FileNotFoundException":
+                        # Mark as INFRA_BLOCKED if it's a missing test fixture
+                        self.db.update_example_status(
+                            example.example_id,
+                            ExampleStatus.INFRA_BLOCKED,
+                            escalation_reason="missing_test_data",
+                            run_id=run_id,
+                        )
+                        logger.info(f"Example {example.example_id}: INFRA_BLOCKED (missing file: {failure_reason[:100]})")
+                        stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
+                    else:
+                        # Mark as RUNTIME_FAILED for other runtime errors
+                        self.db.update_example_status(
+                            example.example_id,
+                            ExampleStatus.RUNTIME_FAILED,
+                            failure_reason=failure_reason,
+                            run_id=run_id,
+                        )
+                        logger.info(f"Example {example.example_id}: RUNTIME_FAILED (no LLM fixes, deterministic fix didn't work)")
+                    continue
+
+                # Task 5: Limit runtime LLM fixes to 1 iteration
+                runtime_max_retries = min(max_retries, 1)
+
+                # Runtime still failed - try LLM fixes if enabled
                 if not skip_llm_fixes and self.llm_service.is_available():
                     fixed = False
                     current_code = example.compilable_code
@@ -1125,8 +1997,44 @@ class PipelineOrchestrator:
                             logger.warning(f"Vector search failed (continuing without): {e}")
                             stats['vector_search_error'] = str(e)
 
-                    for attempt in range(max_retries):
+                    # Track previous code for no-change detection (runtime)
+                    previous_runtime_code = None
+
+                    for attempt in range(runtime_max_retries):
                         stats['llm_fix_attempts'] += 1
+
+                        # Track 2: Progressive Enrichment - Determine enrichment tier
+                        enrichment_tier = self._get_enrichment_tier(attempt, runtime_max_retries)
+
+                        # Track 2: Apply progressive context enrichment (runtime specific)
+                        tier_api_context, tier_similar_examples, context_sources = self._apply_progressive_enrichment(
+                            enrichment_tier=enrichment_tier,
+                            base_api_context=api_context,
+                            base_similar_examples=similar_examples,
+                            error_logs=result.stderr or "Runtime error",
+                            family_config=family_config,
+                        )
+
+                        # Track 2: Emit telemetry for retry attempt (runtime)
+                        try:
+                            from ..core.telemetry import emit_telemetry_event
+                            emit_telemetry_event(
+                                self.db,
+                                run_id,
+                                family,
+                                event_type='retry_enrichment',
+                                phase='runtime',
+                                metadata={
+                                    'example_id': example.example_id,
+                                    'retry_attempt': attempt + 1,
+                                    'enrichment_tier': enrichment_tier,
+                                    'context_sources': context_sources,
+                                    'api_context_chars': len(tier_api_context) if tier_api_context else 0,
+                                    'similar_examples_count': len(tier_similar_examples) if tier_similar_examples else 0,
+                                }
+                            )
+                        except Exception as e:
+                            logger.debug(f"Failed to emit retry telemetry (runtime): {e}")
 
                         # Detect if this is a build failure vs runtime failure
                         is_build_error = self._is_build_failure(result.stderr)
@@ -1144,9 +2052,9 @@ class PipelineOrchestrator:
                                 code=current_code,
                                 error_logs=error_logs,
                                 context_type="compile",  # Use compilation prompts
-                                api_context=api_context,  # LCE-04
+                                api_context=tier_api_context,  # Track 2: Use tier-enriched context
                                 scaffolding_hints=hints,
-                                similar_examples=similar_examples if similar_examples else None,
+                                similar_examples=tier_similar_examples if tier_similar_examples else None,
                                 family_config=family_config,
                                 section_heading=example.section_heading,
                                 description_context=example.description_context,
@@ -1164,9 +2072,9 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                 code=current_code,
                                 error_logs=error_context,
                                 context_type="runtime",
-                                api_context=api_context,  # LCE-04
+                                api_context=tier_api_context,  # Track 2: Use tier-enriched context
                                 test_data_info=test_data_info,
-                                similar_examples=similar_examples if similar_examples else None,
+                                similar_examples=tier_similar_examples if tier_similar_examples else None,
                                 family_config=family_config,
                                 section_heading=example.section_heading,
                                 description_context=example.description_context,
@@ -1179,6 +2087,64 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             break
 
                         fixed_code = llm_response.content
+
+                        # Phase-2 Gate B: Validate context drift if enabled
+                        if self.context_drift_validator is not None:
+                            drift_result = self.context_drift_validator.validate(
+                                original_code=current_code,
+                                fixed_code=fixed_code,
+                                original_context=example.app_context
+                            )
+
+                            if drift_result.should_reject:
+                                logger.warning(
+                                    f"Rejecting LLM fix for {example.example_id} due to context drift: "
+                                    f"{drift_result.original_context} → {drift_result.fixed_context}"
+                                )
+                                # Store drift evidence in failure details
+                                self.db.update_example_status(
+                                    run_id=run_id,
+                                    example_id=example.example_id,
+                                    status=ExampleStatus.RUNTIME_FAILED,
+                                    failure_reason="context_drift_detected",
+                                    failure_details={
+                                        "drift_detected": True,
+                                        "original_context": drift_result.original_context,
+                                        "fixed_context": drift_result.fixed_context,
+                                        "rejection_reason": drift_result.rejection_reason
+                                    }
+                                )
+                                # Skip this fix attempt and continue to next retry
+                                continue
+
+                        # Track 2: No-change loop detection (runtime)
+                        if previous_runtime_code is not None and self._is_code_identical(previous_runtime_code, fixed_code):
+                            logger.warning(
+                                f"No-change loop detected (runtime) for {example.example_id} on attempt {attempt + 1}: "
+                                f"LLM returned identical code. Escalating early."
+                            )
+                            # Emit telemetry for no-change detection
+                            try:
+                                from ..core.telemetry import emit_telemetry_event
+                                emit_telemetry_event(
+                                    self.db,
+                                    run_id,
+                                    family,
+                                    event_type='no_change_loop_detected',
+                                    phase='runtime',
+                                    metadata={
+                                        'example_id': example.example_id,
+                                        'retry_attempt': attempt + 1,
+                                        'escalation_reason': 'identical_code_returned',
+                                    }
+                                )
+                            except Exception as e:
+                                logger.debug(f"Failed to emit no-change telemetry (runtime): {e}")
+                            # Break early - no point retrying if LLM is stuck
+                            break
+
+                        # Update previous code for next iteration
+                        previous_runtime_code = fixed_code
 
                         # Drift detection: Compare fixed code against ORIGINAL code
                         # Use startup decision, not runtime check
@@ -1212,7 +2178,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                     self.db.update_example_status(
                                         example.example_id,
                                         ExampleStatus.RUNTIME_FAILED,
-                                        failure_reason=f"Drift threshold exceeded ({drift_score:.3f} > {global_config.drift.threshold})"
+                                        failure_reason=f"Drift threshold exceeded ({drift_score:.3f} > {global_config.drift.threshold})",
+                                        run_id=run_id,
                                     )
                                     stats['failed'] += 1
                                     logger.info(f"Example {example.example_id} marked as runtime-failed due to drift")
@@ -1239,6 +2206,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             retrieved_examples=retrieved_example_ids if retrieved_example_ids else None,
                             llm_request=llm_response.raw_prompt if hasattr(llm_response, 'raw_prompt') else None,
                             llm_response=llm_response.content,
+                            run_id=run_id,
                         )
 
                         if success:
@@ -1268,7 +2236,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                         self.db.update_example_status(
                                             example.example_id,
                                             ExampleStatus.RUNTIME_FAILED,
-                                            failure_reason=drift_reason
+                                            failure_reason=drift_reason,
+                                            run_id=run_id,
                                         )
                                         logger.info(f"Example {example.example_id} marked as runtime failed due to intent drift")
                                         break  # Exit retry loop
@@ -1290,10 +2259,11 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                     )
 
                             stats['passed_with_fix'] += 1
-                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED)
+                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
                             self.db.update_example_code(
                                 example.example_id,
                                 verified_code=fixed_code,
+                                run_id=run_id,
                             )
 
                             # Store final drift score for successful fix
@@ -1367,18 +2337,77 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 self.db.update_example_status(
                     example.example_id,
                     ExampleStatus.RUNTIME_FAILED,
-                    failure_reason=failure_reason
+                    failure_reason=failure_reason,
+                    run_id=run_id,
                 )
                 
             except Exception as e:
                 logger.error(f"Error running {example.example_id}: {e}")
                 stats['errors'] += 1
-        
+
+        # Task 3: Cleanup - ensure no examples remain in COMPILABLE terminal state
+        # Any COMPILABLE examples that weren't moved to a terminal state should be resolved
+        remaining_compilable = self.db.get_examples_by_family(family, ExampleStatus.COMPILABLE, limit=None, run_id=run_id)
+        if remaining_compilable:
+            logger.warning(f"Found {len(remaining_compilable)} examples still in COMPILABLE state after runtime phase, marking as terminal states")
+            for example in remaining_compilable:
+                # Check if example has runtime attempts to determine appropriate status
+                try:
+                    runtime_attempts = [a for a in self.db.get_runtime_attempts(example.example_id, run_id=run_id)]
+                    if runtime_attempts:
+                        # Has runtime attempts - classify based on the error
+                        last_attempt = runtime_attempts[-1]
+                        error_text = (last_attempt.stderr or "") + (last_attempt.exception_message or "")
+                        error_lower = error_text.lower()
+
+                        # Check for RAR file missing
+                        if ".rar" in error_lower and ("filenotfound" in error_lower or "could not find file" in error_lower):
+                            self.db.update_example_status(
+                                example.example_id,
+                                ExampleStatus.INFRA_BLOCKED,
+                                escalation_reason="missing_rar_fixture",
+                                run_id=run_id,
+                            )
+                            logger.info(f"Marked {example.example_id} as INFRA_BLOCKED (missing RAR fixture)")
+                            stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
+                        else:
+                            # Other runtime error - mark as RUNTIME_FAILED
+                            failure_reason = last_attempt.exception_message or last_attempt.stderr[:200] or "Unknown runtime error"
+                            self.db.update_example_status(
+                                example.example_id,
+                                ExampleStatus.RUNTIME_FAILED,
+                                failure_reason=failure_reason,
+                                run_id=run_id,
+                            )
+                            logger.info(f"Marked {example.example_id} as RUNTIME_FAILED")
+                            stats['failed'] += 1
+                    else:
+                        # No runtime attempts - shouldn't happen, but mark as RUNTIME_FAILED
+                        self.db.update_example_status(
+                            example.example_id,
+                            ExampleStatus.RUNTIME_FAILED,
+                            failure_reason="No runtime attempts recorded",
+                            run_id=run_id,
+                        )
+                        logger.warning(f"Marked {example.example_id} as RUNTIME_FAILED (no runtime attempts)")
+                        stats['failed'] += 1
+                except Exception as cleanup_error:
+                    logger.error(f"Error cleaning up COMPILABLE example {example.example_id}: {cleanup_error}")
+                    # Default to RUNTIME_FAILED as safe fallback
+                    self.db.update_example_status(
+                        example.example_id,
+                        ExampleStatus.RUNTIME_FAILED,
+                        failure_reason="Cleanup error",
+                        run_id=run_id,
+                    )
+                    stats['failed'] += 1
+
         stats['verified'] = stats['passed_first_try'] + stats['passed_with_fix']
         return stats
     
     def _run_markdown_update_phase(
         self,
+        run_id: str,
         family: str,
         dry_run: bool,
         allow_md_write: bool = False,
@@ -1387,6 +2416,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         Run Phase D: Markdown Update.
 
         Args:
+            run_id: Run identifier
             family: Family identifier
             dry_run: If True, don't write changes
             allow_md_write: If True, override global config to allow markdown writes
@@ -1401,6 +2431,9 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 self.db,
                 artifacts_dir=self.artifacts_dir / "diffs",
                 allow_markdown_write=True,  # Override to True
+                use_workspace_copy=self.use_workspace_copy,
+                workspace_root=self.artifacts_dir / "workspace",
+                run_id=run_id,
             )
             logger.info("Markdown writes ENABLED via --allow-md-write flag")
 
@@ -1485,12 +2518,16 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     'raw_response': tiebreaker.get('raw_response', ''),
                 }
 
-    def _run_final_review_phase(self, family: str) -> Dict[str, Any]:
+    def _run_final_review_phase(self, run_id: str, family: str) -> Dict[str, Any]:
         """
         Run Phase E: Final LLM Review with structured issue tracking.
 
         Implements re-review loop up to max_review_attempts if issues are found.
         All reviews and issues are saved to the database for audit trail.
+
+        Args:
+            run_id: Run identifier
+            family: Family identifier
         """
         stats = {
             'files_reviewed': 0,
@@ -1506,13 +2543,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         final_review_config = global_config.final_review
         max_attempts = final_review_config.max_review_attempts
 
-        # Get the current run_id for this pipeline
-        # We need to find the most recent run for this family
-        run_record = self.db.get_latest_run(family)
-        run_id = run_record.run_id if run_record else "unknown"
-
         # Get updated examples
-        examples = self.db.get_examples_by_family(family, ExampleStatus.MD_UPDATED)
+        examples = self.db.get_examples_by_family(family, ExampleStatus.MD_UPDATED, run_id=run_id)
 
         # Group by file
         files: Dict[str, List[ExampleRecord]] = {}
@@ -1607,7 +2639,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                         for e in file_examples:
                             self.db.update_example_status(
-                                e.example_id, ExampleStatus.FINAL_REVIEW_PASSED
+                                e.example_id, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id
                             )
                         break  # Exit retry loop
 
@@ -1644,7 +2676,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     stats['failed'] += 1
                     for e in file_examples:
                         self.db.update_example_status(
-                            e.example_id, ExampleStatus.FINAL_REVIEW_FAILED
+                            e.example_id, ExampleStatus.FINAL_REVIEW_FAILED, run_id=run_id
                         )
 
             except Exception as e:
@@ -1655,7 +2687,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     self.db.update_example_status(
                         ex.example_id,
                         ExampleStatus.FINAL_REVIEW_FAILED,
-                        failure_reason=f"Review error: {str(e)}"
+                        failure_reason=f"Review error: {str(e)}",
+                        run_id=run_id,
                     )
 
         return stats
@@ -1694,7 +2727,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             return stats
 
         # Get files that were updated
-        examples = self.db.get_examples_by_family(family, ExampleStatus.FINAL_REVIEW_PASSED)
+        examples = self.db.get_examples_by_family(family, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
         touched_files = list(set(e.file_path for e in examples))
 
         if not touched_files:
@@ -1785,7 +2818,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                 # Update example statuses
                 for e in examples:
-                    self.db.update_example_status(e.example_id, ExampleStatus.COMMITTED)
+                    self.db.update_example_status(e.example_id, ExampleStatus.COMMITTED, run_id=run_id)
 
         except Exception as e:
             logger.error(f"Git commit failed: {e}")
@@ -1815,8 +2848,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
         global_config = self.config_manager.load_global_config()
 
-        # Compute config hash
-        config_hash = self.config_manager.compute_config_hash(family)
+        # Compute config hash with CLI overrides included
+        config_hash = self.config_manager.compute_config_hash(family, cli_overrides=self.cli_overrides)
 
         # Try to get dotnet version
         dotnet_version = None
@@ -1907,8 +2940,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         try:
             fingerprint = self.db.get_run_fingerprint(run_id)
             if fingerprint:
-                # Compute selection_hash from all examples in family
-                examples = self.db.get_examples_by_family(family)
+                # Compute selection_hash from all examples in this run
+                examples = self.db.get_examples_by_family(family, run_id=run_id)
                 example_keys = [ex.example_key for ex in examples if ex.example_key]
                 selection_hash = self.db.compute_selection_hash(example_keys)
 
@@ -1941,3 +2974,337 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         if family:
             return self.db.get_family_stats(family)
         return self.db.get_all_stats()
+
+    def _get_enrichment_tier(self, attempt: int, max_retries: int) -> str:
+        """
+        Determine enrichment tier for a retry attempt.
+
+        Track 2: Deterministic progressive enrichment tiers:
+        - Tier 1 (attempt 0): minimal - error + targeted API snippet
+        - Tier 2 (attempt 1): + top-K similar examples
+        - Tier 3+ (attempt 2+): + expanded API context + explicit strategy hint
+
+        Args:
+            attempt: Current attempt number (0-indexed)
+            max_retries: Maximum retry attempts
+
+        Returns:
+            Enrichment tier name
+        """
+        if attempt == 0:
+            return "tier1_minimal"
+        elif attempt == 1:
+            return "tier2_with_examples"
+        else:
+            return "tier3_expanded"
+
+    def _apply_progressive_enrichment(
+        self,
+        enrichment_tier: str,
+        base_api_context: Optional[str],
+        base_similar_examples: Optional[List[str]],
+        error_logs: str,
+        family_config: Any,
+    ) -> Tuple[Optional[str], Optional[List[str]], List[str]]:
+        """
+        Apply progressive context enrichment based on retry tier.
+
+        Track 2: Implements deterministic progressive enrichment:
+        - Tier 1: Minimal error + targeted API snippet for missing symbols
+        - Tier 2: Add top-K similar examples (deterministic ordering)
+        - Tier 3+: Expanded API context + explicit strategy hint
+
+        Args:
+            enrichment_tier: Enrichment tier (tier1_minimal, tier2_with_examples, tier3_expanded)
+            base_api_context: Base API context string
+            base_similar_examples: Base list of similar examples
+            error_logs: Error log messages
+            family_config: Family configuration
+
+        Returns:
+            Tuple of (api_context, similar_examples, context_sources)
+        """
+        context_sources = []
+
+        if enrichment_tier == "tier1_minimal":
+            # Tier 1: Minimal - only targeted API snippet for missing symbols
+            api_context = self._extract_targeted_api_context(error_logs, base_api_context)
+            similar_examples = None  # No examples on first attempt
+            context_sources.append("targeted_api_snippet")
+            logger.debug(f"Tier 1 enrichment: targeted API context only")
+
+        elif enrichment_tier == "tier2_with_examples":
+            # Tier 2: Add top-K similar examples (deterministic K=3)
+            api_context = self._extract_targeted_api_context(error_logs, base_api_context)
+            context_sources.append("targeted_api_snippet")
+
+            if base_similar_examples:
+                # Deterministically select top K examples (already sorted by similarity)
+                K = 3  # Stable K value
+                similar_examples = base_similar_examples[:K]
+                context_sources.append(f"similar_examples_k{K}")
+                logger.debug(f"Tier 2 enrichment: targeted API + {len(similar_examples)} similar examples")
+            else:
+                similar_examples = None
+                logger.debug(f"Tier 2 enrichment: targeted API only (no examples available)")
+
+        else:  # tier3_expanded
+            # Tier 3+: Expanded API context + strategy hint
+            # Use full API context (not just targeted)
+            api_context = base_api_context
+            if api_context:
+                context_sources.append("expanded_api_context")
+
+            # Include all available similar examples
+            if base_similar_examples:
+                similar_examples = base_similar_examples
+                context_sources.append(f"all_similar_examples_{len(similar_examples)}")
+            else:
+                similar_examples = None
+
+            # Add strategy hint based on error category
+            strategy_hint = self._get_strategy_hint_from_errors(error_logs, family_config)
+            if strategy_hint and api_context:
+                api_context = f"{api_context}\n\n## Strategy Hint:\n{strategy_hint}"
+                context_sources.append("strategy_hint")
+            elif strategy_hint:
+                api_context = f"## Strategy Hint:\n{strategy_hint}"
+                context_sources.append("strategy_hint")
+
+            logger.debug(
+                f"Tier 3 enrichment: expanded API + {len(similar_examples) if similar_examples else 0} examples + strategy"
+            )
+
+        return api_context, similar_examples, context_sources
+
+    def _extract_targeted_api_context(
+        self,
+        error_logs: str,
+        full_api_context: Optional[str],
+    ) -> Optional[str]:
+        """
+        Extract targeted API context for missing symbols in error logs.
+
+        Args:
+            error_logs: Error log messages
+            full_api_context: Full API context to search
+
+        Returns:
+            Targeted API context string or None
+        """
+        if not full_api_context:
+            return None
+
+        # Extract missing type names from errors (CS0246, CS0103, etc.)
+        missing_types = set()
+        for pattern in [
+            r"CS0246.*'(\w+)'",  # Missing type
+            r"CS0103.*'(\w+)'",  # Undefined name
+            r"CS0117.*'(\w+)'",  # Missing member
+        ]:
+            for match in re.finditer(pattern, error_logs):
+                missing_types.add(match.group(1))
+
+        if not missing_types:
+            # No specific missing types found, return truncated API context
+            return full_api_context[:2000] if len(full_api_context) > 2000 else full_api_context
+
+        # Search for relevant sections in API context
+        targeted_sections = []
+        for missing_type in missing_types:
+            # Find sections mentioning the missing type
+            for line in full_api_context.split('\n'):
+                if missing_type in line:
+                    # Include surrounding context (up to 10 lines)
+                    start_idx = max(0, full_api_context.find(line) - 500)
+                    end_idx = min(len(full_api_context), full_api_context.find(line) + 500)
+                    targeted_sections.append(full_api_context[start_idx:end_idx])
+                    break
+
+        if targeted_sections:
+            return "\n\n".join(targeted_sections[:3])  # Limit to 3 sections
+
+        # Fallback to truncated full context
+        return full_api_context[:2000] if len(full_api_context) > 2000 else full_api_context
+
+    def _get_strategy_hint_from_errors(
+        self,
+        error_logs: str,
+        family_config: Any,
+    ) -> Optional[str]:
+        """
+        Generate explicit strategy hint based on error category.
+
+        Args:
+            error_logs: Error log messages
+            family_config: Family configuration
+
+        Returns:
+            Strategy hint string or None
+        """
+        hints = []
+
+        # Categorize errors
+        if "CS0246" in error_logs or "could not be found" in error_logs:
+            hints.append("Add missing 'using' statements for the namespace containing the missing type.")
+            hints.append("Common namespaces: Aspose.Zip, Aspose.Zip.Saving, Aspose.Zip.SevenZip, Aspose.Zip.Rar")
+
+        if "CS8803" in error_logs or "Top-level statements" in error_logs:
+            hints.append("Wrap all code in 'class Program { static void Main() { ... } }' structure.")
+
+        if "FileNotFoundException" in error_logs or "DirectoryNotFoundException" in error_logs:
+            hints.append("Check file paths - use paths from the available test data list.")
+            hints.append("Replace placeholder paths with actual test file names.")
+
+        if "CS0029" in error_logs or "type mismatch" in error_logs.lower():
+            hints.append("Check type compatibility - use explicit casting if needed.")
+
+        if "CS1061" in error_logs or "does not contain" in error_logs:
+            hints.append("Verify API method/property names against documentation.")
+            hints.append("The member may not exist in this API version.")
+
+        if not hints:
+            return None
+
+        return "\n".join(f"- {hint}" for hint in hints)
+
+    def _is_code_identical(self, code1: str, code2: str) -> bool:
+        """
+        Check if two code snippets are identical (ignoring whitespace differences).
+
+        Track 2: No-change loop detection - compares normalized code.
+
+        Args:
+            code1: First code snippet
+            code2: Second code snippet
+
+        Returns:
+            True if code is identical (normalized), False otherwise
+        """
+        # Normalize: strip, lowercase, remove extra whitespace
+        def normalize(code: str) -> str:
+            # Remove all whitespace and convert to lowercase for comparison
+            return re.sub(r'\s+', '', code.strip().lower())
+
+        return normalize(code1) == normalize(code2)
+
+    def _is_api_mismatch_error(self, error_logs: str) -> bool:
+        """
+        Task 4: Detect if compile errors are API mismatches.
+
+        API mismatches are:
+        - CS0246: Missing type or namespace
+        - CS0117: Missing member
+        - CS1061: Missing method/property
+        - AspNetCore references
+
+        Args:
+            error_logs: Compilation error log
+
+        Returns:
+            True if error is an API mismatch
+        """
+        api_mismatch_patterns = [
+            r"CS0246",  # Missing type
+            r"CS0117",  # Missing member
+            r"CS1061",  # Does not contain definition
+            r"Microsoft\.AspNetCore",  # AspNetCore (not available)
+            r"RarArchive\.Open",  # Specific deprecated API
+            r"CompressionLevel",  # Enum mismatch
+        ]
+
+        for pattern in api_mismatch_patterns:
+            if re.search(pattern, error_logs, re.IGNORECASE):
+                return True
+        return False
+
+    def _search_example_repo_fallback(
+        self,
+        code: str,
+        family_config: Any,
+        error_logs: str,
+    ) -> Optional[Tuple[str, str]]:
+        """
+        Task 4: Search example repo index for matching substitute code.
+
+        Searches the examples index for code using the same primary class names
+        that might work as a substitute for the failing snippet.
+
+        Args:
+            code: Original failing code
+            family_config: Family configuration
+            error_logs: Error logs for context
+
+        Returns:
+            Tuple of (substitute_code, fix_strategy) or None if no match
+        """
+        try:
+            # Load examples index
+            index_path = Path("artifacts/backfill") / family_config.family / "examples-index.json"
+            if not index_path.exists():
+                logger.debug(f"No examples index at {index_path}")
+                return None
+
+            with open(index_path, 'r', encoding='utf-8') as f:
+                examples_index = json.load(f)
+
+            if not examples_index.get('examples'):
+                return None
+
+            # Extract primary class names from original code
+            class_patterns = [
+                r'new\s+(\w+Archive)\s*\(',  # new Archive(, new RarArchive(
+                r'(\w+Archive)\.',  # Archive., RarArchive.
+                r'new\s+(\w+)\s*\(',  # new SomeClass(
+            ]
+
+            primary_classes = set()
+            for pattern in class_patterns:
+                for match in re.finditer(pattern, code):
+                    primary_classes.add(match.group(1))
+
+            if not primary_classes:
+                logger.debug("No primary classes found in original code")
+                return None
+
+            logger.debug(f"Searching for substitutes using classes: {primary_classes}")
+
+            # Search index for matching examples
+            examples_dir = Path("artifacts/backfill") / family_config.family / "examples"
+            best_match = None
+            best_score = 0
+
+            for example in examples_index.get('examples', []):
+                example_path = example.get('path', '')
+                if not example_path:
+                    continue
+
+                # Load example code from file
+                example_file = examples_dir / example_path
+                if not example_file.exists():
+                    continue
+
+                try:
+                    example_code = example_file.read_text(encoding='utf-8')
+                except Exception:
+                    continue
+
+                # Count matching class usages
+                score = 0
+                for cls in primary_classes:
+                    if cls in example_code:
+                        score += 1
+
+                if score > best_score:
+                    best_score = score
+                    best_match = example_code
+
+            if best_match and best_score >= 1:
+                logger.info(f"Found example-repo substitute with score {best_score}")
+                return (best_match, "example_repo_substitution")
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error searching example repo fallback: {e}")
+            return None
