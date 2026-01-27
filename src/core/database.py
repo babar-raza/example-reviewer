@@ -68,12 +68,15 @@ class Database:
         description_context TEXT,
         topic TEXT,
         example_key TEXT,
-        app_context TEXT DEFAULT NULL
+        app_context TEXT DEFAULT NULL,
+        code_block_signature TEXT DEFAULT NULL,
+        extraction_warning TEXT DEFAULT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_examples_family ON example_records(family);
     CREATE INDEX IF NOT EXISTS idx_examples_file_path ON example_records(file_path);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_example_key ON example_records(family, example_key);
+    CREATE INDEX IF NOT EXISTS idx_example_records_signature ON example_records(code_block_signature);
 
     -- Example run state table (per-run state for each example)
     -- This is the production-grade approach: keyed by (run_id, example_id)
@@ -718,8 +721,9 @@ class Database:
                         location_block_index, location_start_line, location_end_line, location_anchor,
                         gist_owner, gist_id, gist_filename,
                         original_code, created_at, updated_at,
-                        section_heading, description_context, topic, app_context, example_key
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        section_heading, description_context, topic, app_context, example_key,
+                        code_block_signature, extraction_warning
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     example.example_id,
                     example.family,
@@ -741,6 +745,8 @@ class Database:
                     example.topic,
                     example.app_context,
                     example.example_key,
+                    example.code_block_signature,
+                    example.extraction_warning,
                 ))
 
             # If run_id provided, also save/update run-scoped state (outside conn context)
@@ -1336,6 +1342,11 @@ class Database:
         topic = row['topic'] if 'topic' in row.keys() else None
         example_key = row['example_key'] if 'example_key' in row.keys() else ""
 
+        # Handle code block location fields (Migration 011)
+        code_block_signature = row['code_block_signature'] if 'code_block_signature' in row.keys() else None
+        extraction_warning = row['extraction_warning'] if 'extraction_warning' in row.keys() else None
+        app_context = row['app_context'] if 'app_context' in row.keys() else None
+
         return ExampleRecord(
             example_id=row['example_id'],
             family=row['family'],
@@ -1362,6 +1373,9 @@ class Database:
             description_context=description_context,
             topic=topic,
             example_key=example_key,
+            app_context=app_context,
+            code_block_signature=code_block_signature,
+            extraction_warning=extraction_warning,
         )
 
     def _row_to_example_with_run_state(self, row: sqlite3.Row) -> ExampleRecord:
@@ -1384,6 +1398,11 @@ class Database:
         description_context = row['description_context'] if 'description_context' in row.keys() else None
         topic = row['topic'] if 'topic' in row.keys() else None
         example_key = row['example_key'] if 'example_key' in row.keys() else ""
+
+        # Handle code block location fields (Migration 011)
+        code_block_signature = row['code_block_signature'] if 'code_block_signature' in row.keys() else None
+        extraction_warning = row['extraction_warning'] if 'extraction_warning' in row.keys() else None
+        app_context = row['app_context'] if 'app_context' in row.keys() else None
 
         # Read run-scoped fields (prefixed with run_)
         status = ExampleStatus(row['run_status']) if 'run_status' in row.keys() else ExampleStatus.DISCOVERED
@@ -1418,6 +1437,9 @@ class Database:
             description_context=description_context,
             topic=topic,
             example_key=example_key,
+            app_context=app_context,
+            code_block_signature=code_block_signature,
+            extraction_warning=extraction_warning,
         )
     
     # =========================================================================

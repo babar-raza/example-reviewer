@@ -122,6 +122,10 @@ class ExampleRecord(BaseModel):
     # Application context classification (Phase-2 Gate B: prevent cross-context substitution)
     app_context: Optional[str] = Field(default=None, description="Application architecture type (console, aspnet_core_minimal, mvc, webapi, library)")
 
+    # Code block location metadata for safe md_update targeting (Migration 011)
+    code_block_signature: Optional[str] = Field(default=None, description="SHA256 hash of normalized original code content")
+    extraction_warning: Optional[str] = Field(default=None, description="Warning if block index is ambiguous during extraction")
+
     # Deterministic key for stable ordering (Track 1 requirement)
     example_key: str = Field(default="", description="Deterministic hash for stable ordering")
     

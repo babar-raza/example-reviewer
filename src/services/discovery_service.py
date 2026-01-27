@@ -16,6 +16,7 @@ from ..core.models import ExampleRecord, ExampleStatus, SourceType, Location, Gi
 from ..core.database import Database
 from ..core.config import FamilyConfig, DiscoveryPatternsConfig, GlobalConfig
 from ..pipeline.app_context_classifier import classify_app_context
+from ..utils.markdown_parser import parse_fenced_blocks, compute_code_signature, normalize_language_tag
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +449,24 @@ class DiscoveryService:
                 topic = topic[len(prefix):]
 
         return topic.strip()
+
+    def _compute_code_signature(self, code: str) -> str:
+        """
+        Compute SHA256 signature of normalized code content.
+
+        Normalization:
+        - Strip leading/trailing whitespace from the entire block
+        - Consistent line endings (LF)
+
+        Args:
+            code: Code content
+
+        Returns:
+            SHA256 hex digest (full 64 chars)
+        """
+        # Normalize: strip and use consistent line endings
+        normalized = code.strip().replace('\r\n', '\n')
+        return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
     
     def discover_family(
         self,
@@ -673,85 +692,90 @@ class DiscoveryService:
         file_path: str,
         family: str
     ) -> List[ExampleRecord]:
-        """Extract inline fenced code blocks with content context."""
+        """
+        Extract inline fenced code blocks with content context.
+
+        CRITICAL: Uses canonical markdown parser to ensure block_index contract.
+        The block_index is computed using parse_fenced_blocks() which counts ALL
+        fenced blocks in the file, ensuring consistency with md_update.
+        """
         examples = []
         lines = content.split('\n')
 
         # Extract topic once for the file
         topic = self._extract_topic_from_path(file_path)
 
-        block_index = 0
-        in_code_block = False
-        code_start_line = 0
-        code_language = ''
-        code_lines = []
+        # CANONICAL PARSING: Use shared parser to ensure consistent block_index
+        # This parser counts ALL fenced blocks (not just validatable languages)
+        all_blocks = parse_fenced_blocks(content)
 
-        for i, line in enumerate(lines):
-            if line.startswith('```') and not in_code_block:
-                # Start of code block
-                in_code_block = True
-                code_start_line = i + 1
-                code_language = line[3:].strip().lower()
-                code_lines = []
+        # Process each block
+        for block in all_blocks:
+            code_language = block['language']
+            code_content = block['content']
+            code_start_line = block['start_line']
+            code_end_line = block['end_line']
+            block_index = block['block_index']  # CANONICAL: index among ALL blocks
+            code_signature = block['signature']  # Pre-computed by parser
 
-            elif line.startswith('```') and in_code_block:
-                # End of code block
-                in_code_block = False
-                code_content = '\n'.join(code_lines)
+            # Only include validatable languages (using configurable patterns)
+            if not self._is_validatable_language(code_language):
+                # Skip non-validatable languages (but block_index still incremented in parser)
+                continue
 
-                # Only include validatable languages (using configurable patterns)
-                if self._is_validatable_language(code_language) and code_content.strip():
-                    # CD-02: Apply content-based filtering
-                    should_include, filter_reason = self.filter_snippet(code_content)
+            if not code_content.strip():
+                # Skip empty blocks
+                continue
 
-                    if not should_include:
-                        logger.debug(f"Filtered out snippet at {file_path}:{code_start_line} - {filter_reason}")
-                        # Task 1: Record skipped candidate for artifact
-                        self._record_skipped_candidate(
-                            file_path=file_path,
-                            line_number=code_start_line,
-                            reason=filter_reason,
-                            code_preview=code_content
-                        )
-                        block_index += 1
-                        continue
+            # CD-02: Apply content-based filtering
+            should_include, filter_reason = self.filter_snippet(code_content)
 
-                    # Normalize language tag to canonical form
-                    normalized_language = self.normalize_language(code_language)
+            if not should_include:
+                logger.debug(f"Filtered out snippet at {file_path}:{code_start_line} - {filter_reason}")
+                # Task 1: Record skipped candidate for artifact
+                self._record_skipped_candidate(
+                    file_path=file_path,
+                    line_number=code_start_line,
+                    reason=filter_reason,
+                    code_preview=code_content
+                )
+                # Skip this block (but block_index already accounted for in all_blocks)
+                continue
 
-                    # Extract content context for LLM relevance preservation
-                    # code_start_line is 1-indexed, but we need 0-indexed for array access
-                    fence_start_idx = code_start_line - 1  # Index of the ``` line
-                    section_heading, description_context = self._extract_context(lines, fence_start_idx)
+            # Normalize language tag to canonical form
+            normalized_language = self.normalize_language(code_language)
 
-                    # Classify application context (Phase-2 Gate B: prevent cross-context substitution)
-                    app_context = classify_app_context(code_content)
+            # Extract content context for LLM relevance preservation
+            # code_start_line is 1-indexed, but we need 0-indexed for array access
+            fence_start_idx = code_start_line - 1  # Index of the ``` line
+            section_heading, description_context = self._extract_context(lines, fence_start_idx)
 
-                    example = ExampleRecord(
-                        family=family,
-                        file_path=file_path,
-                        source_type=SourceType.INLINE,
-                        language=normalized_language,
-                        location=Location(
-                            block_index=block_index,
-                            start_line=code_start_line,
-                            end_line=i + 1,
-                        ),
-                        original_code=code_content,
-                        status=ExampleStatus.DISCOVERED,
-                        # Content context fields
-                        section_heading=section_heading or None,
-                        description_context=description_context or None,
-                        topic=topic or None,
-                        app_context=app_context.value,
-                    )
-                    # Generate ID is called in model_post_init
-                    examples.append(example)
+            # Classify application context (Phase-2 Gate B: prevent cross-context substitution)
+            app_context = classify_app_context(code_content)
 
-                block_index += 1
-
-            elif in_code_block:
-                code_lines.append(line)
+            example = ExampleRecord(
+                family=family,
+                file_path=file_path,
+                source_type=SourceType.INLINE,
+                language=normalized_language,
+                location=Location(
+                    block_index=block_index,  # CANONICAL: from shared parser
+                    start_line=code_start_line,
+                    end_line=code_end_line,
+                ),
+                original_code=code_content,
+                status=ExampleStatus.DISCOVERED,
+                # Content context fields
+                section_heading=section_heading or None,
+                description_context=description_context or None,
+                topic=topic or None,
+                app_context=app_context.value,
+                # Code block location metadata (Migration 011)
+                code_block_signature=code_signature,  # From canonical parser
+                extraction_warning=None,  # TODO: Detect duplicate signatures
+            )
+            # Generate ID is called in model_post_init
+            examples.append(example)
 
         return examples
     

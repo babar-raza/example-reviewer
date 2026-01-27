@@ -30,8 +30,7 @@
     "only_commit_touched_files": true
   },
   "markdown_write": {
-    "allow_markdown_write": false,
-    "_comment": "SAFETY: Set to true to allow markdown file updates. Default is false to prevent accidental manual edits. Use --allow-md-write CLI flag or set this to true explicitly."
+    "allow_markdown_write": false
   },
   "gist": {
     "enabled": true,
@@ -165,10 +164,18 @@
     "hard_run_timeout_seconds": 2400,
     "allow_timeout_override": false
   },
+  "substitution": {
+    "same_context_only": true
+  },
+  "context_enforcement": {
+    "enabled": true
+  },
+  "context_harness": {
+    "enabled": true
+  },
   "artifact_store_path": "./artifacts",
   "database_path": "./data/example_reviewer.db",
   "content_url_patterns": {
-    "_comment": "URL patterns for different content sources - used for config reference",
     "blog.aspose.net": {
       "base_path": "content/blog.aspose.net/{product}",
       "has_language_subfolder": false,

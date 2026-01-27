@@ -12,10 +12,12 @@ examples compile successfully as ASP.NET projects.
 
 Usage:
     python tools/validate_strict_context_mode.py --run-id <run_id>
+    python tools/validate_strict_context_mode.py --run-id <run_id> --db-path <path>
     python tools/validate_strict_context_mode.py --family zip --strict-mode
 """
 
 import argparse
+import glob
 import json
 import sqlite3
 import sys
@@ -30,6 +32,36 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.core.database import Database
 from src.core.models import ExampleStatus
+
+
+def locate_db_path_from_run_id(run_id: str) -> Optional[str]:
+    """
+    Locate DB path by reading fingerprint.json for the given run_id.
+
+    Searches in reports/e2e/run_*/run_*/fingerprint.json files for matching run_id.
+
+    Args:
+        run_id: Run ID to search for
+
+    Returns:
+        Database path if found, None otherwise
+    """
+    # Search for fingerprint.json files in reports/e2e
+    fingerprint_pattern = "reports/e2e/run_*/run_*/fingerprint.json"
+    fingerprint_files = glob.glob(fingerprint_pattern)
+
+    for fp_path in fingerprint_files:
+        try:
+            with open(fp_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if data.get('run_id') == run_id and 'db_path' in data:
+                    print(f"[INFO] Found DB path in {fp_path}")
+                    return data['db_path']
+        except (json.JSONDecodeError, IOError) as e:
+            # Skip malformed or unreadable files
+            continue
+
+    return None
 
 
 class StrictContextValidator:
@@ -471,8 +503,8 @@ def main():
     parser.add_argument(
         "--db-path",
         type=str,
-        default="./data/example_reviewer.db",
-        help="Path to database (default: ./data/example_reviewer.db)"
+        default=None,
+        help="Path to database (optional - will auto-locate from fingerprint.json if not provided)"
     )
     parser.add_argument(
         "--output",
@@ -487,12 +519,34 @@ def main():
         print("[FAIL] Error: --run-id is required")
         print("\nUsage:")
         print("  python tools/validate_strict_context_mode.py --run-id <run_id>")
+        print("  python tools/validate_strict_context_mode.py --run-id <run_id> --db-path <path>")
         print("\nTo find available run IDs:")
         print("  sqlite3 data/example_reviewer.db 'SELECT DISTINCT run_id FROM runs ORDER BY created_at DESC LIMIT 10'")
         sys.exit(1)
 
+    # Resolve DB path with fallback logic
+    db_path = args.db_path
+    if not db_path:
+        print(f"[INFO] No --db-path provided, attempting to locate from fingerprint.json for run {args.run_id}")
+        db_path = locate_db_path_from_run_id(args.run_id)
+
+        if not db_path:
+            print("[FAIL] Error: Could not locate database path")
+            print("  - No --db-path provided")
+            print(f"  - No fingerprint.json found for run_id: {args.run_id}")
+            print("\nPlease provide --db-path explicitly:")
+            print(f"  python tools/validate_strict_context_mode.py --run-id {args.run_id} --db-path <path>")
+            sys.exit(1)
+
+        print(f"[INFO] Using DB path: {db_path}")
+
+    # Verify DB path exists
+    if not Path(db_path).exists():
+        print(f"[FAIL] Error: Database not found at {db_path}")
+        sys.exit(1)
+
     # Initialize validator
-    validator = StrictContextValidator(db_path=args.db_path)
+    validator = StrictContextValidator(db_path=db_path)
 
     # Run validation
     results = validator.validate_run(args.run_id)

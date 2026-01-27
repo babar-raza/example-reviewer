@@ -450,6 +450,123 @@ def _render_review_queue(examples: list, show_code: bool = False) -> str:
     return '\n'.join(lines)
 
 
+def telemetry_verify(args) -> ToolResult:
+    """
+    Verify telemetry API can read run data without "database is locked" errors.
+
+    Telemetry investigation command: Retries on database locked errors with exponential backoff.
+    """
+    import time
+    import httpx
+
+    run_id = args.run_id
+    telemetry_url = args.telemetry_url.rstrip('/')
+    max_retries = args.max_retries
+    retry_delay = args.retry_delay
+
+    print(f"\n[Telemetry Verify] Verifying run {run_id}")
+    print(f"  Telemetry API: {telemetry_url}")
+    print(f"  Max retries: {max_retries}")
+    print(f"  Initial retry delay: {retry_delay}s")
+    print("=" * 80)
+
+    # Build API endpoint URL
+    api_url = f"{telemetry_url}/api/v1/runs/{run_id}"
+
+    attempt = 0
+    current_delay = retry_delay
+    last_error = None
+
+    while attempt <= max_retries:
+        try:
+            print(f"\n[Attempt {attempt + 1}/{max_retries + 1}] Fetching {api_url}")
+
+            with httpx.Client(timeout=30.0) as client:
+                response = client.get(api_url)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    print(f"\n[SUCCESS] Retrieved run data successfully")
+                    print(f"  Status code: {response.status_code}")
+                    print(f"  Response size: {len(response.text)} bytes")
+                    print(f"  Run ID: {data.get('run_id', 'N/A')}")
+                    print(f"  Status: {data.get('status', 'N/A')}")
+                    print(f"  Product: {data.get('product', 'N/A')}")
+
+                    if 'db_path' in data:
+                        print(f"  DB Path: {data['db_path']}")
+
+                    print("=" * 80)
+
+                    return ToolResult(
+                        success=True,
+                        data={
+                            'run_id': run_id,
+                            'api_url': api_url,
+                            'attempts': attempt + 1,
+                            'response': data,
+                        }
+                    )
+                elif response.status_code == 404:
+                    print(f"[ERROR] Run not found: {run_id}")
+                    return ToolResult(
+                        success=False,
+                        error=f"Run {run_id} not found in telemetry API (404)"
+                    )
+                else:
+                    error_text = response.text[:500]
+                    print(f"[ERROR] HTTP {response.status_code}: {error_text}")
+
+                    # Check if error message indicates database lock
+                    if 'database is locked' in error_text.lower():
+                        last_error = f"database is locked (HTTP {response.status_code})"
+                        print(f"  Database locked, retrying in {current_delay:.1f}s...")
+                        time.sleep(current_delay)
+                        current_delay *= 2  # Exponential backoff
+                        attempt += 1
+                        continue
+                    else:
+                        return ToolResult(
+                            success=False,
+                            error=f"HTTP {response.status_code}: {error_text}"
+                        )
+
+        except httpx.TimeoutException:
+            last_error = "Request timeout"
+            print(f"[ERROR] Request timeout, retrying in {current_delay:.1f}s...")
+            time.sleep(current_delay)
+            current_delay *= 2
+            attempt += 1
+            continue
+
+        except httpx.ConnectError as e:
+            last_error = f"Connection error: {str(e)}"
+            print(f"[ERROR] {last_error}")
+            return ToolResult(
+                success=False,
+                error=f"Cannot connect to telemetry API at {telemetry_url}: {str(e)}"
+            )
+
+        except Exception as e:
+            last_error = str(e)
+            print(f"[ERROR] Unexpected error: {last_error}")
+            print(f"  Retrying in {current_delay:.1f}s...")
+            time.sleep(current_delay)
+            current_delay *= 2
+            attempt += 1
+            continue
+
+    # Max retries exceeded
+    print(f"\n[FAIL] Failed after {max_retries + 1} attempts")
+    print(f"  Last error: {last_error}")
+    print("=" * 80)
+
+    return ToolResult(
+        success=False,
+        error=f"Failed after {max_retries + 1} attempts. Last error: {last_error}"
+    )
+
+
 def _render_drift_trends(trends: dict, n_runs: int) -> str:
     """
     Render ASCII visualization of drift trends.
@@ -687,6 +804,19 @@ def main() -> int:
     review_queue_parser.add_argument('--show-code', action='store_true',
                                       help='Show code snippets for each item')
 
+    # Telemetry verify command (Telemetry investigation)
+    telemetry_verify_parser = subparsers.add_parser('telemetry-verify',
+                                                      help='Verify telemetry API can read run data')
+    telemetry_verify_parser.add_argument('--run-id', type=str, required=True,
+                                          help='Run ID to verify')
+    telemetry_verify_parser.add_argument('--telemetry-url', type=str,
+                                          default='http://localhost:8765',
+                                          help='Telemetry API base URL (default: http://localhost:8765)')
+    telemetry_verify_parser.add_argument('--max-retries', type=int, default=10,
+                                          help='Maximum retry attempts on "database is locked" (default: 10)')
+    telemetry_verify_parser.add_argument('--retry-delay', type=float, default=1.0,
+                                          help='Initial retry delay in seconds (default: 1.0)')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -856,6 +986,9 @@ def main() -> int:
 
     elif args.command == 'review-queue':
         result = review_queue(args)
+
+    elif args.command == 'telemetry-verify':
+        result = telemetry_verify(args)
 
     if result:
         print_result(result, args.json)
