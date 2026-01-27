@@ -49,7 +49,8 @@
     "enabled": true,
     "mode": "lenient",
     "timeout_seconds": 30,
-    "required_files": ["sample.zip", "archive.zip", "outer.zip", "flatten.zip", "different_password.zip", "encrypted_password.zip", "encrypted.rar", "plrabn12.rar", "archive.7z", "archive.gz", "sample.gz", "alice29.txt", "sample.txt", "asyoulik.txt", "plrabn12.txt", "lcet10.txt", "sample_dir"],
+    "required_files": ["sample.zip", "archive.zip", "outer.zip", "flatten.zip", "different_password.zip", "encrypted_password.zip", "archive.7z", "archive.gz", "sample.gz", "alice29.txt", "sample.txt", "asyoulik.txt", "plrabn12.txt", "lcet10.txt"],
+    "required_dirs": ["sample_dir"],
     "file_aliases": {
       "sample.zip": ["input.zip", "example.zip", "source.zip", "ZipFileToBeExtracted.zip", "parent.zip"],
       "archive.zip": ["test.zip", "data.zip"],
@@ -69,13 +70,18 @@
   },
   "test_data": {
     "local_path": "test-data/zip",
-    "download_if_missing": false
+    "download_if_missing": false,
+    "inventory_path": "artifacts/backfill/zip/test-data-inventory.json"
   },
   "example_repo": {
     "url": "https://github.com/aspose-zip/Aspose.ZIP-for-.NET",
-    "examples_path": "Examples",
-    "test_data_path": "Data",
-    "ref": "main"
+    "examples_path": "Examples/CSharp",
+    "test_data_path": "Examples/Data",
+    "ref": "master"
+  },
+  "gist": {
+    "enabled": true,
+    "pat_env_var": "GITHUB_PAT"
   },
   "api_reference": {
     "sources": ["test-data/test-reference/zip"],

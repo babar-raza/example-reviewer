@@ -94,6 +94,67 @@ Comprehensive guides for using and maintaining the Example Reviewer:
    pytest -m runtime
    ```
 
+## Safety Features
+
+The Example Reviewer includes several safety guardrails to prevent data corruption and ensure truthful results:
+
+### 1. Read-Only Test Paths
+
+All `test-*` directories are strictly read-only to prevent accidental modifications:
+
+- **`test-data/`** - Sample files for runtime validation
+- **`test-examples/`** - Reference code examples
+- **`test-reference/`** - API reference cache
+- **`test-content/`** - Content markdown files (NEWLY PROTECTED)
+
+Any write attempt to these paths will raise a `PermissionError` with a clear error message.
+
+### 2. Workspace Copy Mode
+
+For safe editing and testing, use workspace copy mode to work with isolated copies:
+
+```bash
+# Work with copies instead of originals
+python -m cli run --family zip --use-workspace-copy
+
+# Files are copied to: workspace/<run_id>/content/
+# Original files remain untouched
+```
+
+This mode:
+- Copies discovered files to `workspace/<run_id>/content/`
+- All modifications happen in the workspace
+- Original test content remains pristine
+- Each run is fully isolated
+
+### 3. Markdown Write Guard
+
+Markdown updates require explicit authorization:
+
+```bash
+# Enable markdown writes (disabled by default)
+python -m cli run --family zip --allow-md-write
+
+# Dry-run mode (default) - no files modified
+python -m cli run --family zip
+```
+
+### 4. Run Isolation
+
+Each pipeline run gets a unique `run_id` for complete isolation:
+
+- Database queries are scoped by `run_id`
+- KPIs and metrics are per-run
+- No cross-run data leakage
+- Enables parallel runs without interference
+
+```bash
+# View run-specific status
+python -m cli status --family zip
+
+# All results are scoped to the current run
+```
+
 ## Usage
 
 The CLI can be invoked in two ways:

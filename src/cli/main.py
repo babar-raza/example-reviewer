@@ -6,9 +6,12 @@ Provides command-line interface for all pipeline operations.
 import argparse
 import json
 import logging
+import os
+import platform
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from ..mcp_tools.tools import ExampleReviewerTools, ToolResult
 
@@ -23,6 +26,130 @@ def setup_logging(verbose: bool = False) -> None:
     )
 
 
+def is_risky_path(path: Path) -> Tuple[bool, str]:
+    """
+    Check if a path is in a risky location for SQLite (OneDrive or DrvFS).
+
+    Args:
+        path: Path to check
+
+    Returns:
+        Tuple of (is_risky, reason)
+    """
+    path_str = str(path.resolve())
+
+    # Check for OneDrive
+    if 'OneDrive' in path_str or 'onedrive' in path_str.lower():
+        return True, "OneDrive"
+
+    # Check for WSL DrvFS (/mnt/c, /mnt/d, etc.)
+    if platform.system() == 'Linux' and path_str.startswith('/mnt/'):
+        return True, "WSL DrvFS"
+
+    return False, ""
+
+
+def resolve_safe_workspace(safe_root: Optional[str] = None) -> Path:
+    """
+    Resolve safe workspace directory outside OneDrive/DrvFS.
+
+    Args:
+        safe_root: Optional override for safe root directory
+
+    Returns:
+        Path to safe workspace root
+    """
+    if safe_root:
+        return Path(safe_root).resolve()
+
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+
+    if platform.system() == 'Windows':
+        # Windows: Use %LOCALAPPDATA%\ExampleReviewer\workspaces\<timestamp>
+        local_appdata = os.environ.get('LOCALAPPDATA')
+        if not local_appdata:
+            # Fallback to %USERPROFILE%\AppData\Local
+            user_profile = os.environ.get('USERPROFILE', str(Path.home()))
+            local_appdata = str(Path(user_profile) / 'AppData' / 'Local')
+
+        return Path(local_appdata) / 'ExampleReviewer' / 'workspaces' / timestamp
+    else:
+        # Linux/WSL: Use ~/.cache/example_reviewer/workspaces/<timestamp>
+        cache_dir = os.environ.get('XDG_CACHE_HOME')
+        if not cache_dir:
+            cache_dir = str(Path.home() / '.cache')
+
+        return Path(cache_dir) / 'example_reviewer' / 'workspaces' / timestamp
+
+
+def setup_safe_workspace(safe_root: Path, verbose: bool = False) -> Tuple[Path, Path, Path]:
+    """
+    Set up safe workspace directory structure.
+
+    Creates:
+    - <safe_root>/db/
+    - <safe_root>/artifacts/
+    - <safe_root>/workspace/
+
+    Args:
+        safe_root: Safe workspace root directory
+        verbose: Enable verbose output
+
+    Returns:
+        Tuple of (db_dir, artifacts_dir, workspace_dir)
+    """
+    db_dir = safe_root / 'db'
+    artifacts_dir = safe_root / 'artifacts'
+    workspace_dir = safe_root / 'workspace'
+
+    # Create directories
+    db_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    if verbose:
+        print(f"[Safe Workspace] Created directory structure at: {safe_root}")
+        print(f"  - DB directory: {db_dir}")
+        print(f"  - Artifacts directory: {artifacts_dir}")
+        print(f"  - Workspace directory: {workspace_dir}")
+
+    return db_dir, artifacts_dir, workspace_dir
+
+
+def check_and_warn_risky_paths(db_path: Path, workspace_dir: Path, verbose: bool = False) -> None:
+    """
+    Check if paths are in risky locations and print warnings.
+
+    Args:
+        db_path: Database file path
+        workspace_dir: Workspace directory path
+        verbose: Enable verbose output
+    """
+    # Check DB path
+    db_risky, db_reason = is_risky_path(db_path)
+    workspace_risky, workspace_reason = is_risky_path(workspace_dir)
+
+    if db_risky or workspace_risky:
+        print("\n" + "=" * 80)
+        print("WARNING: SQLite Locking Risk Detected")
+        print("=" * 80)
+
+        if db_risky:
+            print(f"\nDatabase path is on {db_reason}:")
+            print(f"  {db_path}")
+
+        if workspace_risky:
+            print(f"\nWorkspace directory is on {workspace_reason}:")
+            print(f"  {workspace_dir}")
+
+        print("\nSQLite on OneDrive/DrvFS can cause database locking and deadlocks.")
+        print("This may result in 'database is locked' errors during pipeline execution.")
+        print("\nRECOMMENDATION: Use --safe-workspace flag to avoid these issues.")
+        print("  Example: python -m src.cli.main run --family zip --safe-workspace")
+        print("=" * 80)
+        print()
+
+
 def print_result(result: ToolResult, json_output: bool = False) -> None:
     """Print tool result to stdout."""
     if json_output:
@@ -30,6 +157,9 @@ def print_result(result: ToolResult, json_output: bool = False) -> None:
     else:
         if result.success:
             print("[OK] Success")
+            # Print run_id in machine-parseable format if present
+            if result.data and 'run_id' in result.data:
+                print(f"RUN_ID: {result.data['run_id']}")
             if result.data:
                 for key, value in result.data.items():
                     if isinstance(value, (dict, list)):
@@ -171,6 +301,63 @@ def show_drift_trends(args) -> ToolResult:
         )
 
 
+def review_queue(args) -> ToolResult:
+    """
+    List examples requiring human review.
+
+    NEW (Track 2: D.4): CLI command to show NEEDS_REVIEW queue.
+    """
+    from ..core.database import Database
+
+    try:
+        # Initialize database
+        db = Database(Path(args.db_path))
+
+        # Get NEEDS_REVIEW examples
+        examples = db.get_needs_review_examples(
+            family=args.family,
+            limit=args.limit
+        )
+
+        if not examples:
+            print("\nNo examples in review queue.")
+            if args.family:
+                print(f"Family: {args.family}")
+            return ToolResult(
+                success=True,
+                data={'count': 0, 'examples': []}
+            )
+
+        # Render output
+        output = _render_review_queue(examples, args.show_code)
+        print(output)
+
+        return ToolResult(
+            success=True,
+            data={
+                'count': len(examples),
+                'examples': [
+                    {
+                        'example_id': ex.example_id,
+                        'file_path': ex.file_path,
+                        'status': ex.status.value,
+                        'escalation_reason': ex.escalation_reason,
+                        'failure_reason': ex.failure_reason,
+                    }
+                    for ex in examples
+                ]
+            }
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return ToolResult(
+            success=False,
+            error=f"Failed to get review queue: {str(e)}"
+        )
+
+
 def _render_drift_visualization(metrics: dict) -> str:
     """
     Render ASCII visualization of drift distribution.
@@ -211,6 +398,54 @@ def _render_drift_visualization(metrics: dict) -> str:
     lines.append(f"P95 drift: {metrics.get('p95_drift', 0.0):.2f}")
     lines.append(f"Max drift: {metrics.get('max_drift', 0.0):.2f}")
     lines.append(f"Total examples: {metrics.get('count', 0)}")
+
+    return '\n'.join(lines)
+
+
+def _render_review_queue(examples: list, show_code: bool = False) -> str:
+    """
+    Render review queue as formatted text.
+
+    Args:
+        examples: List of ExampleRecord instances
+        show_code: Whether to include code snippets
+
+    Returns:
+        Formatted string
+    """
+    lines = []
+    lines.append("\n" + "=" * 80)
+    lines.append(f"REVIEW QUEUE - {len(examples)} Example(s) Requiring Human Review")
+    lines.append("=" * 80)
+    lines.append("")
+
+    for idx, example in enumerate(examples, 1):
+        lines.append(f"[{idx}] {example.file_path}")
+        lines.append(f"    Example ID: {example.example_id[:16]}...")
+        lines.append(f"    Status: {example.status.value}")
+
+        if example.escalation_reason:
+            lines.append(f"    Escalation Reason: {example.escalation_reason}")
+
+        if example.failure_reason:
+            lines.append(f"    Failure Reason: {example.failure_reason}")
+
+        if example.location:
+            lines.append(f"    Location: Block {example.location.block_index}, Lines {example.location.start_line}-{example.location.end_line}")
+
+        if show_code and example.current_code:
+            lines.append("    Code Preview:")
+            code_lines = example.current_code.split('\n')[:10]
+            for code_line in code_lines:
+                lines.append(f"      {code_line}")
+            if len(example.current_code.split('\n')) > 10:
+                lines.append("      ...")
+
+        lines.append("")
+
+    lines.append("=" * 80)
+    lines.append(f"Total: {len(examples)} example(s)")
+    lines.append("")
 
     return '\n'.join(lines)
 
@@ -290,10 +525,32 @@ def main() -> int:
                         help='Path to database file')
     parser.add_argument('--workspace-dir', type=str, default='workspace',
                         help='Path to workspace directory')
+    parser.add_argument('--artifacts-dir', type=str, default='artifacts',
+                        help='Path to artifacts directory')
+    parser.add_argument('--use-workspace-copy', '--workspace-copy', action='store_true',
+                        help='Enable workspace copy mode (required for test-content/ writes)')
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Enable verbose output')
     parser.add_argument('--json', action='store_true',
                         help='Output results as JSON')
+    parser.add_argument('--deterministic', action='store_true',
+                        help='Enable deterministic mode (sets temp=0, seed if missing, deterministic_mode=true)')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Set explicit random seed for reproducibility')
+
+    # Safe workspace mode (Task 1A: SQLite locking hardening)
+    parser.add_argument('--safe-workspace', action='store_true',
+                        help='Use safe workspace outside OneDrive/DrvFS to prevent SQLite locking issues')
+    parser.add_argument('--safe-root', type=str, default=None,
+                        help='Override safe workspace root directory (default: ~/.cache/example_reviewer on Linux, %%LOCALAPPDATA%%\\ExampleReviewer on Windows)')
+
+    # SQLite configuration (Task 2A: SQLite locking hardening)
+    parser.add_argument('--sqlite-busy-timeout-ms', type=int, default=120000,
+                        help='SQLite busy timeout in milliseconds (default: 120000)')
+    parser.add_argument('--sqlite-wal', dest='sqlite_wal', action='store_true', default=True,
+                        help='Enable SQLite WAL mode (default: enabled)')
+    parser.add_argument('--no-sqlite-wal', dest='sqlite_wal', action='store_false',
+                        help='Disable SQLite WAL mode (not recommended)')
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
@@ -374,8 +631,8 @@ def main() -> int:
                             help='Maximum examples to process')
     run_parser.add_argument('--skip-runtime', action='store_true',
                             help='Skip runtime verification')
-    run_parser.add_argument('--skip-llm', action='store_true',
-                            help='Skip LLM-based fixing')
+    run_parser.add_argument('--skip-llm', '--skip-llm-fixes', dest='skip_llm', action='store_true',
+                            help='Skip LLM-based fixing (compile-fix, runtime-fix, final-review phases)')
     run_parser.add_argument('--dry-run', action='store_true',
                             help="Don't write changes")
     run_parser.add_argument('--allow-md-write', action='store_true',
@@ -391,7 +648,7 @@ def main() -> int:
     backfill_parser.add_argument('--family', '-f', type=str, required=True,
                                   help='Family identifier')
     backfill_parser.add_argument('--targets', '-t', type=str, nargs='+',
-                                  help='Backfill targets (test_data, api_reference, examples, gist_source_code)')
+                                  help='Backfill targets (test_data, api_reference, examples, examples_files, gist_source_code)')
     backfill_parser.add_argument('--force', action='store_true',
                                   help='Force re-download even if data exists')
 
@@ -420,19 +677,92 @@ def main() -> int:
     drift_trends_parser.add_argument('--last-n-runs', type=int, default=10,
                                       help='Number of recent runs to analyze (default: 10)')
 
+    # Review queue command (Track 2: D.4)
+    review_queue_parser = subparsers.add_parser('review-queue',
+                                                 help='List examples requiring human review')
+    review_queue_parser.add_argument('--family', '-f', type=str,
+                                      help='Family identifier (optional)')
+    review_queue_parser.add_argument('--limit', type=int, default=50,
+                                      help='Maximum items to show (default: 50)')
+    review_queue_parser.add_argument('--show-code', action='store_true',
+                                      help='Show code snippets for each item')
+
     args = parser.parse_args()
-    
+
     if not args.command:
         parser.print_help()
         return 1
-    
+
     setup_logging(args.verbose)
-    
-    # Initialize tools
+
+    # Task 1B: Handle safe workspace mode
+    db_path = Path(args.db_path)
+    workspace_dir = Path(args.workspace_dir)
+    artifacts_dir = Path(args.artifacts_dir)
+
+    if args.safe_workspace:
+        # Resolve safe workspace directory
+        safe_root = resolve_safe_workspace(args.safe_root)
+
+        # Set up safe workspace structure
+        db_dir, safe_artifacts_dir, safe_workspace_dir = setup_safe_workspace(
+            safe_root, verbose=args.verbose
+        )
+
+        # Override paths
+        db_path = db_dir / 'example_reviewer.db'
+        artifacts_dir = safe_artifacts_dir
+        workspace_dir = safe_workspace_dir
+
+        # Print safe workspace info
+        print("\n" + "=" * 80)
+        print("SAFE WORKSPACE MODE ENABLED")
+        print("=" * 80)
+        print(f"\nSafe workspace root: {safe_root}")
+        print(f"Database path: {db_path}")
+        print(f"Artifacts directory: {artifacts_dir}")
+        print(f"Workspace directory: {workspace_dir}")
+        print("=" * 80)
+        print()
+
+        # Print structured output for harness parsing (Task 2: Phase-2 unblock)
+        print(f"SAFE_WORKSPACE_ROOT: {safe_root}")
+        print(f"DB_PATH: {db_path}")
+        print(f"ARTIFACTS_DIR: {artifacts_dir}")
+        print(f"WORKSPACE_DIR: {workspace_dir}")
+        print()
+    else:
+        # Task 1C: Warn about risky paths when not using safe workspace
+        check_and_warn_risky_paths(db_path, workspace_dir, verbose=args.verbose)
+
+    # Build CLI overrides for config hash computation
+    cli_overrides = {}
+    if args.deterministic or args.seed is not None:
+        cli_overrides['llm'] = {}
+
+        if args.deterministic:
+            cli_overrides['llm']['temperature'] = 0.0
+            cli_overrides['llm']['deterministic_mode'] = True
+            # Set default seed if not explicitly provided
+            if args.seed is None:
+                cli_overrides['llm']['seed'] = 42  # Default seed for deterministic mode
+            else:
+                cli_overrides['llm']['seed'] = args.seed
+        elif args.seed is not None:
+            # Seed provided without --deterministic
+            cli_overrides['llm']['seed'] = args.seed
+
+    # Initialize tools with CLI overrides
     tools = ExampleReviewerTools(
         config_dir=Path(args.config_dir),
-        db_path=Path(args.db_path),
-        workspace_dir=Path(args.workspace_dir),
+        db_path=db_path,
+        workspace_dir=workspace_dir,
+        cli_overrides=cli_overrides,
+        use_workspace_copy=getattr(args, 'use_workspace_copy', False),
+        sqlite_config={
+            'busy_timeout_ms': args.sqlite_busy_timeout_ms,
+            'wal_enabled': args.sqlite_wal,
+        },
     )
     
     # Execute command
@@ -523,6 +853,9 @@ def main() -> int:
 
     elif args.command == 'drift-trends':
         result = show_drift_trends(args)
+
+    elif args.command == 'review-queue':
+        result = review_queue(args)
 
     if result:
         print_result(result, args.json)

@@ -41,22 +41,31 @@ class ExampleReviewerTools:
         config_dir: Optional[Path] = None,
         db_path: Optional[Path] = None,
         workspace_dir: Optional[Path] = None,
+        cli_overrides: Optional[Dict[str, Any]] = None,
+        use_workspace_copy: bool = False,
+        sqlite_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize MCP tools.
-        
+
         Args:
             config_dir: Directory containing family configs
             db_path: Path to database
             workspace_dir: Working directory
+            cli_overrides: CLI override dictionary for config hash computation
+            use_workspace_copy: Enable workspace copy mode (for test-content/ writes)
+            sqlite_config: SQLite configuration (busy_timeout_ms, wal_enabled)
         """
         self.config_dir = config_dir or Path("config/families")
         self.db_path = db_path or Path("data/example_reviewer.db")
         self.workspace_dir = workspace_dir or Path("workspace")
-        
+        self.cli_overrides = cli_overrides or {}
+        self.use_workspace_copy = use_workspace_copy
+        self.sqlite_config = sqlite_config or {}
+
         # Lazy initialization of orchestrator
         self._orchestrator = None
-    
+
     @property
     def orchestrator(self):
         """Get or create pipeline orchestrator."""
@@ -66,6 +75,9 @@ class ExampleReviewerTools:
                 config_dir=self.config_dir,
                 db_path=self.db_path,
                 workspace_dir=self.workspace_dir,
+                cli_overrides=self.cli_overrides,
+                use_workspace_copy=self.use_workspace_copy,
+                sqlite_config=self.sqlite_config,
             )
         return self._orchestrator
     
@@ -349,8 +361,11 @@ class ExampleReviewerTools:
             ToolResult with update statistics
         """
         try:
+            # Create a run record for standalone md-update phase
+            run_id = self.orchestrator.db.create_run(family, "md_update")
+
             stats = self.orchestrator._run_markdown_update_phase(
-                family, dry_run, allow_md_write=allow_md_write
+                run_id, family, dry_run, allow_md_write=allow_md_write
             )
             return ToolResult(success=True, data=stats)
 
@@ -484,6 +499,20 @@ class ExampleReviewerTools:
                         force=force
                     )
                     results['examples'] = {
+                        'success': result.success,
+                        'files_copied': result.files_copied,
+                        'skipped': result.skipped,
+                        'skip_reason': result.skip_reason,
+                        'error': result.error,
+                        'duration_seconds': result.duration_seconds
+                    }
+
+                elif target == "examples_files":
+                    result = backfill_service.backfill_examples_files(
+                        family=family,
+                        force=force
+                    )
+                    results['examples_files'] = {
                         'success': result.success,
                         'files_copied': result.files_copied,
                         'skipped': result.skipped,
