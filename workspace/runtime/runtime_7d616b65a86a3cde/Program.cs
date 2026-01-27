@@ -1,3 +1,4 @@
+// File: Program.cs
 using System;
 using System.IO;
 using System.Text;
@@ -18,16 +19,16 @@ class Program
             }
 
             // Add a file from disk
-            var sourceFile = "report.pdf"; // ensure this file exists
+            var sourceFile = "alice29.txt"; // ensure this file exists
             if (File.Exists(sourceFile))
             {
                 using var fs = File.OpenRead(sourceFile);
-                archive.CreateEntry("reports/2025/report.pdf", fs);
+                archive.CreateEntry("reports/2025/alice29.txt", fs);
             }
 
             // Save the 7z archive
-            using var outStream = File.Create(outputPath);
-            archive.Save(outStream, null); // Add null for save options if not needed
+            using var outStream = new FileStream(outputPath, FileMode.Create);
+            archive.Save(outStream);
         }
 
         Console.WriteLine("Saved 7z: " + Path.GetFullPath(outputPath));

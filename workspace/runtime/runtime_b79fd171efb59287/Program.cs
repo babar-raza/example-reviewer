@@ -1,4 +1,3 @@
-// File: Program.cs
 using System;
 using System.IO;
 using System.Text;
@@ -25,7 +24,7 @@ class Program
             }
 
             // 2) Add a file from disk (streamed; not fully loaded in RAM)
-            var sourcePath = "report.pdf"; // ensure it exists
+            var sourcePath = "archive.zip"; // ensure it exists
             if (File.Exists(sourcePath))
             {
                 using var fs = File.OpenRead(sourcePath);
@@ -34,7 +33,7 @@ class Program
 
             // 3) Save the ZIP to our in-memory buffer
             zipBuffer.Position = 0; // Reset position before saving
-            archive.Save(zipBuffer);
+            archive.Save(zipBuffer, new ArchiveSaveOptions { CompressionSettings = deflate });
         }
 
         // Use the ZIP bytes as needed (send over network, write to DB, etc.)
