@@ -2,7 +2,7 @@
   "version": 3,
   "targets": {
     "net8.0": {
-      "Aspose.Zip/25.12.0": {
+      "Aspose.Zip/26.1.0": {
         "type": "package",
         "dependencies": {
           "System.Buffers": "4.5.1",
@@ -74,20 +74,22 @@
     }
   },
   "libraries": {
-    "Aspose.Zip/25.12.0": {
-      "sha512": "4EjK10GqfTJotJyGw7W1il1YS8T2oBPbo4bkRuLzk93EQwWyreWeGK4sW1lWfvh4T6Bs0NqJ8+z+2aODPnlIWg==",
+    "Aspose.Zip/26.1.0": {
+      "sha512": "+L17P8utrX8td29sPY8If+ztuQFO4IDhgS8BP1+bUat/1bTGqyixxf/kWjgIQCgpK96NQI8kHo+kLW1U6jCABQ==",
       "type": "package",
-      "path": "aspose.zip/25.12.0",
+      "path": "aspose.zip/26.1.0",
       "files": [
         ".nupkg.metadata",
         ".signature.p7s",
         "Help/Aspose.ZIP.chm",
         "License/Aspose_End-User-License-Agreement.txt",
         "License/thirdpartylicenses.Aspose.ZIP.for.NET.pdf",
-        "aspose.zip.25.12.0.nupkg.sha512",
+        "aspose.zip.26.1.0.nupkg.sha512",
         "aspose.zip.nuspec",
         "docs/README.md",
         "images/aspose_zip-for-net.png",
+        "lib/net10.0/Aspose.Zip.dll",
+        "lib/net10.0/Aspose.Zip.xml",
         "lib/net20/Aspose.Zip.dll",
         "lib/net20/Aspose.Zip.xml",
         "lib/net40/Aspose.Zip.dll",

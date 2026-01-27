@@ -13,12 +13,12 @@ public class Program
 {
     public static void Main(string[] args)
     {
-        string[] files = Directory.GetFiles(@"C:\path\to\test\data\", "*.zip");
+        string[] files = Directory.GetFiles("test_zip_data", "*.zip");
         foreach (string file in files)
         {
             using (Archive archive = new Archive(file))
             {
-                archive.ExtractToDirectory(@"C:\output_folder");
+                archive.ExtractToDirectory("output_folder_test");
             }
         }
     }
