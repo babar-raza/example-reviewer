@@ -123,3 +123,4 @@ test-content/
 # NUL file (Windows artifact)
 NUL
 /report
+node_modules

@@ -4,11 +4,18 @@
   "auto_commit": false,
   "commit_message_template": "fix(zip): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
-    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/zip"
+    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/zip",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/zip/en"
   ],
   "content_pattern": {
-    "blog": "**/index.md"
+    "blog": "**/index.md",
+    "kb": "**/*.md"
   },
+  "file_exclude_patterns": [
+    "index\\.[a-z]{2}\\.md$",
+    "index\\.[a-z]{2}-[a-z]{2}\\.md$",
+    "[/\\\\](ar|bg|ca|cs|da|de|el|es|fa|fi|fr|he|hi|hr|hu|id|it|ja|ko|lt|lv|ms|nl|no|pl|pt|ro|ru|sk|sr|sv|th|tr|uk|vi|zh)[/\\\\]"
+  ],
   "nuget_config": {
     "primary_package": {
       "name": "Aspose.Zip",
@@ -49,13 +56,13 @@
     "enabled": true,
     "mode": "lenient",
     "timeout_seconds": 30,
-    "required_files": ["sample.zip", "archive.zip", "outer.zip", "flatten.zip", "different_password.zip", "encrypted_password.zip", "archive.7z", "archive.gz", "sample.gz", "alice29.txt", "sample.txt", "asyoulik.txt", "plrabn12.txt", "lcet10.txt"],
+    "required_files": ["sample.zip", "archive.zip", "outer.zip", "flatten.zip", "different_password.zip", "encrypted_password.zip", "archive.7z", "archive.gz", "sample.gz", "plrabn12.rar", "encrypted.rar", "alice29.txt", "sample.txt", "asyoulik.txt", "plrabn12.txt", "lcet10.txt"],
     "required_dirs": ["sample_dir"],
     "file_aliases": {
       "sample.zip": ["input.zip", "example.zip", "source.zip", "ZipFileToBeExtracted.zip", "parent.zip"],
       "archive.zip": ["test.zip", "data.zip"],
       "plrabn12.rar": ["archive.rar", "input.rar", "example.rar", "sample.rar", "data.rar"],
-      "encrypted.rar": ["encrypted_archive.rar", "password_protected.rar"],
+      "encrypted.rar": ["encrypted_archive.rar", "password_protected.rar", "protected.rar"],
       "archive.7z": ["input.7z", "protected.7z", "example.7z"],
       "encrypted_password.zip": ["encrypted.zip"],
       "different_password.zip": ["password_protected.zip", "secure.zip"],
@@ -84,8 +91,13 @@
     "pat_env_var": "GITHUB_PAT"
   },
   "api_reference": {
-    "sources": ["test-data/test-reference/zip"],
-    "cache_path": "./cache/api-reference/zip"
+    "git_repo": "",
+    "git_ref": "main",
+    "git_subpath": "",
+    "shallow_clone": true,
+    "auto_fetch": false,
+    "max_context_chars": 8000,
+    "clone_timeout_seconds": 120
   },
   "discovery_patterns": {
     "fence_patterns": [
@@ -104,5 +116,44 @@
       "allowed_owners": ["aspose-com-gists", "aspose-zip"],
       "blocked_owners": []
     }
+  },
+  "context_enforcement": {
+    "enabled": true
+  },
+  "fixture_passwords": {
+    "default": "p@s$",
+    "encrypted_password.zip": "p@s$",
+    "encrypted.rar": "p@s$",
+    "different_password.zip": {"0": "first_pass", "1": "second_pass"}
+  },
+  "api_catalog": {
+    "enabled": true,
+    "storage_type": "json",
+    "path": "config/families/zip_api_catalog.json",
+    "lazy_loading": false
+  },
+  "llm": {
+    "provider": "openai",
+    "model": "qwen2.5-coder:7b",
+    "base_url": "http://localhost:11434/v1",
+    "api_key_env_var": "OPENAI_API_KEY",
+    "temperature": 0.2,
+    "max_retries": 2,
+    "timeout_seconds": 120
+  },
+  "final_review": {
+    "provider": "openai",
+    "model": "qwen2.5-coder:7b",
+    "base_url": "http://localhost:11434/v1",
+    "timeout_seconds": 60
+  },
+  "learned_patterns": {
+    "enabled": true,
+    "min_confidence": 0.6,
+    "max_patterns_per_error": 3,
+    "require_approval": true,
+    "feedback_tracking": true,
+    "retire_threshold": 0.3,
+    "retire_min_applications": 10
   }
 }

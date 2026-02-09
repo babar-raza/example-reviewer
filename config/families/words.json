@@ -3,13 +3,23 @@
   "display_name": "Aspose.Words for .NET",
   "auto_commit": false,
   "commit_message_template": "fix(words): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_roots": [
+    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/words",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/words/en",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/words/en",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/products.aspose.net/words/en"
+  ],
   "content_pattern": {
-    "blog": "**/words/*/index.md",
-    "docs": "**/words/en/**/*.md",
-    "kb": "**/words/en/**/*.md",
-    "products": "**/words/en/**/*.md",
-    "reference": "**/words/en/**/*.md"
+    "blog": "**/index.md",
+    "docs": "**/*.md",
+    "kb": "**/*.md",
+    "products": "**/*.md"
   },
+  "file_exclude_patterns": [
+    "index\\.[a-z]{2}\\.md$",
+    "index\\.[a-z]{2}-[a-z]{2}\\.md$",
+    "[/\\\\](ar|bg|ca|cs|da|de|el|es|fa|fi|fr|he|hi|hr|hu|id|it|ja|ko|lt|lv|ms|nl|no|pl|pt|ro|ru|sk|sr|sv|th|tr|uk|vi|zh)[/\\\\]"
+  ],
   "nuget_config": {
     "primary_package": {
       "name": "Aspose.Words",
@@ -20,11 +30,15 @@
   },
   "code_defaults": {
     "default_usings": [
+      "System",
+      "System.IO",
+      "System.Text",
       "Aspose.Words",
       "Aspose.Words.Saving",
       "Aspose.Words.Tables",
       "Aspose.Words.Fields",
-      "Aspose.Words.Drawing"
+      "Aspose.Words.Drawing",
+      "Aspose.Words.Loading"
     ]
   },
   "namespace_policy": {
@@ -35,14 +49,109 @@
       "System",
       "System.IO",
       "System.Text",
+      "System.Drawing",
+      "System.Drawing.*",
       "System.Collections.Generic",
-      "System.Linq"
+      "System.Linq",
+      "System.Data"
     ],
     "blacklist": []
   },
   "patterns": [],
   "non_existent_apis": [],
   "api_patterns": {},
+  "runtime_validation": {
+    "enabled": true,
+    "mode": "lenient",
+    "timeout_seconds": 30,
+    "required_files": [
+      "Document.docx", "Document.doc", "Document.html", "Document.odt",
+      "Blank.docx", "Bookmarks.docx", "Comments.docx", "Tables.docx",
+      "English text.txt"
+    ],
+    "required_dirs": ["Images", "Database"],
+    "file_aliases": {
+      "Document.docx": ["input.docx", "source.docx", "sample.docx", "example.docx", "test.docx"],
+      "Document.doc": ["input.doc", "source.doc", "sample.doc", "example.doc"],
+      "Blank.docx": ["empty.docx", "new.docx", "template.docx", "output.docx"],
+      "Images": ["images", "Pictures", "pictures", "Resources"]
+    },
+    "expected_outputs": ["*.docx", "*.pdf", "*.html", "output/*.docx"],
+    "env": {}
+  },
+  "test_data": {
+    "local_path": "artifacts/backfill/words/test-data",
+    "download_if_missing": false,
+    "inventory_path": "artifacts/backfill/words/test-data-inventory.json"
+  },
+  "example_repo": {
+    "url": "https://github.com/aspose-words/Aspose.Words-for-.NET",
+    "examples_path": "Examples/ApiExamples/ApiExamples",
+    "samples_path": "Examples/DocsExamples/DocsExamples",
+    "test_data_path": "Examples/Data",
+    "ref": "master"
+  },
+  "gist": {
+    "enabled": false,
+    "pat_env_var": "GITHUB_PAT"
+  },
+  "discovery_patterns": {
+    "fence_patterns": [
+      "^```(\\w+|c#)\\s*\\n(.*?)^```"
+    ],
+    "validatable_languages": ["cs", "csharp", "c#", "C#"],
+    "normalize_to_canonical": true,
+    "regex_timeout_seconds": 5.0,
+    "context_extraction": {
+      "enabled": true,
+      "max_paragraphs": 3,
+      "include_file_header": true
+    },
+    "gist_extraction": {
+      "enabled": false,
+      "allowed_owners": ["aspose-com-gists", "aspose-words"],
+      "blocked_owners": []
+    }
+  },
+  "context_enforcement": {
+    "enabled": true
+  },
+  "fixture_passwords": {
+    "default": "p@s$",
+    "Encrypted.docx": "p@s$",
+    "Encrypted.odt": "p@s$",
+    "Encrypted.ott": "p@s$"
+  },
+  "api_catalog": {
+    "enabled": false,
+    "storage_type": "json",
+    "path": "config/families/words_api_catalog.json",
+    "lazy_loading": true
+  },
+  "llm": {
+    "provider": "openai",
+    "model": "qwen2.5-coder:7b",
+    "base_url": "http://localhost:11434/v1",
+    "api_key_env_var": "OPENAI_API_KEY",
+    "temperature": 0.2,
+    "max_retries": 2,
+    "timeout_seconds": 120
+  },
+  "final_review": {
+    "provider": "openai",
+    "model": "qwen2.5-coder:7b",
+    "base_url": "http://localhost:11434/v1",
+    "timeout_seconds": 60
+  },
+  "learned_patterns": {
+    "enabled": true,
+    "min_confidence": 0.6,
+    "max_patterns_per_error": 3,
+    "require_approval": false,
+    "feedback_tracking": true,
+    "retire_threshold": 0.3,
+    "retire_min_applications": 10
+  },
   "persistent_fix": {
     "enabled": true,
     "max_iterations": 10,
@@ -54,5 +163,14 @@
   "dependency_resolution": {
     "enabled": true,
     "confidence_threshold": 0.7
+  },
+  "api_reference": {
+    "git_repo": "https://github.com/aspose-words/Aspose.Words-API-References-Tutorials",
+    "git_ref": "main",
+    "git_subpath": "english/net",
+    "shallow_clone": true,
+    "auto_fetch": true,
+    "clone_timeout_seconds": 120,
+    "max_context_chars": 8000
   }
 }
