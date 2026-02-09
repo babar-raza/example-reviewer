@@ -144,6 +144,16 @@ class GistConfig(BaseModel):
     )
 
 
+class APICatalogConfig(BaseModel):
+    """API catalog configuration (HEAL-05)."""
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    storage_type: str = Field(default="json", pattern="^(json|database)$")
+    path: str = ""
+    lazy_loading: bool = False
+
+
 class TelemetryConfig(BaseModel):
     """Telemetry configuration."""
     model_config = ConfigDict(extra="forbid")
@@ -603,16 +613,22 @@ class ExampleRepoConfig(BaseModel):
 
     url: str = ""
     examples_path: str = ""
+    samples_path: str = ""
     test_data_path: str = ""
     ref: str = "main"
 
 
 class ApiReferenceConfig(BaseModel):
-    """API reference configuration."""
+    """API reference configuration for fetching documentation from Git."""
     model_config = ConfigDict(extra="forbid")
 
-    sources: List[str] = Field(default_factory=list)
-    cache_path: str = ""
+    git_repo: str = Field(default="", description="Git repository URL for API reference")
+    git_ref: str = Field(default="main", description="Git branch or tag to clone")
+    git_subpath: str = Field(default="", description="Subdirectory within repo containing API docs")
+    shallow_clone: bool = Field(default=True, description="Use shallow clone (depth=1)")
+    auto_fetch: bool = Field(default=True, description="Automatically fetch on first use")
+    max_context_chars: int = Field(default=8000, ge=100, le=50000, description="Max chars for context extraction")
+    clone_timeout_seconds: int = Field(default=120, ge=10, le=600, description="Git clone timeout in seconds")
 
 
 class FamilyConfig(BaseModel):
@@ -627,7 +643,11 @@ class FamilyConfig(BaseModel):
     # Content discovery
     content_roots: List[str] = Field(default_factory=list)
     content_pattern: Dict[str, str] = Field(default_factory=dict)
-    
+    file_exclude_patterns: List[str] = Field(
+        default_factory=list,
+        description="Regex patterns for file paths to exclude from discovery"
+    )
+
     # Build configuration
     nuget_config: Optional[NuGetConfig] = None
     code_defaults: CodeDefaults = Field(default_factory=CodeDefaults)
@@ -641,11 +661,17 @@ class FamilyConfig(BaseModel):
     api_reference: ApiReferenceConfig = Field(default_factory=ApiReferenceConfig)
     gist: Optional[GistConfig] = None
 
+    # API catalog (HEAL-05)
+    api_catalog: Optional[APICatalogConfig] = None
+
     # Patterns and hints
     patterns: List[Dict[str, Any]] = Field(default_factory=list)
     api_patterns: Dict[str, Any] = Field(default_factory=dict)
     non_existent_apis: List[str] = Field(default_factory=list)
     discovery_patterns: Optional[DiscoveryPatternsConfig] = None
+
+    # Learned patterns (auto-learn module)
+    learned_patterns: Dict[str, Any] = Field(default_factory=dict)
 
     def get_nuget_package_name(self) -> str:
         """Get primary NuGet package name."""
@@ -844,6 +870,27 @@ class ConfigurationManager:
         # Discovery patterns
         if 'discovery_patterns' in data:
             parsed['discovery_patterns'] = DiscoveryPatternsConfig(**data['discovery_patterns'])
+
+        # Gist config
+        if 'gist' in data:
+            gist_data = data['gist'].copy()
+            if 'auth' in gist_data:
+                gist_data['auth_method'] = gist_data['auth'].get('method', 'none')
+                gist_data['pat_env_var'] = gist_data['auth'].get('pat_env_var', 'GIST_PAT')
+                del gist_data['auth']
+            parsed['gist'] = GistConfig(**gist_data)
+
+        # API catalog config (HEAL-05)
+        if 'api_catalog' in data:
+            parsed['api_catalog'] = APICatalogConfig(**data['api_catalog'])
+
+        # Learned patterns config
+        if 'learned_patterns' in data:
+            parsed['learned_patterns'] = data['learned_patterns']
+
+        # File exclude patterns
+        if 'file_exclude_patterns' in data:
+            parsed['file_exclude_patterns'] = data['file_exclude_patterns']
 
         return FamilyConfig(**parsed)
     

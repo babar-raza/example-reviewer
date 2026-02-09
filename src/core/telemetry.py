@@ -93,6 +93,57 @@ def track_phase_timing(
             logger.warning(f"Failed to record telemetry for phase '{phase}': {e}")
 
 
+def emit_telemetry_event(
+    db: Database,
+    run_id: str,
+    family: str,
+    event_type: str,
+    phase: Optional[str] = None,
+    example_id: Optional[str] = None,
+    duration_ms: Optional[int] = None,
+    success: bool = True,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Emit a telemetry event to the database.
+
+    Standalone function for per-operation event tracking.
+    Non-fatal: logs warnings on failure, never raises.
+
+    Args:
+        db: Database instance
+        run_id: Pipeline run ID
+        family: Product family identifier
+        event_type: Type of event (e.g., 'llm_call', 'discovery_complete')
+        phase: Pipeline phase
+        example_id: Example being processed
+        duration_ms: Duration in milliseconds
+        success: Whether the operation succeeded
+        metadata: Additional key-value metadata
+
+    Returns:
+        event_id string, or empty string on failure
+    """
+    try:
+        event = TelemetryEvent(
+            run_id=run_id,
+            family=family,
+            event_type=event_type,
+            phase=phase,
+            example_id=example_id,
+            duration_ms=duration_ms,
+            success=success,
+            metadata=metadata or {},
+            timestamp=datetime.utcnow(),
+        )
+        db.save_telemetry_event(event)
+        logger.debug(f"Emitted telemetry event: {event_type} for {example_id or 'run'}")
+        return event.event_id
+    except Exception as e:
+        logger.warning(f"Failed to emit telemetry event '{event_type}': {e}")
+        return ""
+
+
 def _collect_artifact_refs(
     db: Database,
     family: str,

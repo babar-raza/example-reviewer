@@ -426,7 +426,7 @@ class TelemetryRun(BaseModel):
     end_time: Optional[datetime] = Field(default=None, description="Run end timestamp")
     status: str = Field(
         default="running",
-        pattern="^(running|success|failure|partial)$",
+        pattern="^(running|success|failure|partial|timeout|cancelled)$",
         description="Run status"
     )
 

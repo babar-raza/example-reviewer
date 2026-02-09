@@ -1277,7 +1277,7 @@ class Database:
             params.append(example_id)
 
             conn.execute(
-                f"UPDATE example_records SET {', '.join(updates)} WHERE example_id = ?",
+                f"UPDATE example_run_state SET {', '.join(updates)} WHERE example_id = ?",
                 params
             )
             return conn.total_changes > 0
@@ -1756,6 +1756,15 @@ class Database:
     # RUN RECORDS
     # =========================================================================
     
+    def get_latest_run_id(self, family: str) -> Optional[str]:
+        """Get the primary run_id for a family (the one with the most examples)."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT run_id FROM example_run_state WHERE run_id IS NOT NULL "
+                "GROUP BY run_id ORDER BY COUNT(*) DESC LIMIT 1"
+            ).fetchone()
+            return row[0] if row else None
+
     def create_run(self, family: str, current_phase: str = "") -> str:
         """Create a new run record."""
         run = RunRecord(family=family, current_phase=current_phase)
