@@ -7,12 +7,35 @@ from typing import Dict, List, Tuple
 
 
 class NamespaceValidator:
-    """Validate using directives against allow/deny policies."""
+    """Validate using directives against allow/deny policies.
 
-    def __init__(self, policy: Dict[str, List[str]]):
+    Can optionally integrate with APICatalogService (HEAL-03) to auto-populate
+    the allowed namespaces whitelist from the catalog's known namespaces.
+    """
+
+    def __init__(self, policy: Dict[str, List[str]], catalog=None):
+        """
+        Args:
+            policy: Dict with 'mode', 'allowed_namespaces', 'blacklist' keys.
+            catalog: Optional APICatalogService instance. When provided in
+                     whitelist mode, catalog namespaces are auto-added to the
+                     allowed set.
+        """
         self.mode = policy.get("mode", "whitelist")
-        self.allowed = policy.get("allowed_namespaces", []) or []
+        self.allowed = list(policy.get("allowed_namespaces", []) or [])
         self.blacklist = policy.get("blacklist", []) or []
+
+        # HEAL-03: Auto-populate from catalog
+        if catalog is not None and hasattr(catalog, "get_namespace_set"):
+            catalog_ns = catalog.get_namespace_set()
+            if catalog_ns:
+                # Add catalog namespaces plus wildcard pattern for each
+                for ns in catalog_ns:
+                    if ns not in self.allowed:
+                        self.allowed.append(ns)
+                    wildcard = ns + ".*"
+                    if wildcard not in self.allowed:
+                        self.allowed.append(wildcard)
 
     def validate(self, code: str) -> Tuple[bool, List[str]]:
         usings = self._extract_usings(code)

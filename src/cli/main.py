@@ -750,6 +750,23 @@ def main() -> int:
                             help='Skip runtime verification')
     run_parser.add_argument('--skip-llm', '--skip-llm-fixes', dest='skip_llm', action='store_true',
                             help='Skip LLM-based fixing (compile-fix, runtime-fix, final-review phases)')
+    run_parser.add_argument('--skip-llm-runtime-fixes', action='store_true',
+                            help='Skip LLM fixes for runtime errors only (keeps compile-fix active)')
+
+    # Strategy control flags (for experiments)
+    run_parser.add_argument('--enable-transformers', action='store_true',
+                            help='Enable enhanced code transformers (E2)')
+    run_parser.add_argument('--enable-retrieval', action='store_true',
+                            help='Enable vector DB retrieval (E3)')
+    run_parser.add_argument('--enable-semantic-microfixes', action='store_true',
+                            help='Enable semantic micro-fixes (E4)')
+    run_parser.add_argument('--enable-substitution', action='store_true',
+                            help='Enable example substitution')
+    run_parser.add_argument('--enable-all-deterministic', action='store_true',
+                            help='Enable ALL deterministic strategies (overrides individual flags)')
+    run_parser.add_argument('--enable-learned-patterns', action='store_true',
+                            help='Enable learned pattern fixes from auto-learn (E4.5)')
+
     run_parser.add_argument('--dry-run', action='store_true',
                             help="Don't write changes")
     run_parser.add_argument('--allow-md-write', action='store_true',
@@ -952,13 +969,25 @@ def main() -> int:
         result = tools.status(family=args.family)
     
     elif args.command == 'run':
+        # Determine strategy configuration
+        enable_all = getattr(args, 'enable_all_deterministic', False)
+        strategy_config = {
+            'enable_transformers': enable_all or getattr(args, 'enable_transformers', False),
+            'enable_retrieval': enable_all or getattr(args, 'enable_retrieval', False),
+            'enable_semantic_microfixes': enable_all or getattr(args, 'enable_semantic_microfixes', False),
+            'enable_substitution': enable_all or getattr(args, 'enable_substitution', False),
+            'enable_learned_patterns': enable_all or getattr(args, 'enable_learned_patterns', False),
+        }
+
         result = tools.run_pipeline(
             family=args.family,
             max_examples=args.max_examples,
             skip_runtime=args.skip_runtime,
             skip_llm_fixes=args.skip_llm,
+            skip_llm_runtime_fixes=getattr(args, 'skip_llm_runtime_fixes', False),
             dry_run=args.dry_run,
             allow_md_write=getattr(args, 'allow_md_write', False),
+            strategy_config=strategy_config,
         )
     
     elif args.command == 'list-families':

@@ -27,27 +27,28 @@ class SnippetWrapperService:
         "using Aspose.Zip.SevenZip;",
     ]
 
-    def __init__(self, family: str = "zip", test_data_path: Optional[Path] = None):
+    def __init__(
+        self,
+        family: str = "zip",
+        test_data_path: Optional[Path] = None,
+        default_usings: Optional[List[str]] = None,
+    ):
         """
         Initialize the snippet wrapper service.
 
         Args:
             family: Product family (e.g., "zip", "pdf")
             test_data_path: Path to test data directory for file mapping
+            default_usings: Optional list of default using namespaces (without "using " prefix)
         """
         self.family = family.lower()
         self.test_data_path = test_data_path
 
-        # Configure using statements based on family
-        if self.family == "zip":
-            self.using_statements = self.STANDARD_USINGS
+        # Configure using statements from provided defaults or fallback to STANDARD_USINGS
+        if default_usings:
+            self.using_statements = [f"using {ns};" for ns in default_usings]
         else:
-            # Placeholder for other families
-            self.using_statements = [
-                "using System;",
-                "using System.IO;",
-                "using System.Collections.Generic;",
-            ]
+            self.using_statements = self.STANDARD_USINGS
 
     def needs_wrapping(self, code: str) -> bool:
         """

@@ -21,6 +21,11 @@ from ..core.models import (
 from ..core.database import Database
 from ..core.config import FamilyConfig
 
+# Type hint for FamilyServiceRegistry (avoid circular imports)
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ..pipeline.family_service_registry import FamilyServiceRegistry
+
 try:
     from .context_harness_service import ContextHarnessService
 except ImportError:
@@ -58,31 +63,6 @@ class CompilationService:
         "System.Threading.Tasks",
     ]
 
-    # API class to namespace mapping for intelligent using inference
-    API_NAMESPACE_MAP = {
-        # Aspose.Zip
-        'Archive': 'Aspose.Zip',
-        'ArchiveEntry': 'Aspose.Zip',
-        'ArchiveFactory': 'Aspose.Zip',
-        'ArchiveEntrySettings': 'Aspose.Zip.Saving',
-        'CompressionSettings': 'Aspose.Zip.Saving',
-        'DeflateCompressionSettings': 'Aspose.Zip.Saving',
-        'Bzip2CompressionSettings': 'Aspose.Zip.Saving',
-        'LzmaCompressionSettings': 'Aspose.Zip.Saving',
-        'ParallelCompressionOptions': 'Aspose.Zip.Saving',
-        'SevenZipArchive': 'Aspose.Zip.SevenZip',
-        'SevenZipArchiveEntry': 'Aspose.Zip.SevenZip',
-        'SevenZipCompressionSettings': 'Aspose.Zip.Saving',
-        'RarArchive': 'Aspose.Zip.Rar',
-        'RarArchiveEntry': 'Aspose.Zip.Rar',
-        'TarArchive': 'Aspose.Zip.Tar',
-        'GzipArchive': 'Aspose.Zip.Gzip',
-        'CabArchive': 'Aspose.Zip.Cab',
-        'WimArchive': 'Aspose.Zip.Wim',
-        'XarArchive': 'Aspose.Zip.Xar',
-        'CpioArchive': 'Aspose.Zip.Cpio',
-    }
-
     # Error pattern recognition for targeted fixes
     ERROR_PATTERNS = {
         r"CS0246.*type.*'(\w+)'": "missing_type",  # Matches "could not be found" or "not found"
@@ -113,6 +93,8 @@ class CompilationService:
     def __init__(
         self,
         db: Database,
+        family: str,
+        registry: Optional['FamilyServiceRegistry'] = None,
         workspace_dir: Optional[Path] = None,
         artifacts_dir: Optional[Path] = None,
         context_harness: Optional['ContextHarnessService'] = None,
@@ -122,14 +104,32 @@ class CompilationService:
 
         Args:
             db: Database instance
+            family: Product family identifier (e.g., 'zip', 'words')
+            registry: FamilyServiceRegistry for family-aware service access (optional)
             workspace_dir: Working directory for compilation
             artifacts_dir: Directory for storing compilation artifacts
             context_harness: Context-specific build harness service (Phase-2 Gate B)
         """
         self.db = db
+        self.family = family
+        self.registry = registry
         self.workspace_dir = workspace_dir or Path(tempfile.gettempdir()) / "example_reviewer"
         self.artifacts_dir = artifacts_dir or self.workspace_dir / "artifacts"
         self.context_harness = context_harness
+
+        # Load namespace map from registry if available, else use empty dict
+        if registry:
+            self.namespace_map = registry.get_namespace_map(family)
+            logger.info(f"CompilationService({family}): loaded {len(self.namespace_map)} types from registry")
+            if self.namespace_map:
+                # Log first 5 entries for debugging
+                sample = list(self.namespace_map.items())[:5]
+                logger.info(f"CompilationService({family}): sample namespace_map entries: {sample}")
+            else:
+                logger.warning(f"CompilationService({family}): namespace_map is EMPTY despite registry being provided!")
+        else:
+            self.namespace_map = {}
+            logger.info(f"CompilationService({family}): no registry provided, using empty namespace map")
 
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +161,7 @@ class CompilationService:
             code = example.compilable_code or example.original_code
             
             # Wrap code in compilable structure
-            wrapped_code = self._wrap_code(code, family_config)
+            wrapped_code = self._wrap_code(code, family_config, app_context=example.app_context)
             
             # Write project files (with app_context for Phase-2 Gate B)
             self._write_project(work_dir, family_config, app_context=example.app_context)
@@ -193,13 +193,16 @@ class CompilationService:
         # Check for various code elements
         has_usings = bool(re.search(r'^\s*using\s+[\w\.]+\s*;', code, re.MULTILINE))
         has_namespace = bool(re.search(r'\bnamespace\s+[\w\.]+', code))
-        has_class = bool(re.search(r'\bclass\s+\w+', code))
+        has_class = any(
+            re.search(r'\bclass\s+\w+', line.split('//')[0])
+            for line in code.split('\n')
+        )
         has_main = bool(re.search(r'\bstatic\s+(?:async\s+)?(?:void|Task|Task<int>|int)\s+Main\s*\(', code))
         is_async = bool(re.search(r'\bawait\s+', code)) or bool(re.search(r'\basync\s+', code))
 
         # Detect API usage by looking for class instantiations and references
         detected_apis = []
-        for api_class in self.API_NAMESPACE_MAP.keys():
+        for api_class in self.namespace_map.keys():
             # Look for: new ApiClass, ApiClass., ApiClass<, or just ApiClass as a type
             patterns = [
                 rf'\bnew\s+{api_class}\b',
@@ -248,8 +251,8 @@ class CompilationService:
 
         # Add usings based on detected APIs
         for api_class in detected_apis:
-            if api_class in self.API_NAMESPACE_MAP:
-                namespace = self.API_NAMESPACE_MAP[api_class]
+            if api_class in self.namespace_map:
+                namespace = self.namespace_map[api_class]
                 required_usings.add(namespace)
 
         # Extract existing using statements
@@ -262,7 +265,7 @@ class CompilationService:
         missing = required_usings - existing_usings
         return sorted(list(missing))
 
-    def _wrap_code(self, code: str, family_config: FamilyConfig) -> str:
+    def _wrap_code(self, code: str, family_config: FamilyConfig, app_context: str = None) -> str:
         """
         Intelligently wrap code snippet in a compilable structure based on what's already present.
 
@@ -287,6 +290,22 @@ class CompilationService:
         """
         # Analyze the code
         analysis = self._analyze_code(code, family_config)
+
+        # Context-aware wrapping: delegate to context_harness for non-console contexts
+        if self.context_harness and app_context:
+            if not self.context_harness.should_add_main_wrapper(app_context):
+                wrapped = self.context_harness.wrap_code_for_context(
+                    code, app_context,
+                    has_usings=analysis['has_usings'],
+                    has_namespace=analysis['has_namespace'],
+                    has_class=analysis['has_class'],
+                    has_main=analysis['has_main'],
+                )
+                # Still add missing usings
+                if analysis['missing_usings']:
+                    using_lines = [f"using {u};" for u in analysis['missing_usings']]
+                    return '\n'.join(using_lines) + '\n\n' + wrapped
+                return wrapped
 
         lines = []
 
@@ -319,8 +338,8 @@ class CompilationService:
             all_usings = list(set(self.DEFAULT_USINGS + (family_config.code_defaults.default_usings if family_config.code_defaults else [])))
             if analysis['detected_apis']:
                 for api in analysis['detected_apis']:
-                    if api in self.API_NAMESPACE_MAP:
-                        all_usings.append(self.API_NAMESPACE_MAP[api])
+                    if api in self.namespace_map:
+                        all_usings.append(self.namespace_map[api])
 
             if not analysis['has_usings']:
                 for using in sorted(set(all_usings)):
@@ -384,8 +403,8 @@ class CompilationService:
         if family_config.code_defaults:
             all_usings.update(family_config.code_defaults.default_usings)
         for api in analysis['detected_apis']:
-            if api in self.API_NAMESPACE_MAP:
-                all_usings.add(self.API_NAMESPACE_MAP[api])
+            if api in self.namespace_map:
+                all_usings.add(self.namespace_map[api])
 
         # Extract namespaces from existing using statements
         for using_line in using_lines:
@@ -627,8 +646,8 @@ class CompilationService:
             # Suggest namespaces
             suggested_namespaces = set()
             for missing_type in missing_types:
-                if missing_type in self.API_NAMESPACE_MAP:
-                    suggested_namespaces.add(self.API_NAMESPACE_MAP[missing_type])
+                if missing_type in self.namespace_map:
+                    suggested_namespaces.add(self.namespace_map[missing_type])
 
             if suggested_namespaces:
                 hints.append(f"Add using statements: {', '.join(sorted(suggested_namespaces))}")

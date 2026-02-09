@@ -636,26 +636,44 @@ class DiscoveryService:
 
     def _find_markdown_files(self, family_config: FamilyConfig) -> List[str]:
         """Find all markdown files matching family patterns."""
+        import re as _re
         files = []
-        
+
         # Use content roots from config or instance
         content_roots = family_config.content_roots or self.content_roots
-        
-        for root in content_roots:
-            root_path = Path(root)
-            if not root_path.exists():
-                logger.warning(f"Content root does not exist: {root}")
-                continue
-            
-            # If patterns defined, use them
-            if family_config.content_pattern:
-                for site, pattern in family_config.content_pattern.items():
-                    full_pattern = str(root_path / pattern)
-                    matched = sorted(glob(full_pattern, recursive=True), key=lambda p: str(p).lower())
-                    files.extend(matched)
-            else:
-                # Default: find all .md files (sorted deterministically)
+
+        if family_config.content_pattern:
+            # Pair each pattern with its corresponding root by position.
+            # Keys ("blog", "kb") map 1:1 with content_roots by insertion order.
+            pattern_entries = list(family_config.content_pattern.items())
+            for i, (site, pattern) in enumerate(pattern_entries):
+                if i >= len(content_roots):
+                    logger.warning(f"Pattern '{site}' (index {i}) has no matching content root")
+                    continue
+                root_path = Path(content_roots[i])
+                if not root_path.exists():
+                    logger.warning(f"Content root does not exist: {root_path}")
+                    continue
+                full_pattern = str(root_path / pattern)
+                matched = sorted(glob(full_pattern, recursive=True), key=lambda p: str(p).lower())
+                logger.info(f"Pattern '{site}' on root [{i}]: {len(matched)} files from {root_path}")
+                files.extend(matched)
+        else:
+            for root in content_roots:
+                root_path = Path(root)
+                if not root_path.exists():
+                    logger.warning(f"Content root does not exist: {root}")
+                    continue
                 files.extend(str(p) for p in sorted(root_path.rglob("*.md"), key=lambda p: str(p).lower()))
+
+        # Apply file exclusion patterns (defense-in-depth for non-English files)
+        if family_config.file_exclude_patterns:
+            exclude_res = [_re.compile(p) for p in family_config.file_exclude_patterns]
+            before_count = len(files)
+            files = [f for f in files if not any(r.search(f) for r in exclude_res)]
+            excluded = before_count - len(files)
+            if excluded > 0:
+                logger.info(f"Excluded {excluded} files matching file_exclude_patterns")
 
         # Sort final file list deterministically (case-normalized for Windows compatibility)
         return sorted(set(files), key=lambda f: f.lower())

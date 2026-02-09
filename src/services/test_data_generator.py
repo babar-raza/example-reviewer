@@ -484,6 +484,17 @@ def generate_file(filename: str, destination_dir: Path, verbose: bool = False) -
         success = generate_sample_directory(destination)
         return (success, f"Generated directory {filename}/" if success else f"Failed to generate {filename}/")
 
+    elif filename.startswith("data") and filename.endswith(".bin"):
+        # Binary data files for 7z per-entry encryption examples
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            content = f"Binary test data for {filename}\n".encode() * 100
+            destination.write_bytes(content)
+            _fix_timestamp(destination)
+            return (True, f"Generated binary {filename}")
+        except Exception as e:
+            return (False, f"Failed to generate {filename}: {e}")
+
     elif filename == "encrypted.rar" or filename == "plrabn12.rar":
         # RAR files cannot be generated locally - backfill only
         return (False, f"RAR file {filename} requires backfill (cannot generate locally)")

@@ -280,6 +280,8 @@ class TelemetryService:
         event_id: str,
         commit_hash: str,
         commit_timestamp: Optional[datetime] = None,
+        commit_source: str = "llm",
+        commit_author: str = "Example Reviewer <example-reviewer@aspose.net>",
     ) -> bool:
         """
         Associate a git commit with a telemetry run.
@@ -288,6 +290,8 @@ class TelemetryService:
             event_id: Event ID to update
             commit_hash: Git commit SHA
             commit_timestamp: Timestamp of the commit
+            commit_source: Source of commit ('manual', 'llm', 'ci')
+            commit_author: Author identity string
 
         Returns:
             True if at least local update succeeded
@@ -295,13 +299,18 @@ class TelemetryService:
         updates = {
             'git_commit_hash': commit_hash,
             'git_commit_timestamp': commit_timestamp or datetime.now(timezone.utc),
+            'git_commit_source': commit_source,
+            'git_commit_author': commit_author,
         }
 
         updated_locally = self.update_run(event_id, updates)
 
         # POST to /associate-commit endpoint if API enabled
         if self.config.http_api_enabled:
-            self._post_associate_commit(event_id, commit_hash, commit_timestamp)
+            self._post_associate_commit(
+                event_id, commit_hash, commit_timestamp,
+                commit_source=commit_source, commit_author=commit_author,
+            )
 
         return updated_locally
 
@@ -402,6 +411,8 @@ class TelemetryService:
         event_id: str,
         commit_hash: str,
         commit_timestamp: Optional[datetime] = None,
+        commit_source: str = "llm",
+        commit_author: str = "Example Reviewer <example-reviewer@aspose.net>",
     ) -> bool:
         """
         POST to /associate-commit endpoint.
@@ -410,6 +421,8 @@ class TelemetryService:
             event_id: Event ID
             commit_hash: Git commit SHA
             commit_timestamp: Commit timestamp
+            commit_source: Source of commit ('manual', 'llm', 'ci')
+            commit_author: Author identity string
 
         Returns:
             True if posted successfully
@@ -420,6 +433,8 @@ class TelemetryService:
         url = f"{self.config.http_api_url}/api/v1/runs/{event_id}/associate-commit"
         data = {
             'commit_hash': commit_hash,
+            'commit_source': commit_source,
+            'commit_author': commit_author,
             'commit_timestamp': commit_timestamp.isoformat() if commit_timestamp else None,
         }
 

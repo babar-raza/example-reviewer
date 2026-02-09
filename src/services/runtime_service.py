@@ -12,12 +12,15 @@ import logging
 import tempfile
 import subprocess
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
 from ..core.models import ExampleRecord, ExampleStatus, RuntimeAttempt
 from ..core.database import Database
 from ..core.config import FamilyConfig, RuntimeValidationConfig
+
+if TYPE_CHECKING:
+    from ..pipeline.family_service_registry import FamilyServiceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +35,7 @@ class RuntimeResult:
     duration_ms: int
     exception_type: Optional[str] = None
     exception_message: Optional[str] = None
+    stack_trace: Optional[str] = None
     output_files: Optional[List[str]] = None
 
 
@@ -51,35 +55,12 @@ class RuntimeService:
         "System.Threading.Tasks",
     ]
 
-    # API class to namespace mapping for intelligent using inference
-    # (Same as CompilationService to ensure consistency)
-    API_NAMESPACE_MAP = {
-        # Aspose.Zip
-        'Archive': 'Aspose.Zip',
-        'ArchiveEntry': 'Aspose.Zip',
-        'ArchiveFactory': 'Aspose.Zip',
-        'ArchiveEntrySettings': 'Aspose.Zip.Saving',
-        'CompressionSettings': 'Aspose.Zip.Saving',
-        'DeflateCompressionSettings': 'Aspose.Zip.Saving',
-        'Bzip2CompressionSettings': 'Aspose.Zip.Saving',
-        'LzmaCompressionSettings': 'Aspose.Zip.Saving',
-        'ParallelCompressionOptions': 'Aspose.Zip.Saving',
-        'SevenZipArchive': 'Aspose.Zip.SevenZip',
-        'SevenZipArchiveEntry': 'Aspose.Zip.SevenZip',
-        'SevenZipCompressionSettings': 'Aspose.Zip.Saving',
-        'RarArchive': 'Aspose.Zip.Rar',
-        'RarArchiveEntry': 'Aspose.Zip.Rar',
-        'TarArchive': 'Aspose.Zip.Tar',
-        'GzipArchive': 'Aspose.Zip.Gzip',
-        'CabArchive': 'Aspose.Zip.Cab',
-        'WimArchive': 'Aspose.Zip.Wim',
-        'XarArchive': 'Aspose.Zip.Xar',
-        'CpioArchive': 'Aspose.Zip.Cpio',
-    }
 
     def __init__(
         self,
         db: Database,
+        family: str,
+        registry: Optional['FamilyServiceRegistry'] = None,
         workspace_dir: Optional[Path] = None,
         artifacts_dir: Optional[Path] = None,
     ):
@@ -88,12 +69,30 @@ class RuntimeService:
 
         Args:
             db: Database instance
+            family: Product family identifier (e.g., 'zip', 'words')
+            registry: FamilyServiceRegistry for family-aware service access (optional)
             workspace_dir: Working directory for execution
             artifacts_dir: Directory for storing runtime artifacts
         """
         self.db = db
+        self.family = family
+        self.registry = registry
         self.workspace_dir = workspace_dir or Path(tempfile.gettempdir()) / "example_reviewer"
         self.artifacts_dir = artifacts_dir or self.workspace_dir / "artifacts"
+
+        # Load namespace map from registry if available, else use empty dict
+        if registry:
+            self.namespace_map = registry.get_namespace_map(family)
+            logger.info(f"RuntimeService({family}): loaded {len(self.namespace_map)} types from registry")
+            if self.namespace_map:
+                # Log first 5 entries for debugging
+                sample = list(self.namespace_map.items())[:5]
+                logger.info(f"RuntimeService({family}): sample namespace_map entries: {sample}")
+            else:
+                logger.warning(f"RuntimeService({family}): namespace_map is EMPTY despite registry being provided!")
+        else:
+            self.namespace_map = {}
+            logger.info(f"RuntimeService({family}): no registry provided, using empty namespace map")
 
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -476,16 +475,17 @@ class RuntimeService:
             
             # Check for output files
             output_files = self._find_output_files(work_dir, family_config.runtime_validation)
-            
+
             # Parse exception info from stderr if failed
             exception_type = None
             exception_message = None
-            
+            stack_trace = None
+
             if run_result.returncode != 0:
-                exception_type, exception_message = self._parse_exception(
+                exception_type, exception_message, stack_trace = self._parse_exception(
                     run_result.stdout + run_result.stderr
                 )
-            
+
             return RuntimeResult(
                 success=run_result.returncode == 0,
                 exit_code=run_result.returncode,
@@ -495,6 +495,7 @@ class RuntimeService:
                 exception_type=exception_type,
                 exception_message=exception_message,
                 output_files=output_files,
+                stack_trace=stack_trace,
             )
             
         except subprocess.TimeoutExpired:
@@ -574,7 +575,7 @@ class RuntimeService:
 
         # Detect API usage
         detected_apis = []
-        for api_class in self.API_NAMESPACE_MAP.keys():
+        for api_class in self.namespace_map.keys():
             patterns = [
                 rf'\bnew\s+{api_class}\b',
                 rf'\b{api_class}\.',
@@ -622,8 +623,8 @@ class RuntimeService:
 
         # Add usings based on detected APIs
         for api_class in detected_apis:
-            if api_class in self.API_NAMESPACE_MAP:
-                namespace = self.API_NAMESPACE_MAP[api_class]
+            if api_class in self.namespace_map:
+                namespace = self.namespace_map[api_class]
                 required_usings.add(namespace)
 
         # Extract existing using statements
@@ -694,8 +695,8 @@ class RuntimeService:
             all_usings = list(set(self.DEFAULT_USINGS + (family_config.code_defaults.default_usings if family_config.code_defaults else [])))
             if analysis['detected_apis']:
                 for api in analysis['detected_apis']:
-                    if api in self.API_NAMESPACE_MAP:
-                        all_usings.append(self.API_NAMESPACE_MAP[api])
+                    if api in self.namespace_map:
+                        all_usings.append(self.namespace_map[api])
 
             if not analysis['has_usings']:
                 for using in sorted(set(all_usings)):
@@ -759,8 +760,8 @@ class RuntimeService:
         if family_config.code_defaults:
             all_usings.update(family_config.code_defaults.default_usings)
         for api in analysis['detected_apis']:
-            if api in self.API_NAMESPACE_MAP:
-                all_usings.add(self.API_NAMESPACE_MAP[api])
+            if api in self.namespace_map:
+                all_usings.add(self.namespace_map[api])
 
         # Extract namespaces from existing using statements
         for using_line in using_lines:
@@ -809,28 +810,57 @@ class RuntimeService:
         # Sort final output list deterministically
         return sorted(output_files, key=lambda f: f.lower())
     
-    def _parse_exception(self, output: str) -> Tuple[Optional[str], Optional[str]]:
-        """Parse exception information from output."""
+    def _parse_exception(self, output: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Parse exception information from output including multi-line messages and stack traces.
+
+        Returns:
+            Tuple of (exception_type, exception_message, stack_trace)
+        """
         # Look for common .NET exception patterns
         import re
-        
-        # Pattern: Unhandled exception. System.SomeException: Message
+
+        # Pattern 1: Unhandled exception. System.SomeException: Message (with multi-line capture)
+        # Use DOTALL to match across lines, stop at "at" for stack trace boundary
         match = re.search(
-            r'Unhandled exception[.:]\s*([A-Za-z.]+Exception):\s*(.+?)(?:\n|$)',
-            output
+            r'Unhandled exception[.:]\s*([A-Za-z.]+Exception):\s*(.+?)(?=\n\s+at\s|\Z)',
+            output,
+            re.DOTALL
         )
         if match:
-            return match.group(1), match.group(2).strip()
-        
-        # Pattern: System.SomeException: Message
+            exception_type = match.group(1)
+            exception_message = match.group(2).strip()
+
+            # Extract stack trace separately
+            stack_trace = None
+            stack_match = re.search(r'(\n\s+at\s.+)', output[match.start():], re.DOTALL)
+            if stack_match:
+                # Extract just the first 5 lines of stack trace for brevity
+                stack_lines = stack_match.group(1).split('\n')[:5]
+                stack_trace = '\n'.join(stack_lines).strip()
+
+            return exception_type, exception_message, stack_trace
+
+        # Pattern 2: System.SomeException: Message (with multi-line capture)
         match = re.search(
-            r'([A-Za-z.]+Exception):\s*(.+?)(?:\n|$)',
-            output
+            r'([A-Za-z.]+Exception):\s*(.+?)(?=\n\s+at\s|\Z)',
+            output,
+            re.DOTALL
         )
         if match:
-            return match.group(1), match.group(2).strip()
-        
-        return None, None
+            exception_type = match.group(1)
+            exception_message = match.group(2).strip()
+
+            # Extract stack trace separately
+            stack_trace = None
+            stack_match = re.search(r'(\n\s+at\s.+)', output[match.start():], re.DOTALL)
+            if stack_match:
+                # Extract just the first 5 lines of stack trace for brevity
+                stack_lines = stack_match.group(1).split('\n')[:5]
+                stack_trace = '\n'.join(stack_lines).strip()
+
+            return exception_type, exception_message, stack_trace
+
+        return None, None, None
     
     def record_attempt(
         self,

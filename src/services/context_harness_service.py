@@ -220,9 +220,19 @@ class ContextHarnessService:
         strategy = self.get_code_wrapper_strategy(app_context)
 
         if strategy == 'aspnet_minimal':
-            # ASP.NET code should already have builder/app logic
-            # No wrapping needed - compile as-is
-            return code
+            has_builder = 'WebApplication.CreateBuilder' in code or 'WebApplicationBuilder' in code
+            has_app_ref = 'app.' in code
+            if has_builder:
+                return code  # Complete snippet, use as-is
+            elif has_app_ref:
+                # Partial snippet: inject minimal builder boilerplate
+                boilerplate = "var builder = WebApplication.CreateBuilder(args);\nvar app = builder.Build();\n\n"
+                suffix = ""
+                if 'app.Run()' not in code and 'app.Run(' not in code:
+                    suffix = "\n\napp.Run();"
+                return boilerplate + code + suffix
+            else:
+                return code  # Classified as ASP.NET but no obvious app refs
 
         elif strategy == 'library':
             # Library code should be class definitions

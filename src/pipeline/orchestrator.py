@@ -27,10 +27,14 @@ from ..services.markdown_service import MarkdownUpdateService
 from ..services.vector_db_service import VectorDBService
 from ..services.telemetry_service import TelemetryService
 from ..services.example_substitution_service import ExampleSubstitutionService, apply_quick_fixes
+from ..services.semantic_microfixes import apply_semantic_microfixes
+from ..services.api_reference_service import APIReferenceService
+from ..services.api_context_service import APIContextService
 from .failure_tracker import track_infra_missing_test_data, track_failure, track_compile_failure
 from ..core.path_guard import is_read_only_path
 from .escalation_classifier import classify_escalation_reason, should_escalate_to_review
 from ..core.models import FailureCategory, FailureResolution
+from .family_service_registry import FamilyServiceRegistry
 
 try:
     from .context_drift_validator import ContextDriftValidator
@@ -41,6 +45,13 @@ try:
     from ..services.context_harness_service import ContextHarnessService
 except ImportError:
     ContextHarnessService = None
+
+try:
+    from ..services.learned_patterns_service import LearnedPatternsService, extract_error_signature, extract_all_error_signatures
+except ImportError:
+    LearnedPatternsService = None
+    extract_error_signature = None
+    extract_all_error_signatures = None
 
 logger = logging.getLogger(__name__)
 
@@ -139,20 +150,27 @@ class PipelineOrchestrator:
             wal_enabled=self.sqlite_config.get('wal_enabled', True),
         )
         self.db.initialize_schema()
-        
+
+        # Initialize family service registry (WS-2 TASK-1C)
+        self.registry = FamilyServiceRegistry(self.config_manager, self.artifacts_dir)
+
         # Services (initialized lazily)
         self._llm_service: Optional[LLMService] = None
         self._final_review_llm_service: Optional[LLMService] = None  # Separate LLM for final review
         self._discovery_service: Optional[DiscoveryService] = None
-        self._compilation_service: Optional[CompilationService] = None
-        self._runtime_service: Optional[RuntimeService] = None
+        # Note: _compilation_service and _runtime_service are now family-aware factories
+        # Use get_compilation_service(family) and get_runtime_service(family) instead
         self._markdown_service: Optional[MarkdownUpdateService] = None
         self._vector_db_service: Optional[VectorDBService] = None
         self._resource_detection_service: Optional[ResourceDetectionService] = None
         self._telemetry_service: Optional[TelemetryService] = None
-        self._substitution_service: Optional[ExampleSubstitutionService] = None
+        # Note: _substitution_service removed - use self.registry.get_substitution_service(family)
         self._context_drift_validator: Optional['ContextDriftValidator'] = None
         self._context_harness_service: Optional['ContextHarnessService'] = None
+
+        # API reference services (lazy initialization per family)
+        self._api_reference_services: Dict[str, APIReferenceService] = {}
+        self._api_context_services: Dict[str, APIContextService] = {}
 
         # VectorDB and DriftDetector startup decision (Track 1: C.2)
         # Make a single decision at startup, never change mid-run
@@ -160,6 +178,18 @@ class PipelineOrchestrator:
         self._drift_enabled: bool = False
         self._vector_db_startup_decision: Dict[str, Any] = {}
         self._initialize_vector_db_and_drift()
+
+        # LLM telemetry accumulator (flushed to metrics_json at run completion)
+        self._llm_metrics: Dict[str, Any] = {
+            'total_calls': 0,
+            'total_prompt_tokens': 0,
+            'total_completion_tokens': 0,
+            'total_tokens': 0,
+            'total_latency_ms': 0,
+            'calls_by_context': {},
+            'failures': 0,
+            'models_used': set(),
+        }
     
     @property
     def llm_service(self) -> LLMService:
@@ -267,29 +297,66 @@ class PipelineOrchestrator:
             )
         return self._discovery_service
     
-    @property
-    def compilation_service(self) -> CompilationService:
-        """Get or initialize compilation service."""
-        if self._compilation_service is None:
-            self._compilation_service = CompilationService(
-                self.db,
-                workspace_dir=self.workspace_dir / "compile",
-                artifacts_dir=self.artifacts_dir / "compile",
-                context_harness=self.context_harness_service,
-            )
-        return self._compilation_service
-    
-    @property
-    def runtime_service(self) -> RuntimeService:
-        """Get or initialize runtime service."""
-        if self._runtime_service is None:
-            self._runtime_service = RuntimeService(
-                self.db,
-                workspace_dir=self.workspace_dir / "runtime",
-                artifacts_dir=self.artifacts_dir / "runtime",
-            )
-        return self._runtime_service
-    
+    def get_compilation_service(self, family: str) -> CompilationService:
+        """Get or initialize compilation service for a family."""
+        # Return fresh instance for each family (services are family-aware)
+        return CompilationService(
+            self.db,
+            family=family,
+            registry=self.registry,
+            workspace_dir=self.workspace_dir / "compile",
+            artifacts_dir=self.artifacts_dir / "compile",
+            context_harness=self.context_harness_service,
+        )
+
+    def get_runtime_service(self, family: str) -> RuntimeService:
+        """Get or initialize runtime service for a family."""
+        # Return fresh instance for each family (services are family-aware)
+        return RuntimeService(
+            self.db,
+            family=family,
+            registry=self.registry,
+            workspace_dir=self.workspace_dir / "runtime",
+            artifacts_dir=self.artifacts_dir / "runtime",
+        )
+
+    def _get_api_reference_service(self, family: str) -> Optional[APIReferenceService]:
+        """Get or initialize API reference service for family."""
+        if family not in self._api_reference_services:
+            try:
+                family_config = self.config_manager.load_family_config(family)
+                if hasattr(family_config, 'api_reference') and family_config.api_reference:
+                    service = APIReferenceService(
+                        family=family,
+                        config=family_config.api_reference,
+                        cache_dir=self.artifacts_dir / "cache"
+                    )
+                    # Ensure repo is cached if auto_fetch enabled
+                    if family_config.api_reference.auto_fetch:
+                        service.ensure_cached()
+                    self._api_reference_services[family] = service
+                    logger.info(f"Initialized API reference service for {family}")
+                else:
+                    logger.debug(f"No api_reference config for {family}")
+                    return None
+            except Exception as e:
+                logger.warning(f"Failed to initialize API reference for {family}: {e}")
+                return None
+
+        return self._api_reference_services.get(family)
+
+    def _get_api_context_service(self, family: str) -> Optional[APIContextService]:
+        """Get or initialize API context service for family."""
+        if family not in self._api_context_services:
+            api_ref_service = self._get_api_reference_service(family)
+            if api_ref_service:
+                self._api_context_services[family] = APIContextService(api_ref_service)
+                logger.info(f"Initialized API context service for {family}")
+            else:
+                return None
+
+        return self._api_context_services.get(family)
+
     @property
     def markdown_service(self) -> MarkdownUpdateService:
         """Get or initialize markdown service."""
@@ -326,6 +393,78 @@ class PipelineOrchestrator:
                 global_config.resource_detection
             )
         return self._resource_detection_service
+
+    def _emit_llm_telemetry(
+        self,
+        run_id: str,
+        family: str,
+        llm_response: 'LLMResponse',
+        context_type: str,
+        phase: str,
+        example_id: Optional[str] = None,
+        attempt: int = 1,
+    ) -> None:
+        """
+        Emit telemetry event for an LLM call and accumulate run-level metrics.
+
+        Non-fatal: all errors are caught and logged.
+
+        Args:
+            run_id: Pipeline run ID
+            family: Product family
+            llm_response: LLMResponse from llm_service
+            context_type: 'compile', 'runtime', 'final_review', 'markdown_review'
+            phase: Pipeline phase ('compilation', 'runtime', 'final_review')
+            example_id: Example being processed
+            attempt: Retry attempt number (1-based)
+        """
+        try:
+            # Accumulate in-memory metrics
+            self._llm_metrics['total_calls'] += 1
+            usage = llm_response.usage or {}
+            prompt_tokens = usage.get('prompt_tokens', 0)
+            completion_tokens = usage.get('completion_tokens', 0)
+            total_tokens = usage.get('total_tokens', 0)
+
+            self._llm_metrics['total_prompt_tokens'] += prompt_tokens
+            self._llm_metrics['total_completion_tokens'] += completion_tokens
+            self._llm_metrics['total_tokens'] += total_tokens
+            self._llm_metrics['total_latency_ms'] += llm_response.latency_ms
+
+            ctx_counts = self._llm_metrics['calls_by_context']
+            ctx_counts[context_type] = ctx_counts.get(context_type, 0) + 1
+
+            if not llm_response.success:
+                self._llm_metrics['failures'] += 1
+
+            if llm_response.model:
+                self._llm_metrics['models_used'].add(llm_response.model)
+
+            # Emit per-call telemetry event
+            from ..core.telemetry import emit_telemetry_event
+            emit_telemetry_event(
+                self.db,
+                run_id,
+                family,
+                event_type='llm_call',
+                phase=phase,
+                example_id=example_id,
+                duration_ms=llm_response.latency_ms,
+                success=llm_response.success,
+                metadata={
+                    'model': llm_response.model,
+                    'context_type': context_type,
+                    'prompt_tokens': prompt_tokens,
+                    'completion_tokens': completion_tokens,
+                    'total_tokens': total_tokens,
+                    'latency_ms': llm_response.latency_ms,
+                    'finish_reason': llm_response.finish_reason,
+                    'attempt': attempt,
+                    'error': llm_response.error if not llm_response.success else None,
+                },
+            )
+        except Exception as e:
+            logger.debug(f"Failed to emit LLM telemetry: {e}")
 
     def _initialize_vector_db_and_drift(self):
         """
@@ -442,20 +581,25 @@ class PipelineOrchestrator:
             )
         return self._telemetry_service
 
+    def get_substitution_service(self, family: str = "zip") -> ExampleSubstitutionService:
+        """
+        Get or initialize example substitution service for a given family.
+
+        Delegates to FamilyServiceRegistry (WS-2 TASK-1C refactoring).
+        Enables true multi-family support without interference.
+
+        Args:
+            family: Product family identifier (e.g., 'zip', 'words')
+
+        Returns:
+            ExampleSubstitutionService instance for the family
+        """
+        return self.registry.get_substitution_service(family)
+
     @property
     def substitution_service(self) -> ExampleSubstitutionService:
-        """Get or initialize example substitution service."""
-        if self._substitution_service is None:
-            # Use backfill directory for the current family
-            # Note: family is determined at runtime, so we'll use a generic path
-            # The service will be reinitialized per-family if needed
-            backfill_dir = self.artifacts_dir / "backfill" / "zip"  # Default to zip family
-            global_config = self.config_manager.load_global_config()
-            self._substitution_service = ExampleSubstitutionService(
-                backfill_dir=backfill_dir,
-                same_context_only=global_config.substitution.same_context_only
-            )
-        return self._substitution_service
+        """Backward-compatible property; prefer get_substitution_service(family)."""
+        return self.get_substitution_service(self.family)
 
     @property
     def context_drift_validator(self) -> Optional['ContextDriftValidator']:
@@ -503,57 +647,48 @@ class PipelineOrchestrator:
             return True
         return False
 
-    def _load_api_context(self, family_config: FamilyConfig, max_chars: int = 4000) -> Optional[str]:
+    def _load_api_context(
+        self,
+        family: str,
+        error_signature: str,
+        error_message: str,
+        max_chars: int = 8000
+    ) -> str:
         """
-        Load API reference context for LLM prompts.
+        Load relevant API documentation context for an error.
+
+        Uses APIContextService to extract entity names from error and fetch
+        relevant documentation sections from the API reference repository.
 
         Args:
-            family_config: Family configuration with api_reference settings
-            max_chars: Maximum characters to include (to fit in context window)
+            family: Product family
+            error_signature: Error code (e.g., 'CS0103', 'CS0246')
+            error_message: Full error message
+            max_chars: Maximum characters of context to return
 
         Returns:
-            API reference text or None if not available
+            Formatted API documentation context, or empty string if unavailable
         """
-        if not family_config.api_reference.cache_path:
-            return None
-
-        cache_path = Path(family_config.api_reference.cache_path)
-        if not cache_path.exists():
-            logger.debug(f"API reference cache not found at {cache_path}")
-            return None
-
         try:
-            # Collect API reference content from cache files
-            api_content = []
-            # Sort glob results deterministically (case-normalized for Windows compatibility)
-            for file_path in sorted(cache_path.glob("**/*.md"), key=lambda p: str(p).lower()):
-                try:
-                    content = file_path.read_text(encoding='utf-8')
-                    api_content.append(f"# {file_path.stem}\n{content}")
-                except Exception as e:
-                    logger.debug(f"Error reading API file {file_path}: {e}")
-                    continue
+            context_service = self._get_api_context_service(family)
+            if not context_service:
+                logger.debug(f"No API context service for {family}")
+                return ""
 
-            if not api_content:
-                # Also try .txt files (sorted deterministically)
-                for file_path in sorted(cache_path.glob("**/*.txt"), key=lambda p: str(p).lower()):
-                    try:
-                        content = file_path.read_text(encoding='utf-8')
-                        api_content.append(content)
-                    except Exception:
-                        continue
+            context = context_service.get_context_for_error(
+                error_signature=error_signature,
+                error_message=error_message,
+                max_chars=max_chars
+            )
 
-            if api_content:
-                combined = "\n\n".join(api_content)
-                # Truncate if too long
-                if len(combined) > max_chars:
-                    combined = combined[:max_chars] + "\n...[truncated]"
-                return combined
+            if context:
+                logger.info(f"Loaded {len(context)} chars of API context for {error_signature}")
+
+            return context
 
         except Exception as e:
-            logger.debug(f"Error loading API reference: {e}")
-
-        return None
+            logger.warning(f"Failed to load API context: {e}")
+            return ""
 
     def run_full_pipeline(
         self,
@@ -561,8 +696,10 @@ class PipelineOrchestrator:
         max_examples: Optional[int] = None,
         skip_runtime: bool = False,
         skip_llm_fixes: bool = False,
+        skip_llm_runtime_fixes: bool = False,
         dry_run: bool = False,
         allow_md_write: bool = False,
+        strategy_config: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """
         Run the full pipeline for a family.
@@ -572,8 +709,10 @@ class PipelineOrchestrator:
             max_examples: Maximum examples to process
             skip_runtime: Skip runtime verification phase
             skip_llm_fixes: Skip LLM-based fixing
+            skip_llm_runtime_fixes: Skip LLM fixes for runtime errors only
             dry_run: Don't write changes to files
             allow_md_write: Override global config to allow markdown writes
+            strategy_config: Dict controlling which fix strategies to enable
 
         Returns:
             Pipeline results dictionary
@@ -672,11 +811,27 @@ class PipelineOrchestrator:
                 results['success'] = False
                 return results
 
+            # Phase A.5: Gist backfill (fetch source code for gist-referenced examples)
+            try:
+                from ..services.backfill_service import BackfillService
+                backfill_svc = BackfillService(
+                    db=self.db, config_manager=self.config_manager
+                )
+                backfill_result = backfill_svc.backfill_gist_source_code(family)
+                if backfill_result.items_downloaded > 0:
+                    logger.info(
+                        f"Gist backfill: fetched {backfill_result.items_downloaded} examples"
+                    )
+                elif backfill_result.skipped:
+                    logger.info(f"Gist backfill skipped: {backfill_result.skip_reason}")
+            except Exception as e:
+                logger.warning(f"Gist backfill failed (continuing): {e}")
+
             # Phase B: Compilation
             logger.info(f"Phase B: Compilation verification for {family}")
             with track_phase_timing(self.db, run_id, family, "compilation"):
                 compile_stats = self._run_compilation_phase(
-                    run_id, family, family_config, max_examples, skip_llm_fixes
+                    run_id, family, family_config, max_examples, skip_llm_fixes, strategy_config
                 )
             results['phases']['compilation'] = compile_stats
 
@@ -685,7 +840,7 @@ class PipelineOrchestrator:
                 logger.info(f"Phase C: Runtime verification for {family}")
                 with track_phase_timing(self.db, run_id, family, "runtime"):
                     runtime_stats = self._run_runtime_phase(
-                        run_id, family, family_config, max_examples, skip_llm_fixes
+                        run_id, family, family_config, max_examples, skip_llm_fixes, skip_llm_runtime_fixes
                     )
                 results['phases']['runtime'] = runtime_stats
 
@@ -735,7 +890,24 @@ class PipelineOrchestrator:
                             telemetry_event_id,
                             commit_hash,
                             datetime.now(),
+                            commit_source="llm",
                         )
+
+                    # Flush accumulated LLM metrics to metrics_json / context_json
+                    llm_metrics_flush = dict(self._llm_metrics)
+                    llm_metrics_flush['models_used'] = list(self._llm_metrics['models_used'])
+                    context_flush = {
+                        'llm_model': global_config.llm.model,
+                        'llm_provider': global_config.llm.provider,
+                        'llm_temperature': global_config.llm.temperature,
+                        'deterministic_mode': getattr(global_config.llm, 'deterministic_mode', False),
+                        'drift_enabled': self._drift_enabled,
+                        'vector_db_decision': self._vector_db_startup_decision.get('decision'),
+                    }
+                    self.telemetry_service.update_run(telemetry_event_id, {
+                        'metrics_json': llm_metrics_flush,
+                        'context_json': context_flush,
+                    })
 
                     self.telemetry_service.complete_run(
                         telemetry_event_id,
@@ -759,6 +931,21 @@ class PipelineOrchestrator:
             # Complete telemetry run (failure)
             if telemetry_event_id and global_config.telemetry.internal_enabled:
                 try:
+                    # Flush partial LLM metrics even on failure
+                    llm_metrics_flush = dict(self._llm_metrics)
+                    llm_metrics_flush['models_used'] = list(self._llm_metrics['models_used'])
+                    context_flush = {
+                        'llm_model': global_config.llm.model,
+                        'llm_provider': global_config.llm.provider,
+                        'llm_temperature': global_config.llm.temperature,
+                        'deterministic_mode': getattr(global_config.llm, 'deterministic_mode', False),
+                        'drift_enabled': self._drift_enabled,
+                        'vector_db_decision': self._vector_db_startup_decision.get('decision'),
+                    }
+                    self.telemetry_service.update_run(telemetry_event_id, {
+                        'metrics_json': llm_metrics_flush,
+                        'context_json': context_flush,
+                    })
                     self.telemetry_service.complete_run(
                         telemetry_event_id,
                         status='failure',
@@ -788,6 +975,25 @@ class PipelineOrchestrator:
             family, family_config, max_files, run_id=run_id
         )
 
+        # Emit discovery summary event
+        try:
+            from ..core.telemetry import emit_telemetry_event
+            emit_telemetry_event(
+                self.db, run_id, family,
+                event_type='discovery_complete',
+                phase='discovery',
+                success=True,
+                metadata={
+                    'files_found': stats['files_found'],
+                    'files_processed': stats['files_processed'],
+                    'examples_found': stats['examples_found'],
+                    'inline_examples': stats['inline_examples'],
+                    'gist_examples': stats['gist_examples'],
+                },
+            )
+        except Exception:
+            pass
+
         return {
             'files_found': stats['files_found'],
             'files_processed': stats['files_processed'],
@@ -804,8 +1010,17 @@ class PipelineOrchestrator:
         family_config: FamilyConfig,
         max_examples: Optional[int],
         skip_llm_fixes: bool,
+        strategy_config: Optional[dict] = None,
     ) -> Dict[str, Any]:
-        """Run Phase B: Compilation Verification Loop."""
+        """Run Phase B: Compilation Verification Loop.
+
+        Args:
+            strategy_config: Dict with keys:
+                - enable_transformers: Enable enhanced transformers (E2)
+                - enable_retrieval: Enable vector DB retrieval (E3)
+                - enable_semantic_microfixes: Enable semantic micro-fixes (E4)
+                - enable_substitution: Enable example substitution
+        """
         stats = {
             'total_processed': 0,
             'compiled_first_try': 0,
@@ -827,7 +1042,20 @@ class PipelineOrchestrator:
         
         global_config = self.config_manager.load_global_config()
         max_retries = global_config.llm.max_retries
-        
+
+        # Initialize strategy configuration
+        # If no strategy_config provided, enable all strategies (default behavior)
+        if strategy_config is None:
+            strategy_config = {
+                'enable_transformers': True,
+                'enable_retrieval': True,
+                'enable_semantic_microfixes': True,
+                'enable_substitution': True,
+                'enable_learned_patterns': True,
+            }
+
+        logger.info(f"Strategy configuration: {strategy_config}")
+
         for example in examples:
             stats['total_processed'] += 1
 
@@ -861,7 +1089,7 @@ class PipelineOrchestrator:
                         errors=[f"precheck_escalated:{escalation_reason}"],
                         warnings=[],
                     )
-                    self.compilation_service.record_attempt(
+                    self.get_compilation_service(family).record_attempt(
                         example.example_id,
                         precheck_result,
                         example.original_code or "",
@@ -874,13 +1102,68 @@ class PipelineOrchestrator:
                     stats['failed'] += 1
                     continue
 
+                # Proactive semantic microfixes (before compilation)
+                # Apply ALL semantic microfixes proactively since many issues
+                # (stream disposal, CompressionLevel, DeflateCompressionSettings, etc.)
+                # can be detected and fixed without waiting for compile errors.
+                if strategy_config.get('enable_semantic_microfixes', False):
+                    proactive_code, proactive_fixes = apply_semantic_microfixes(
+                        example.original_code or "",
+                        [],
+                        family=family,
+                        registry=self.registry
+                    )
+                    if proactive_fixes:
+                        logger.info(
+                            f"Proactive semantic fixes for {example.example_id}: "
+                            f"{', '.join(proactive_fixes)}"
+                        )
+                        example.original_code = proactive_code
+                        try:
+                            from ..core.telemetry import emit_telemetry_event
+                            emit_telemetry_event(
+                                self.db, run_id, family,
+                                event_type='semantic_microfix_applied',
+                                phase='compilation',
+                                example_id=example.example_id,
+                                success=True,
+                                metadata={'fixes': proactive_fixes, 'proactive': True},
+                            )
+                        except Exception:
+                            pass
+
+                # Proactive quick fixes (System.IO.Compression ban, hallucination
+                # patterns, async-to-sync, path handling). These transformers check
+                # code structure not error messages, so they work before first compile.
+                proactive_code, proactive_fixes = apply_quick_fixes(
+                    example.original_code or "", []
+                )
+                if proactive_fixes:
+                    logger.info(
+                        f"Proactive quick fixes for {example.example_id}: "
+                        f"{', '.join(proactive_fixes)}"
+                    )
+                    example.original_code = proactive_code
+                    try:
+                        from ..core.telemetry import emit_telemetry_event
+                        emit_telemetry_event(
+                            self.db, run_id, family,
+                            event_type='quick_fix_applied',
+                            phase='compilation',
+                            example_id=example.example_id,
+                            success=True,
+                            metadata={'fixes': proactive_fixes, 'proactive': True},
+                        )
+                    except Exception:
+                        pass
+
                 # Try initial compilation
-                success, result = self.compilation_service.compile_example(
+                success, result = self.get_compilation_service(family).compile_example(
                     example, family_config
                 )
 
                 # Record first-try compilation attempt (Task 1A: Phase-2)
-                self.compilation_service.record_attempt(
+                self.get_compilation_service(family).record_attempt(
                     example.example_id,
                     result,
                     example.original_code,
@@ -893,6 +1176,18 @@ class PipelineOrchestrator:
                 if success:
                     # Compiled on first try
                     stats['compiled_first_try'] += 1
+                    try:
+                        from ..core.telemetry import emit_telemetry_event
+                        emit_telemetry_event(
+                            self.db, run_id, family,
+                            event_type='example_compiled',
+                            phase='compilation',
+                            example_id=example.example_id,
+                            success=True,
+                            metadata={'first_try': True},
+                        )
+                    except Exception:
+                        pass
                     self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
                     self.db.update_example_code(
                         example.example_id,
@@ -917,16 +1212,6 @@ class PipelineOrchestrator:
                         except Exception as e:
                             logger.debug(f"Failed to add compilable example to vector DB: {e}")
                     continue
-                
-                if skip_llm_fixes:
-                    stats['failed'] += 1
-                    self.db.update_example_status(
-                        example.example_id,
-                        ExampleStatus.COMPILE_FAILED,
-                        failure_reason='\n'.join(result.errors[:3]),
-                        run_id=run_id,
-                    )
-                    continue
 
                 # Phase-2 Task 2 & 3: Try quick fixes and substitution before LLM fixes
                 current_code = example.original_code
@@ -937,17 +1222,29 @@ class PipelineOrchestrator:
                 fixed_code, applied_fixes = apply_quick_fixes(current_code, result.errors)
                 if applied_fixes:
                     logger.info(f"Applied quick fixes for {example.example_id}: {', '.join(applied_fixes)}")
+                    try:
+                        from ..core.telemetry import emit_telemetry_event
+                        emit_telemetry_event(
+                            self.db, run_id, family,
+                            event_type='quick_fix_applied',
+                            phase='compilation',
+                            example_id=example.example_id,
+                            success=True,
+                            metadata={'fixes': applied_fixes, 'proactive': False},
+                        )
+                    except Exception:
+                        pass
                     quick_fix_applied = True
                     current_code = fixed_code
 
                     # Try recompiling with quick fixes
                     example.compilable_code = fixed_code
-                    success, result = self.compilation_service.compile_example(
+                    success, result = self.get_compilation_service(family).compile_example(
                         example, family_config
                     )
 
                     # Record quick fix attempt
-                    self.compilation_service.record_attempt(
+                    self.get_compilation_service(family).record_attempt(
                         example.example_id,
                         result,
                         example.original_code,
@@ -970,14 +1267,257 @@ class PipelineOrchestrator:
                         logger.info(f"Quick fix succeeded for {example.example_id}")
                         continue
 
+                # E4: Semantic Micro-Fixes - Try diagnostic-driven fixes
+                if not success and strategy_config.get('enable_semantic_microfixes', False):
+                    logger.info(f"Attempting semantic micro-fixes for {example.example_id}")
+                    fixed_code, applied_fixes = apply_semantic_microfixes(
+                        current_code,
+                        result.errors,
+                        family=family,
+                        registry=self.registry
+                    )
+
+                    if applied_fixes:
+                        logger.info(f"Applied semantic micro-fixes for {example.example_id}: {', '.join(applied_fixes)}")
+                        try:
+                            from ..core.telemetry import emit_telemetry_event
+                            emit_telemetry_event(
+                                self.db, run_id, family,
+                                event_type='semantic_microfix_applied',
+                                phase='compilation',
+                                example_id=example.example_id,
+                                success=True,
+                                metadata={'fixes': applied_fixes, 'proactive': False},
+                            )
+                        except Exception:
+                            pass
+                        current_code = fixed_code
+
+                        # Try recompiling with semantic fixes
+                        example.compilable_code = fixed_code
+                        success, result = self.get_compilation_service(family).compile_example(
+                            example, family_config
+                        )
+
+                        # Record semantic micro-fixes attempt
+                        self.get_compilation_service(family).record_attempt(
+                            example.example_id,
+                            result,
+                            example.original_code,
+                            output_code=fixed_code if success else None,
+                            llm_request=f"semantic_microfixes:{','.join(applied_fixes)}",
+                            llm_response=fixed_code if success else None,
+                            run_id=run_id,
+                        )
+
+                        if success:
+                            # Semantic micro-fixes worked!
+                            stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
+                            stats['semantic_microfixes_applied'] = stats.get('semantic_microfixes_applied', 0) + 1
+                            self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                            self.db.update_example_code(
+                                example.example_id,
+                                compilable_code=fixed_code,
+                                run_id=run_id,
+                            )
+                            logger.info(f"Semantic micro-fixes succeeded for {example.example_id}")
+                            continue
+
+                # E4.5: Learned Patterns - Try patterns from auto-learn (2026-02-06)
+                if not success and strategy_config.get('enable_learned_patterns', False):
+                    if LearnedPatternsService is not None and extract_error_signature is not None:
+                        try:
+                            learned_service = LearnedPatternsService(family)
+                            error_sigs = extract_all_error_signatures(result.errors) if extract_all_error_signatures is not None else [extract_error_signature(result.errors)]
+                            min_conf = strategy_config.get('learned_patterns_min_confidence', 0.6)
+                            max_patterns = strategy_config.get('learned_patterns_max_per_error', 3)
+
+                            # Read require_approval from family config learned_patterns section
+                            lp_config = getattr(family_config, 'learned_patterns', None)
+                            require_approval = True
+                            if lp_config and isinstance(lp_config, dict):
+                                require_approval = lp_config.get('require_approval', True)
+                            elif hasattr(lp_config, 'require_approval'):
+                                require_approval = lp_config.require_approval
+
+                            all_patterns = []
+                            for error_sig in error_sigs:
+                                sig_patterns = learned_service.query_patterns(
+                                    error_signature=error_sig,
+                                    min_confidence=min_conf,
+                                    approved_only=require_approval,
+                                    limit=max_patterns,
+                                )
+                                all_patterns.extend(sig_patterns)
+
+                            if all_patterns:
+                                logger.info(
+                                    f"Found {len(all_patterns)} learned patterns for {example.example_id} "
+                                    f"(errors: {error_sigs})"
+                                )
+
+                            for pattern in all_patterns:
+                                logger.debug(
+                                    f"Trying learned pattern {pattern.id} ({pattern.fix_type}) "
+                                    f"for {example.example_id}"
+                                )
+
+                                fixed_code, applied, desc = learned_service.apply_pattern(
+                                    pattern=pattern,
+                                    code=current_code,
+                                    error_context='\n'.join(result.errors),
+                                    llm_service=self.llm_service if pattern.requires_llm else None,
+                                )
+
+                                if applied and fixed_code != current_code:
+                                    # Try compiling with pattern fix
+                                    example.compilable_code = fixed_code
+                                    success, result = self.get_compilation_service(family).compile_example(
+                                        example, family_config
+                                    )
+
+                                    # Record pattern application for feedback loop
+                                    if strategy_config.get('learned_patterns_feedback_tracking', True):
+                                        learned_service.record_application(
+                                            pattern_id=pattern.id,
+                                            example_id=example.example_id,
+                                            run_id=run_id,
+                                            success=success,
+                                        )
+
+                                    # Record attempt for telemetry
+                                    self.get_compilation_service(family).record_attempt(
+                                        example.example_id,
+                                        result,
+                                        example.original_code,
+                                        output_code=fixed_code if success else None,
+                                        llm_request=f"learned_pattern:{pattern.id}:{pattern.fix_type}:{desc}",
+                                        llm_response=fixed_code if success else None,
+                                        run_id=run_id,
+                                    )
+
+                                    if success:
+                                        # Learned pattern worked!
+                                        current_code = fixed_code
+                                        stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
+                                        stats['learned_pattern_fixes'] = stats.get('learned_pattern_fixes', 0) + 1
+                                        self.db.update_example_status(
+                                            example.example_id, ExampleStatus.COMPILABLE, run_id=run_id
+                                        )
+                                        self.db.update_example_code(
+                                            example.example_id,
+                                            compilable_code=fixed_code,
+                                            run_id=run_id,
+                                        )
+                                        logger.info(
+                                            f"Learned pattern {pattern.id} succeeded for {example.example_id}: {desc}"
+                                        )
+                                        break
+
+                                    # Pattern didn't compile, but use improved code for next attempt
+                                    current_code = fixed_code
+
+                            learned_service.close()
+
+                            # If learned patterns succeeded, continue to next example
+                            if success:
+                                continue
+
+                        except Exception as e:
+                            logger.warning(f"Error applying learned patterns for {example.example_id}: {e}")
+
+                # E3: Vector DB Retrieval - Try finding similar verified examples
+                vector_db_success = False
+                if strategy_config.get('enable_retrieval', False) and self.vector_db_service.is_available():
+                    logger.info(f"Attempting vector DB retrieval for {example.example_id}")
+                    try:
+                        # Search for similar verified examples
+                        search_results = self.vector_db_service.search_similar(
+                            query_code=current_code,
+                            family=family,
+                            k=3,  # Get top 3 candidates
+                            min_similarity=0.6,  # Reasonable similarity threshold
+                            exclude_high_drift=True,  # Avoid drift contagion
+                        )
+
+                        if search_results:
+                            logger.info(f"Found {len(search_results)} similar examples for {example.example_id}")
+
+                            # Try each candidate in order of similarity
+                            for idx, (candidate_id, candidate_code, similarity, metadata) in enumerate(search_results, 1):
+                                logger.info(
+                                    f"Trying vector DB candidate {idx}/3 for {example.example_id}: "
+                                    f"{candidate_id} (similarity: {similarity:.3f})"
+                                )
+
+                                # Try compiling with candidate code
+                                example.compilable_code = candidate_code
+                                success, result = self.get_compilation_service(family).compile_example(
+                                    example, family_config
+                                )
+
+                                # Record retrieval attempt
+                                self.get_compilation_service(family).record_attempt(
+                                    example.example_id,
+                                    result,
+                                    example.original_code,
+                                    output_code=candidate_code if success else None,
+                                    llm_request=f"retrieval:vector_db:candidate_{idx}:similarity_{similarity:.3f}",
+                                    llm_response=candidate_code if success else None,
+                                    run_id=run_id,
+                                )
+
+                                if success:
+                                    # Vector DB retrieval worked!
+                                    vector_db_success = True
+                                    current_code = candidate_code
+                                    stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
+                                    stats['vector_db_retrievals'] = stats.get('vector_db_retrievals', 0) + 1
+                                    self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                                    self.db.update_example_code(
+                                        example.example_id,
+                                        compilable_code=candidate_code,
+                                        run_id=run_id,
+                                    )
+                                    logger.info(
+                                        f"Vector DB retrieval succeeded for {example.example_id} "
+                                        f"using {candidate_id} (similarity: {similarity:.3f})"
+                                    )
+                                    break
+                                else:
+                                    logger.debug(
+                                        f"Candidate {idx} failed to compile for {example.example_id}, "
+                                        f"trying next candidate"
+                                    )
+
+                            # If any candidate succeeded, continue to next example
+                            if vector_db_success:
+                                continue
+                            else:
+                                logger.info(
+                                    f"All vector DB candidates failed for {example.example_id}, "
+                                    f"falling back to substitution"
+                                )
+                        else:
+                            logger.debug(f"No similar examples found in vector DB for {example.example_id}")
+
+                    except Exception as e:
+                        logger.warning(f"Vector DB retrieval failed for {example.example_id}: {e}")
+                else:
+                    logger.debug(f"Vector DB not available for {example.example_id}, skipping retrieval")
+
                 # Task 3: Check for substitution triggers
-                should_sub, trigger_info = self.substitution_service.should_substitute(result.errors)
+                if strategy_config.get('enable_substitution', False):
+                    should_sub, trigger_info = self.get_substitution_service(family).should_substitute(result.errors)
+                else:
+                    should_sub = False
+                    trigger_info = None
 
                 if should_sub and trigger_info:
                     logger.info(f"Substitution triggered for {example.example_id}: {trigger_info['reason']}")
 
                     # Try to find a substitute example
-                    substitute_result = self.substitution_service.find_substitute_example(
+                    substitute_result = self.get_substitution_service(family).find_substitute_example(
                         original_code=current_code,
                         trigger_info=trigger_info,
                         family=family,
@@ -995,12 +1535,12 @@ class PipelineOrchestrator:
 
                         # Try compiling the substitute
                         example.compilable_code = substitute_code
-                        success, result = self.compilation_service.compile_example(
+                        success, result = self.get_compilation_service(family).compile_example(
                             example, family_config
                         )
 
                         # Record substitution attempt
-                        self.compilation_service.record_attempt(
+                        self.get_compilation_service(family).record_attempt(
                             example.example_id,
                             result,
                             example.original_code,
@@ -1041,11 +1581,35 @@ class PipelineOrchestrator:
                                 f"falling back to LLM fixes"
                             )
 
+                # After ALL deterministic fixes (quick fixes, semantic micro-fixes, vector DB, substitution)
+                if skip_llm_fixes:
+                    stats['failed'] += 1
+                    self.db.update_example_status(
+                        example.example_id,
+                        ExampleStatus.COMPILE_FAILED,
+                        failure_reason='\n'.join(result.errors[:3]),
+                        run_id=run_id,
+                    )
+                    continue
+
                 # Try LLM fixes
                 fixed = False
 
                 # Load API reference context for LLM (LCE-01)
-                api_context = self._load_api_context(family_config)
+                # Extract error signature and message from compile result
+                error_signature = ""
+                error_message = ""
+                if result.errors:
+                    if extract_error_signature:
+                        error_signature = extract_error_signature(result.errors)
+                    error_message = result.errors[0] if result.errors else ""
+
+                api_context = self._load_api_context(
+                    family=family,
+                    error_signature=error_signature,
+                    error_message=error_message,
+                    max_chars=family_config.api_reference.max_context_chars if family_config.api_reference else 8000
+                )
                 if api_context:
                     logger.debug(f"Loaded {len(api_context)} chars of API context for {example.example_id}")
 
@@ -1103,7 +1667,7 @@ class PipelineOrchestrator:
                         logger.debug(f"Failed to emit retry telemetry: {e}")
 
                     # Create fix payload with full context (LCE-03)
-                    payload = self.compilation_service.create_fix_payload(
+                    payload = self.get_compilation_service(family).create_fix_payload(
                         example, result,
                         family_config=family_config,
                         api_context=tier_api_context,
@@ -1123,7 +1687,13 @@ class PipelineOrchestrator:
                         description_context=example.description_context,
                         topic=example.topic,
                     )
-                    
+                    self._emit_llm_telemetry(
+                        run_id=run_id, family=family,
+                        llm_response=llm_response,
+                        context_type="compile", phase="compilation",
+                        example_id=example.example_id, attempt=attempt + 1,
+                    )
+
                     if not llm_response.success:
                         continue
 
@@ -1144,18 +1714,18 @@ class PipelineOrchestrator:
                                 f"Rejecting LLM fix for {example.example_id} due to context drift: "
                                 f"{drift_result.original_context} → {drift_result.fixed_context}"
                             )
-                            # Store drift evidence in failure details
+                            # Store drift evidence in failure reason
+                            drift_details = {
+                                "drift_detected": True,
+                                "original_context": drift_result.original_context,
+                                "fixed_context": drift_result.fixed_context,
+                                "rejection_reason": drift_result.rejection_reason
+                            }
                             self.db.update_example_status(
                                 run_id=run_id,
                                 example_id=example.example_id,
                                 status=ExampleStatus.COMPILE_FAILED,
-                                failure_reason="context_drift_detected",
-                                failure_details={
-                                    "drift_detected": True,
-                                    "original_context": drift_result.original_context,
-                                    "fixed_context": drift_result.fixed_context,
-                                    "rejection_reason": drift_result.rejection_reason
-                                }
+                                failure_reason=f"context_drift_detected: {json.dumps(drift_details)}"
                             )
                             # Skip this fix attempt and continue to next retry
                             continue
@@ -1230,12 +1800,12 @@ class PipelineOrchestrator:
 
                     # Update example and retry compilation
                     example.compilable_code = fixed_code
-                    success, result = self.compilation_service.compile_example(
+                    success, result = self.get_compilation_service(family).compile_example(
                         example, family_config
                     )
                     
                     # Record attempt
-                    self.compilation_service.record_attempt(
+                    self.get_compilation_service(family).record_attempt(
                         example.example_id,
                         result,
                         current_code,
@@ -1255,6 +1825,13 @@ class PipelineOrchestrator:
                                 original_code=example.original_code,
                                 fixed_code=fixed_code,
                             )
+                            if self.llm_service._last_response:
+                                self._emit_llm_telemetry(
+                                    run_id=run_id, family=family,
+                                    llm_response=self.llm_service._last_response,
+                                    context_type="final_review", phase="compilation",
+                                    example_id=example.example_id,
+                                )
 
                             if review['success'] and not review['intent_preserved']:
                                 # Intent drift detected - check confidence threshold
@@ -1295,6 +1872,18 @@ class PipelineOrchestrator:
                                 )
 
                         stats['compiled_with_fix'] += 1
+                        try:
+                            from ..core.telemetry import emit_telemetry_event
+                            emit_telemetry_event(
+                                self.db, run_id, family,
+                                event_type='example_compiled',
+                                phase='compilation',
+                                example_id=example.example_id,
+                                success=True,
+                                metadata={'first_try': False, 'attempts': attempt + 1},
+                            )
+                        except Exception:
+                            pass
                         self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
                         self.db.update_example_code(example.example_id, compilable_code=fixed_code, run_id=run_id)
 
@@ -1351,10 +1940,10 @@ class PipelineOrchestrator:
                             )
                             # Try compiling the substitute
                             example.compilable_code = substitute_code
-                            sub_success, sub_result = self.compilation_service.compile_example(
+                            sub_success, sub_result = self.get_compilation_service(family).compile_example(
                                 example, family_config
                             )
-                            self.compilation_service.record_attempt(
+                            self.get_compilation_service(family).record_attempt(
                                 example.example_id,
                                 sub_result,
                                 example.original_code,
@@ -1365,6 +1954,18 @@ class PipelineOrchestrator:
                             )
                             if sub_success:
                                 stats['compiled_with_fix'] += 1
+                                try:
+                                    from ..core.telemetry import emit_telemetry_event
+                                    emit_telemetry_event(
+                                        self.db, run_id, family,
+                                        event_type='example_compiled',
+                                        phase='compilation',
+                                        example_id=example.example_id,
+                                        success=True,
+                                        metadata={'first_try': False, 'substitution': True},
+                                    )
+                                except Exception:
+                                    pass
                                 self.db.update_example_status(
                                     example.example_id, ExampleStatus.COMPILABLE, run_id=run_id
                                 )
@@ -1423,6 +2024,7 @@ class PipelineOrchestrator:
         family_config: FamilyConfig,
         max_examples: Optional[int],
         skip_llm_fixes: bool,
+        skip_llm_runtime_fixes: bool = False,
     ) -> Dict[str, Any]:
         """Run Phase C: Runtime Verification Loop."""
         # Import failure tracking functions at function scope to avoid UnboundLocalError
@@ -1553,7 +2155,7 @@ class PipelineOrchestrator:
                 # Pre-flight check: Verify test data availability before runtime execution
                 # This prevents wasting LLM calls on infrastructure issues
                 if test_data_path and family_config.runtime_validation.required_files:
-                    all_available, missing_files = self.runtime_service.check_test_data_availability(
+                    all_available, missing_files = self.get_runtime_service(family).check_test_data_availability(
                         test_data_path=test_data_path,
                         runtime_config=family_config.runtime_validation,
                     )
@@ -1614,14 +2216,21 @@ class PipelineOrchestrator:
                         stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
                         continue
 
-                success, result = self.runtime_service.execute_example(
+                # Track first failure separately from last result (TASK-1A fix)
+                first_failure_result = None
+
+                success, result = self.get_runtime_service(family).execute_example(
                     example, family_config, test_data_path
                 )
                 last_result = result  # Track result for failure reporting
 
+                # Capture first failure for accurate error reporting
+                if not success:
+                    first_failure_result = result
+
                 # Record runtime attempt
                 sample_ref = str(test_data_path) if test_data_path else "none"
-                self.runtime_service.record_attempt(
+                self.get_runtime_service(family).record_attempt(
                     example_id=example.example_id,
                     family=family,
                     runtime_result=result,
@@ -1693,7 +2302,7 @@ class PipelineOrchestrator:
                     )
 
                     # Try substitution first
-                    should_sub, trigger_info = self.substitution_service.should_substitute(compile_errors)
+                    should_sub, trigger_info = self.get_substitution_service(family).should_substitute(compile_errors)
 
                     if should_sub and trigger_info:
                         logger.info(
@@ -1701,7 +2310,7 @@ class PipelineOrchestrator:
                             f"{trigger_info['reason']}"
                         )
 
-                        substitute_result = self.substitution_service.find_substitute_example(
+                        substitute_result = self.get_substitution_service(family).find_substitute_example(
                             original_code=example.compilable_code,
                             trigger_info=trigger_info,
                             family=family,
@@ -1715,13 +2324,13 @@ class PipelineOrchestrator:
 
                             # Re-compile with substitute
                             example.compilable_code = substitute_code
-                            comp_success, comp_result = self.compilation_service.compile_example(
+                            comp_success, comp_result = self.get_compilation_service(family).compile_example(
                                 example, family_config
                             )
 
                             if comp_success:
                                 # Substitute compiled - now try runtime
-                                runtime_success, runtime_result = self.runtime_service.execute_example(
+                                runtime_success, runtime_result = self.get_runtime_service(family).execute_example(
                                     example, family_config, test_data_path
                                 )
 
@@ -1762,7 +2371,7 @@ class PipelineOrchestrator:
                 current_code = example.compilable_code
 
                 # Task 5: Classify runtime error and try deterministic fix
-                error_category = self.runtime_service.classify_runtime_error(result)
+                error_category = self.get_runtime_service(family).classify_runtime_error(result)
                 logger.debug(f"Runtime error category for {example.example_id}: {error_category}")
 
                 # Task 5: Escalate missing RAR file as INFRA_BLOCKED
@@ -1782,7 +2391,7 @@ class PipelineOrchestrator:
                     # Check if this file exists anywhere in test-data (recursive)
                     fixture_truly_missing = True
                     if rar_filename and test_data_path and test_data_path.exists():
-                        found_path = self.runtime_service.find_test_file(
+                        found_path = self.get_runtime_service(family).find_test_file(
                             required_name=rar_filename,
                             source_dir=test_data_path,
                             file_aliases=family_config.runtime_validation.file_aliases,
@@ -1821,8 +2430,27 @@ class PipelineOrchestrator:
                         error_category = "file_not_copied"
 
                 # Task 5: Escalate password errors as INFRA_BLOCKED
+                # But first try password normalization if not already applied
                 if error_category == "invalid_password":
                     from .escalation_classifier import EscalationReason
+                    from ..services.semantic_microfixes import fix_placeholder_passwords as _fix_pw
+
+                    current_pw_code = example.compilable_code or example.original_code or ""
+                    fixed_pw_code, pw_fix_desc = _fix_pw(current_pw_code)
+                    if pw_fix_desc:
+                        # Password was a placeholder — fix and retry runtime once
+                        logger.info(f"Pre-escalation password fix for {example.example_id}: {pw_fix_desc}")
+                        example.compilable_code = fixed_pw_code
+                        retry_result = self.get_runtime_service(family).run_example(
+                            example, family_config, test_data_path
+                        )
+                        if retry_result.success:
+                            logger.info(f"Example {example.example_id}: password retry PASSED")
+                            stats['passed_first_try'] = stats.get('passed_first_try', 0) + 1
+                            stats['verified'] = stats.get('verified', 0) + 1
+                            continue
+                        # Retry also failed — fall through to escalation
+
                     logger.info(f"Example {example.example_id}: INFRA_BLOCKED (requires_password_secret)")
 
                     # Track the infrastructure blocker
@@ -1878,7 +2506,7 @@ class PipelineOrchestrator:
                                 available_files.append(f.name)
 
                     # Try deterministic fix
-                    fixed_code = self.runtime_service.apply_deterministic_fix(
+                    fixed_code = self.get_runtime_service(family).apply_deterministic_fix(
                         current_code, error_category, available_files
                     )
 
@@ -1887,12 +2515,12 @@ class PipelineOrchestrator:
 
                         # Re-run with fixed code
                         example.compilable_code = fixed_code
-                        success, result = self.runtime_service.execute_example(
+                        success, result = self.get_runtime_service(family).execute_example(
                             example, family_config, test_data_path
                         )
 
                         # Record deterministic fix attempt
-                        self.runtime_service.record_attempt(
+                        self.get_runtime_service(family).record_attempt(
                             example_id=example.example_id,
                             family=family,
                             runtime_result=result,
@@ -1957,12 +2585,26 @@ class PipelineOrchestrator:
                 runtime_max_retries = min(max_retries, 1)
 
                 # Runtime still failed - try LLM fixes if enabled
-                if not skip_llm_fixes and self.llm_service.is_available():
+                # BLOCKER-002: Skip LLM runtime fixes if flag is set (prevents hallucinations)
+                if not skip_llm_fixes and not skip_llm_runtime_fixes and self.llm_service.is_available():
                     fixed = False
                     current_code = example.compilable_code
 
                     # Load API reference context for LLM (LCE-04)
-                    api_context = self._load_api_context(family_config)
+                    # Extract error information from runtime result
+                    error_signature = "RUNTIME_ERROR"
+                    error_message = ""
+                    if result.exception_message:
+                        error_message = result.exception_message
+                    elif result.stderr:
+                        error_message = result.stderr
+
+                    api_context = self._load_api_context(
+                        family=family,
+                        error_signature=error_signature,
+                        error_message=error_message,
+                        max_chars=family_config.api_reference.max_context_chars if family_config.api_reference else 8000
+                    )
                     if api_context:
                         logger.debug(f"Loaded {len(api_context)} chars of API context for runtime fix")
 
@@ -2045,8 +2687,8 @@ class PipelineOrchestrator:
                             error_logs = result.stderr or "Build failed"
 
                             # Get scaffolding hints from compilation service
-                            error_categories = self.compilation_service.categorize_errors(error_logs)
-                            hints = self.compilation_service.get_error_fix_hints(error_categories, family_config)
+                            error_categories = self.get_compilation_service(family).categorize_errors(error_logs)
+                            hints = self.get_compilation_service(family).get_error_fix_hints(error_categories, family_config)
 
                             llm_response = self.llm_service.fix_code(
                                 code=current_code,
@@ -2060,6 +2702,12 @@ class PipelineOrchestrator:
                                 description_context=example.description_context,
                                 topic=example.topic,
                                 original_code=example.original_code,
+                            )
+                            self._emit_llm_telemetry(
+                                run_id=run_id, family=family,
+                                llm_response=llm_response,
+                                context_type="compile", phase="runtime",
+                                example_id=example.example_id, attempt=attempt + 1,
                             )
                         else:
                             # True runtime error - use runtime fix prompts
@@ -2081,7 +2729,13 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                 topic=example.topic,
                                 original_code=example.original_code,
                             )
-                        
+                            self._emit_llm_telemetry(
+                                run_id=run_id, family=family,
+                                llm_response=llm_response,
+                                context_type="runtime", phase="runtime",
+                                example_id=example.example_id, attempt=attempt + 1,
+                            )
+
                         if not llm_response.success or not llm_response.content:
                             logger.warning(f"LLM fix failed for {example.example_id}: {llm_response.error}")
                             break
@@ -2101,18 +2755,18 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                     f"Rejecting LLM fix for {example.example_id} due to context drift: "
                                     f"{drift_result.original_context} → {drift_result.fixed_context}"
                                 )
-                                # Store drift evidence in failure details
+                                # Store drift evidence in failure reason
+                                drift_details = {
+                                    "drift_detected": True,
+                                    "original_context": drift_result.original_context,
+                                    "fixed_context": drift_result.fixed_context,
+                                    "rejection_reason": drift_result.rejection_reason
+                                }
                                 self.db.update_example_status(
                                     run_id=run_id,
                                     example_id=example.example_id,
                                     status=ExampleStatus.RUNTIME_FAILED,
-                                    failure_reason="context_drift_detected",
-                                    failure_details={
-                                        "drift_detected": True,
-                                        "original_context": drift_result.original_context,
-                                        "fixed_context": drift_result.fixed_context,
-                                        "rejection_reason": drift_result.rejection_reason
-                                    }
+                                    failure_reason=f"context_drift_detected: {json.dumps(drift_details)}"
                                 )
                                 # Skip this fix attempt and continue to next retry
                                 continue
@@ -2191,13 +2845,17 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                         prev_result = result
 
                         # Re-run with fixed code
-                        success, result = self.runtime_service.execute_example(
+                        success, result = self.get_runtime_service(family).execute_example(
                             example, family_config, test_data_path
                         )
                         last_result = result  # Track last result for error reporting
 
+                        # Capture first failure in retry loop (TASK-1A fix)
+                        if not result.success and first_failure_result is None:
+                            first_failure_result = result
+
                         # Record runtime attempt with LLM fix context
-                        self.runtime_service.record_attempt(
+                        self.get_runtime_service(family).record_attempt(
                             example_id=example.example_id,
                             family=family,
                             runtime_result=result,
@@ -2219,6 +2877,13 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                     original_code=example.original_code,
                                     fixed_code=fixed_code,
                                 )
+                                if self.llm_service._last_response:
+                                    self._emit_llm_telemetry(
+                                        run_id=run_id, family=family,
+                                        llm_response=self.llm_service._last_response,
+                                        context_type="final_review", phase="runtime",
+                                        example_id=example.example_id,
+                                    )
 
                                 if review['success'] and not review['intent_preserved']:
                                     # Intent drift detected - check confidence threshold
@@ -2325,12 +2990,18 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 
                 # All retries failed
                 stats['failed'] += 1
-                # Use last_result for failure reporting (always defined)
-                if last_result is not None:
+                # TASK-1A fix: Prioritize first_failure_result for accurate error reporting
+                if first_failure_result is not None:
                     failure_reason = (
-                        last_result.exception_message 
+                        first_failure_result.exception_message
+                        or (first_failure_result.stderr[:200] if first_failure_result.stderr else None)
+                        or "Unknown runtime error (first failure captured)"
+                    )
+                elif last_result is not None:
+                    failure_reason = (
+                        last_result.exception_message
                         or (last_result.stderr[:200] if last_result.stderr else None)
-                        or "Unknown runtime error"
+                        or "Unknown runtime error (last result)"
                     )
                 else:
                     failure_reason = "Unknown runtime error (no result)"
@@ -2437,13 +3108,34 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             )
             logger.info("Markdown writes ENABLED via --allow-md-write flag")
 
-        return self.markdown_service.update_all_files(family, dry_run)
+        result = self.markdown_service.update_all_files(family, dry_run)
+
+        # Emit markdown update event
+        try:
+            from ..core.telemetry import emit_telemetry_event
+            emit_telemetry_event(
+                self.db, run_id, family,
+                event_type='markdown_update_complete',
+                phase='markdown_update',
+                success=True,
+                metadata={
+                    'files_updated': result.get('files_updated', 0),
+                    'examples_updated': result.get('examples_updated', 0),
+                    'dry_run': dry_run,
+                },
+            )
+        except Exception:
+            pass
+
+        return result
 
     def _consensus_review(
         self,
         content: str,
         snippets: List[Dict[str, Any]],
         num_passes: int = 2,
+        run_id: Optional[str] = None,
+        family: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run multiple review passes and require consensus for approval.
@@ -2463,6 +3155,12 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         for pass_num in range(num_passes):
             # Use dedicated final_review LLM service (C.6)
             result = self.final_review_llm_service.review_markdown_structured(content, snippets)
+            if run_id and family and self.final_review_llm_service._last_response:
+                self._emit_llm_telemetry(
+                    run_id=run_id, family=family,
+                    llm_response=self.final_review_llm_service._last_response,
+                    context_type="markdown_review", phase="final_review",
+                )
             reviews.append(result)
 
             # If first pass rejected, we still want second pass to confirm
@@ -2503,6 +3201,12 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             logger.info("Consensus review: split decision, running tiebreaker")
             # Use dedicated final_review LLM service (C.6)
             tiebreaker = self.final_review_llm_service.review_markdown_structured(content, snippets)
+            if run_id and family and self.final_review_llm_service._last_response:
+                self._emit_llm_telemetry(
+                    run_id=run_id, family=family,
+                    llm_response=self.final_review_llm_service._last_response,
+                    context_type="markdown_review", phase="final_review",
+                )
             if tiebreaker.get('approved', False):
                 return {
                     'approved': True,
@@ -2578,7 +3282,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                     # Call consensus review (2 passes for reliability)
                     review_result = self._consensus_review(
-                        content, snippets
+                        content, snippets, run_id=run_id, family=family
                     )
 
                     # Create ReviewResult model

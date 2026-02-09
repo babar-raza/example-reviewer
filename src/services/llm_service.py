@@ -25,6 +25,7 @@ except ImportError:
     INSTRUCTOR_AVAILABLE = False
 
 from .llm_contracts import ReviewResponse, ReviewIssue, IssueType, Severity
+from ..pipeline.error_complexity_classifier import ErrorComplexityClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,7 @@ using (var archive = new Archive(settings))
         seed: Optional[int] = None,
         deterministic_mode: bool = False,
         enforce_timeout: bool = True,
+        api_context_service: Optional[Any] = None,
     ):
         """
         Initialize LLM service.
@@ -159,6 +161,7 @@ using (var archive = new Archive(settings))
             seed: Random seed for deterministic mode
             deterministic_mode: Enable deterministic mode (use seed)
             enforce_timeout: Enforce application-level timeout
+            api_context_service: Optional APIContextService for API documentation context injection
         """
         self.provider = provider
         self.model = model
@@ -169,6 +172,7 @@ using (var archive = new Archive(settings))
         self.seed = seed
         self.deterministic_mode = deterministic_mode
         self.enforce_timeout = enforce_timeout
+        self.api_context_service = api_context_service
 
         # Resolve API key from environment if not provided
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -179,6 +183,20 @@ using (var archive = new Archive(settings))
         self._capabilities: Optional[ProviderCapabilities] = None
         self._capabilities_detected = False
         self._executor = ThreadPoolExecutor(max_workers=1)  # For timeout enforcement
+        self._last_response: Optional[LLMResponse] = None  # Last LLM response for telemetry capture
+
+        # Initialize complexity classifier for smart routing
+        self.complexity_classifier = ErrorComplexityClassifier()
+
+        # Initialize routing configuration (will be set by config loader)
+        self.routing_config: Optional[Dict[str, Any]] = None
+        self.routing_enabled = False
+        self._fallback_client = None
+
+        # Telemetry tracking for routing decisions
+        self._tier_distribution = {"small": 0, "medium": 0, "large": 0}
+        self._routed_models = {}  # Track which tier used which model
+
         self._init_client()
     
     def _init_client(self):
@@ -222,6 +240,98 @@ using (var archive = new Archive(settings))
         if self.provider != "ollama" and not self.api_key:
             return False
         return True
+
+    def set_routing_config(self, routing_config: Dict[str, Any]) -> None:
+        """
+        Set model routing configuration.
+
+        Args:
+            routing_config: Configuration dict with model_tiers, providers, etc.
+        """
+        self.routing_config = routing_config
+        self.routing_enabled = routing_config.get("enabled", False)
+        logger.info(f"Model routing {'enabled' if self.routing_enabled else 'disabled'}")
+
+    def _get_fallback_client(self) -> Optional[OpenAI]:
+        """
+        Get or create a fallback client (Ollama).
+
+        Returns:
+            OpenAI client for Ollama, or None if initialization fails
+        """
+        if self._fallback_client is not None:
+            return self._fallback_client
+
+        if not self.routing_config:
+            logger.warning("No routing config available for fallback client")
+            return None
+
+        try:
+            providers = self.routing_config.get("providers", {})
+            ollama_config = providers.get("ollama", {})
+
+            if not ollama_config:
+                logger.warning("Ollama configuration not found in routing config")
+                return None
+
+            base_url = ollama_config.get("base_url", "http://localhost:11434/v1")
+            timeout = ollama_config.get("timeout_seconds", 120)
+
+            client_kwargs = {
+                "base_url": base_url,
+                "api_key": "ollama",
+                "timeout": timeout if self.enforce_timeout else None,
+            }
+
+            self._fallback_client = OpenAI(**client_kwargs)
+            logger.debug(f"Initialized fallback Ollama client at {base_url}")
+            return self._fallback_client
+
+        except Exception as e:
+            logger.error(f"Failed to initialize fallback Ollama client: {e}")
+            return None
+
+    def _call_with_fallback(self, model: str, messages: List[Dict], **kwargs) -> Optional[Any]:
+        """
+        Try calling company LLM, fallback to Ollama if unavailable.
+
+        Args:
+            model: Model name to use
+            messages: Chat messages
+            **kwargs: Additional arguments for chat.completions.create
+
+        Returns:
+            Response object, or None if both primary and fallback fail
+        """
+        if not self.routing_config or not self.routing_config.get("fallback_enabled", True):
+            # Routing not enabled or fallback disabled, use primary client
+            if self._client:
+                return self._client.chat.completions.create(model=model, messages=messages, **kwargs)
+            return None
+
+        try:
+            # Try primary provider first
+            if self._client:
+                logger.debug(f"Calling primary provider with model {model}")
+                return self._client.chat.completions.create(model=model, messages=messages, **kwargs)
+
+        except (ConnectionError, TimeoutError, Exception) as e:
+            error_str = str(e).lower()
+            if self.routing_config.get("fallback_on_error", True) or isinstance(e, TimeoutError):
+                logger.warning(f"Primary provider unavailable ({type(e).__name__}): {e}. Attempting fallback to Ollama.")
+
+                try:
+                    # Try fallback client
+                    fallback_client = self._get_fallback_client()
+                    if fallback_client:
+                        logger.info(f"Falling back to Ollama with model {model}")
+                        return fallback_client.chat.completions.create(model=model, messages=messages, **kwargs)
+                except Exception as fallback_e:
+                    logger.error(f"Fallback client also failed: {fallback_e}")
+
+            raise
+
+        return None
 
     def get_provider_capabilities(self) -> ProviderCapabilities:
         """
@@ -332,6 +442,102 @@ using (var archive = new Archive(settings))
                 f"(provider={self.provider}, model={self.model})"
             )
 
+    def _extract_error_code_from_logs(self, error_logs: str) -> Optional[str]:
+        """
+        Extract first error code from error logs.
+
+        Looks for patterns like CS0246, CS0103, etc.
+
+        Args:
+            error_logs: Error log text
+
+        Returns:
+            Error code (e.g., 'CS0246') or None if not found
+        """
+        import re
+        # Match C# error codes (CS followed by 4 digits)
+        match = re.search(r'\b(CS\d{4})\b', error_logs)
+        if match:
+            return match.group(1)
+        return None
+
+    def _select_model_for_error(
+        self,
+        error_code: str,
+        error_message: str,
+        retry_count: int = 0,
+        all_errors: Optional[List[str]] = None,
+    ) -> str:
+        """
+        Select model tier based on error complexity.
+
+        Args:
+            error_code: Error code (e.g., 'CS0246')
+            error_message: Full error message
+            retry_count: Number of previous attempts
+            all_errors: List of error codes in current compile attempt
+
+        Returns:
+            Model name to use for this error
+        """
+        if not self.routing_enabled or not self.routing_config:
+            # Routing disabled, return default model
+            return self.model
+
+        try:
+            # Score the error complexity
+            context = {
+                "retry_count": retry_count,
+                "all_errors": all_errors or [],
+                "error_history": [],  # Could be populated from context
+            }
+
+            score = self.complexity_classifier.score_error(error_code, error_message, context)
+            tier = self.complexity_classifier.route_to_tier(score)
+
+            # Track tier distribution for telemetry
+            self._tier_distribution[tier] = self._tier_distribution.get(tier, 0) + 1
+
+            # Get model for this tier
+            model_tiers = self.routing_config.get("model_tiers", {})
+            model = model_tiers.get(tier, self.model)
+
+            # Track which model was routed to this tier
+            self._routed_models[tier] = model
+
+            logger.info(
+                f"Routed error {error_code} to {tier} tier (score={score:.2f}), "
+                f"using model: {model}"
+            )
+
+            return model
+
+        except Exception as e:
+            logger.error(f"Error in model selection: {e}. Using default model.")
+            return self.model
+
+    def get_tier_distribution(self) -> Dict[str, int]:
+        """
+        Get the distribution of errors routed to each tier.
+
+        Returns:
+            Dictionary with tier counts
+        """
+        return self._tier_distribution.copy()
+
+    def get_routing_metadata(self) -> Dict[str, Any]:
+        """
+        Get metadata about routing decisions.
+
+        Returns:
+            Dictionary with routing stats
+        """
+        return {
+            "routing_enabled": self.routing_enabled,
+            "tier_distribution": self.get_tier_distribution(),
+            "routed_models": self._routed_models.copy(),
+        }
+
     def complete(
         self,
         prompt: str,
@@ -340,6 +546,8 @@ using (var archive = new Archive(settings))
         temperature: Optional[float] = None,
         stop: Optional[List[str]] = None,
         timeout_override: Optional[int] = None,
+        error_logs: Optional[str] = None,
+        routing_context: Optional[Dict[str, Any]] = None,
     ) -> LLMResponse:
         """
         Generate a completion from the LLM.
@@ -351,6 +559,8 @@ using (var archive = new Archive(settings))
             temperature: Override default temperature
             stop: Stop sequences
             timeout_override: Override configured timeout
+            error_logs: Error logs for complexity-based routing (optional)
+            routing_context: Additional routing context with retry_count, all_errors (optional)
 
         Returns:
             LLMResponse with content and metadata
@@ -374,6 +584,20 @@ using (var archive = new Archive(settings))
         temp = temperature if temperature is not None else self.temperature
         timeout = timeout_override if timeout_override is not None else self.timeout_seconds
 
+        # Select model based on error complexity if routing is enabled
+        selected_model = self.model
+        if self.routing_enabled and error_logs:
+            error_code = self._extract_error_code_from_logs(error_logs)
+            if error_code:
+                ctx = routing_context or {}
+                selected_model = self._select_model_for_error(
+                    error_code,
+                    error_logs,
+                    retry_count=ctx.get("retry_count", 0),
+                    all_errors=ctx.get("all_errors", []),
+                )
+                logger.debug(f"Selected model {selected_model} for error {error_code}")
+
         # Get capabilities on first call (lazy detection)
         if not self._capabilities_detected:
             capabilities = self.get_provider_capabilities()
@@ -386,7 +610,7 @@ using (var archive = new Archive(settings))
             try:
                 # Build request kwargs
                 request_kwargs = {
-                    "model": self.model,
+                    "model": selected_model,
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temp,
@@ -407,13 +631,18 @@ using (var archive = new Archive(settings))
 
                 # Application-level timeout enforcement (C.5: wall timeout)
                 def make_request():
-                    return self._client.chat.completions.create(**request_kwargs)
+                    if self.routing_enabled and self.routing_config:
+                        # Use fallback chain
+                        return self._call_with_fallback(selected_model, messages, **request_kwargs)
+                    else:
+                        # Use primary client
+                        return self._client.chat.completions.create(**request_kwargs)
 
                 if self.enforce_timeout:
                     response = self._call_with_timeout(
                         make_request,
                         timeout,
-                        f"LLM complete (attempt {attempt + 1})"
+                        f"LLM complete (attempt {attempt + 1}, model={selected_model})"
                     )
                 else:
                     response = make_request()
@@ -421,7 +650,7 @@ using (var archive = new Archive(settings))
                 latency_ms = int((time.time() - start_time) * 1000)
 
                 choice = response.choices[0]
-                return LLMResponse(
+                resp = LLMResponse(
                     content=choice.message.content or "",
                     model=response.model,
                     usage={
@@ -434,6 +663,8 @@ using (var archive = new Archive(settings))
                     success=True,
                     raw_prompt=prompt,
                 )
+                self._last_response = resp
+                return resp
 
             except TimeoutError as e:
                 last_error = str(e)
@@ -448,9 +679,9 @@ using (var archive = new Archive(settings))
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_backoff_seconds * (attempt + 1))
 
-        return LLMResponse(
+        err_resp = LLMResponse(
             content="",
-            model=self.model,
+            model=selected_model,
             usage={},
             finish_reason="error",
             latency_ms=0,
@@ -458,6 +689,8 @@ using (var archive = new Archive(settings))
             error=last_error or "Unknown error",
             raw_prompt=prompt,
         )
+        self._last_response = err_resp
+        return err_resp
     
     def fix_code(
         self,
@@ -535,6 +768,41 @@ using (var archive = new Archive(settings))
                 patterns.append("```")
 
         return "\n".join(patterns) if patterns else ""
+
+    def _get_api_context_for_error(
+        self,
+        error_code: str,
+        error_message: str,
+    ) -> str:
+        """
+        Extract API context for an error using APIContextService.
+
+        Args:
+            error_code: Error code (e.g., 'CS0103')
+            error_message: Full error message
+
+        Returns:
+            Formatted API documentation context, or empty string if unavailable
+        """
+        if not self.api_context_service:
+            return ""
+
+        try:
+            api_context = self.api_context_service.get_context_for_error(
+                error_code,
+                error_message
+            )
+
+            if api_context:
+                logger.info(
+                    f"Injected {len(api_context)} chars of API context for {error_code}"
+                )
+                return api_context
+
+        except Exception as e:
+            logger.warning(f"Failed to get API context for error {error_code}: {e}")
+
+        return ""
 
     def _fix_compile_code(
         self,
@@ -677,11 +945,21 @@ If you cannot fix the code without major changes, return the original code uncha
                 api_patterns,
             ])
 
-        if api_context:
+        # Inject API context from error analysis if not already provided
+        injected_api_context = ""
+        if not api_context and error_logs:
+            injected_api_context = self._get_api_context_for_error(
+                self._extract_error_code_from_logs(error_logs) or "UNKNOWN",
+                error_logs
+            )
+
+        # Use either passed-in context or injected context
+        final_api_context = api_context or injected_api_context
+        if final_api_context:
             prompt_parts.extend([
                 "",
                 "## Relevant API Documentation:",
-                api_context,
+                final_api_context,
             ])
 
         if similar_examples:
@@ -706,6 +984,7 @@ If you cannot fix the code without major changes, return the original code uncha
             prompt="\n".join(prompt_parts),
             system_prompt=system_prompt,
             max_tokens=4096,
+            error_logs=error_logs,  # Pass error logs for complexity-based routing
         )
 
         # Clean up response - remove markdown code blocks if present
@@ -877,11 +1156,21 @@ If you cannot fix the code without major changes, return the original code uncha
                 "   ❌ 'input_folder' → ✅ use real directory from alias mapping",
             ])
 
-        if api_context:
+        # Inject API context from error analysis if not already provided
+        injected_api_context = ""
+        if not api_context and error_logs:
+            injected_api_context = self._get_api_context_for_error(
+                self._extract_error_code_from_logs(error_logs) or "UNKNOWN",
+                error_logs
+            )
+
+        # Use either passed-in context or injected context
+        final_api_context = api_context or injected_api_context
+        if final_api_context:
             prompt_parts.extend([
                 "",
                 "## Relevant API Documentation:",
-                api_context,
+                final_api_context,
             ])
 
         if similar_examples:
@@ -906,6 +1195,7 @@ If you cannot fix the code without major changes, return the original code uncha
             prompt="\n".join(prompt_parts),
             system_prompt=system_prompt,
             max_tokens=4096,
+            error_logs=error_logs,  # Pass error logs for complexity-based routing
         )
 
         # Clean up response - remove markdown code blocks if present
@@ -914,7 +1204,7 @@ If you cannot fix the code without major changes, return the original code uncha
             original_content = response.content
             cleaned, rejection_reason = self._clean_code_response(
                 response.content,
-                error_category="compile",
+                error_category="runtime",
                 db=None,  # Not available in this context
                 run_id=None,
                 family=None,
@@ -1376,6 +1666,7 @@ ONLY report actual issues. If the code is fine, set approved=true with empty iss
             client = instructor.from_openai(self._client)
 
             # Make the request with automatic schema enforcement
+            _instructor_start = time.time()
             response = client.chat.completions.create(
                 model=self.model,
                 response_model=ReviewResponse,
@@ -1385,6 +1676,17 @@ ONLY report actual issues. If the code is fine, set approved=true with empty iss
                 ],
                 max_retries=3,  # Automatic retry on validation failure
                 temperature=0,  # Deterministic for consistency
+            )
+            _instructor_latency = int((time.time() - _instructor_start) * 1000)
+
+            # Capture for telemetry (Instructor doesn't expose raw usage)
+            self._last_response = LLMResponse(
+                content=response.model_dump_json() if hasattr(response, 'model_dump_json') else str(response),
+                model=self.model,
+                usage={},
+                finish_reason="stop",
+                latency_ms=_instructor_latency,
+                success=True,
             )
 
             # Map snippet indices to example IDs
@@ -1701,13 +2003,18 @@ class LLMServiceFactory:
     """Factory for creating LLM service instances."""
 
     @staticmethod
-    def from_config(config: Dict[str, Any], use_final_review: bool = False) -> LLMService:
+    def from_config(
+        config: Dict[str, Any],
+        use_final_review: bool = False,
+        api_context_service: Optional[Any] = None,
+    ) -> LLMService:
         """
         Create LLM service from configuration dictionary.
 
         Args:
             config: Configuration dictionary with 'llm' and optionally 'final_review' sections
             use_final_review: If True, use final_review config instead of main llm config
+            api_context_service: Optional APIContextService for API documentation context injection
 
         Returns:
             LLMService instance
@@ -1738,6 +2045,7 @@ class LLMServiceFactory:
                 seed=None,  # Final review doesn't use seed
                 deterministic_mode=False,
                 enforce_timeout=True,
+                api_context_service=api_context_service,
             )
         else:
             # Use main llm configuration
@@ -1755,4 +2063,5 @@ class LLMServiceFactory:
                 seed=llm_config.get('seed'),
                 deterministic_mode=llm_config.get('deterministic_mode', False),
                 enforce_timeout=llm_config.get('enforce_timeout', True),
+                api_context_service=api_context_service,
             )

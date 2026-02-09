@@ -224,20 +224,21 @@ class ExampleReviewerTools:
         """
         try:
             family_config = self.orchestrator.config_manager.load_family_config(family)
-            
+            run_id = self.orchestrator.db.get_latest_run_id(family) or self.orchestrator.db.create_run(family, "compile_verify")
+
             stats = self.orchestrator._run_compilation_phase(
-                family, family_config, max_examples, skip_llm_fixes=True
+                run_id, family, family_config, max_examples, skip_llm_fixes=True
             )
-            
+
             return ToolResult(success=True, data=stats)
-            
+
         except Exception as e:
             return ToolResult(success=False, error=str(e))
-    
+
     # =========================================================================
     # COMPILE_FIX TOOL (CLI command: compile_fix)
     # =========================================================================
-    
+
     def compile_fix(
         self,
         family: str,
@@ -245,33 +246,34 @@ class ExampleReviewerTools:
     ) -> ToolResult:
         """
         Fix compilation errors using LLM.
-        
+
         Maps to CLI command: compile_fix
         Maps to phase: B_compile_verify_fix_loop (with LLM fixes)
-        
+
         Args:
             family: Family identifier
             max_examples: Maximum examples to fix
-            
+
         Returns:
             ToolResult with fix statistics
         """
         try:
             family_config = self.orchestrator.config_manager.load_family_config(family)
-            
+            run_id = self.orchestrator.db.get_latest_run_id(family) or self.orchestrator.db.create_run(family, "compile_fix")
+
             stats = self.orchestrator._run_compilation_phase(
-                family, family_config, max_examples, skip_llm_fixes=False
+                run_id, family, family_config, max_examples, skip_llm_fixes=False
             )
-            
+
             return ToolResult(success=True, data=stats)
-            
+
         except Exception as e:
             return ToolResult(success=False, error=str(e))
-    
+
     # =========================================================================
     # RUNTIME_VERIFY TOOL (CLI command: runtime_verify)
     # =========================================================================
-    
+
     def runtime_verify(
         self,
         family: str,
@@ -292,9 +294,10 @@ class ExampleReviewerTools:
         """
         try:
             family_config = self.orchestrator.config_manager.load_family_config(family)
+            run_id = self.orchestrator.db.get_latest_run_id(family) or self.orchestrator.db.create_run(family, "runtime_verify")
 
             stats = self.orchestrator._run_runtime_phase(
-                family, family_config, max_examples, skip_llm_fixes=True
+                run_id, family, family_config, max_examples, skip_llm_fixes=True
             )
 
             return ToolResult(success=True, data=stats)
@@ -326,9 +329,10 @@ class ExampleReviewerTools:
         """
         try:
             family_config = self.orchestrator.config_manager.load_family_config(family)
+            run_id = self.orchestrator.db.get_latest_run_id(family) or self.orchestrator.db.create_run(family, "runtime_fix")
 
             stats = self.orchestrator._run_runtime_phase(
-                family, family_config, max_examples, skip_llm_fixes=False
+                run_id, family, family_config, max_examples, skip_llm_fixes=False
             )
 
             return ToolResult(success=True, data=stats)
@@ -591,8 +595,10 @@ class ExampleReviewerTools:
         max_examples: Optional[int] = None,
         skip_runtime: bool = False,
         skip_llm_fixes: bool = False,
+        skip_llm_runtime_fixes: bool = False,
         dry_run: bool = False,
         allow_md_write: bool = False,
+        strategy_config: Optional[dict] = None,
     ) -> ToolResult:
         """
         Run the full pipeline for a family.
@@ -602,8 +608,10 @@ class ExampleReviewerTools:
             max_examples: Maximum examples to process
             skip_runtime: Skip runtime verification
             skip_llm_fixes: Skip LLM-based fixing
+            skip_llm_runtime_fixes: Skip LLM fixes for runtime errors only
             dry_run: Don't write changes
             allow_md_write: Override global config to allow markdown writes
+            strategy_config: Dict controlling which fix strategies to enable
 
         Returns:
             ToolResult with full pipeline results
@@ -614,8 +622,10 @@ class ExampleReviewerTools:
                 max_examples=max_examples,
                 skip_runtime=skip_runtime,
                 skip_llm_fixes=skip_llm_fixes,
+                skip_llm_runtime_fixes=skip_llm_runtime_fixes,
                 dry_run=dry_run,
                 allow_md_write=allow_md_write,
+                strategy_config=strategy_config,
             )
 
             return ToolResult(success=results['success'], data=results)

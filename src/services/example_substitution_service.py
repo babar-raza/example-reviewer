@@ -156,7 +156,7 @@ class ExampleSubstitutionService:
         self,
         original_code: str,
         trigger_info: Dict[str, Any],
-        family: str = "zip",
+        family: str,  # Required parameter, no default
         original_app_context: Optional[str] = None,
     ) -> Optional[Tuple[str, str, Dict[str, Any]]]:
         """
@@ -423,5 +423,190 @@ def apply_quick_fixes(code: str, errors: List[str]) -> Tuple[str, List[str]]:
 
         applied_fixes.append('using_aspose_zip_sevenzip')
         logger.info("Added using Aspose.Zip.SevenZip;")
+
+    # Fix 4: System.IO.Compression Ban Transformer
+    # Detect and remove System.IO.Compression usage, replace with Aspose.Zip
+    if 'using System.IO.Compression;' in fixed_code:
+        # Remove the using statement
+        fixed_code = re.sub(
+            r'using\s+System\.IO\.Compression\s*;[\r\n]*',
+            '',
+            fixed_code
+        )
+
+        # Ensure Aspose.Zip using is present
+        if 'using Aspose.Zip;' not in fixed_code:
+            using_insert = 'using Aspose.Zip;\n'
+            using_pattern = r'(using\s+[\w\.]+\s*;)'
+            matches = list(re.finditer(using_pattern, fixed_code))
+
+            if matches:
+                last_using = matches[-1]
+                insert_pos = last_using.end()
+                fixed_code = (
+                    fixed_code[:insert_pos] +
+                    '\n' + using_insert +
+                    fixed_code[insert_pos:]
+                )
+            else:
+                fixed_code = using_insert + fixed_code
+
+        applied_fixes.append('system_io_compression_ban')
+        logger.info("Removed System.IO.Compression and ensured Aspose.Zip usage")
+
+    # Fix 5: Known Hallucination Patterns Transformer
+    # Detect and fix common System.IO.Compression hallucination patterns
+    hallucination_patterns = [
+        (r'ZipArchiveMode\.\w+', 'ZipArchiveMode'),
+        (r'ZipFile\.OpenRead\s*\([^)]*\)', 'ZipFile.OpenRead'),
+        (r'ZipFile\.CreateFromDirectory\s*\([^)]*\)', 'ZipFile.CreateFromDirectory'),
+    ]
+
+    for pattern, pattern_name in hallucination_patterns:
+        if re.search(pattern, fixed_code):
+            # Comment out lines containing these patterns
+            lines = fixed_code.split('\n')
+            modified = False
+
+            for i, line in enumerate(lines):
+                if re.search(pattern, line) and not line.strip().startswith('//'):
+                    # Add comment explaining the issue
+                    indent = len(line) - len(line.lstrip())
+                    lines[i] = (
+                        ' ' * indent +
+                        f'// REMOVED: {pattern_name} is not available in Aspose.Zip API\n' +
+                        ' ' * indent + '// ' + line.strip()
+                    )
+                    modified = True
+
+            if modified:
+                fixed_code = '\n'.join(lines)
+                applied_fixes.append(f'hallucination_fix_{pattern_name.lower().replace(".", "_")}')
+                logger.info(f"Commented out hallucinated pattern: {pattern_name}")
+
+    # Ensure Aspose.Zip using is present if hallucinations were found
+    if any('hallucination_fix' in fix for fix in applied_fixes):
+        if 'using Aspose.Zip;' not in fixed_code:
+            using_insert = 'using Aspose.Zip;\n'
+            using_pattern = r'(using\s+[\w\.]+\s*;)'
+            matches = list(re.finditer(using_pattern, fixed_code))
+
+            if matches:
+                last_using = matches[-1]
+                insert_pos = last_using.end()
+                fixed_code = (
+                    fixed_code[:insert_pos] +
+                    '\n' + using_insert +
+                    fixed_code[insert_pos:]
+                )
+            else:
+                fixed_code = using_insert + fixed_code
+
+    # Fix 6: Async-to-Sync Normalization Transformer
+    # Convert unnecessary async Task Main to void/int Main when no await is used
+    main_async_pattern = r'static\s+async\s+Task(?:<int>)?\s+Main\s*\([^)]*\)\s*\{'
+
+    if re.search(main_async_pattern, fixed_code):
+        # Check if there's any await keyword used (as a keyword, not in strings/comments)
+        # Remove string literals and comments before checking for await
+        code_without_strings = re.sub(r'"[^"]*"', '', fixed_code)
+        code_without_comments = re.sub(r'//[^\n]*', '', code_without_strings)
+
+        # Look for await followed by whitespace, which indicates actual usage
+        has_await = re.search(r'\bawait\s+', code_without_comments)
+
+        if not has_await:
+            # Replace async Task Main with void Main
+            fixed_code = re.sub(
+                r'static\s+async\s+Task\s+Main\s*\(',
+                'static void Main(',
+                fixed_code
+            )
+
+            # Remove any unnecessary async Task<int> pattern
+            fixed_code = re.sub(
+                r'static\s+async\s+Task<int>\s+Main\s*\(',
+                'static int Main(',
+                fixed_code
+            )
+
+            applied_fixes.append('async_to_sync_normalization')
+            logger.info("Converted unnecessary async Task Main to synchronous Main")
+
+    # Fix 7: Path Handling Fixes Transformer
+    # Replace hardcoded Windows paths with Path.Combine or platform-independent paths
+    windows_path_pattern = r'"([A-Za-z]:\\[^"]+)"'
+    windows_paths = re.findall(windows_path_pattern, fixed_code)
+
+    if windows_paths:
+        for win_path in windows_paths:
+            # Split path into components
+            parts = win_path.replace('\\\\', '\\').split('\\')
+
+            # Skip if it's just a drive letter or single component
+            if len(parts) <= 1:
+                continue
+
+            # Create Path.Combine replacement
+            path_parts = ', '.join([f'"{part}"' for part in parts if part])
+            path_combine = f'Path.Combine({path_parts})'
+
+            # Replace in code
+            fixed_code = fixed_code.replace(f'"{win_path}"', path_combine)
+
+        # Ensure System.IO using is present
+        if 'using System.IO;' not in fixed_code:
+            using_insert = 'using System.IO;\n'
+            using_pattern = r'(using\s+[\w\.]+\s*;)'
+            matches = list(re.finditer(using_pattern, fixed_code))
+
+            if matches:
+                last_using = matches[-1]
+                insert_pos = last_using.end()
+                fixed_code = (
+                    fixed_code[:insert_pos] +
+                    '\n' + using_insert +
+                    fixed_code[insert_pos:]
+                )
+            else:
+                fixed_code = using_insert + fixed_code
+
+        applied_fixes.append('path_handling_fixes')
+        logger.info(f"Replaced {len(windows_paths)} hardcoded Windows paths with Path.Combine")
+
+    # Fix 8: Inject MyDir / ArtifactsDir / master declarations for partial snippets
+    # These are test-harness constants from Aspose example repos
+    harness_vars = {
+        'MyDir': 'string MyDir = @"./";',
+        'ArtifactsDir': 'string ArtifactsDir = @"./artifacts/";',
+        'master': 'var master = new Document();',
+    }
+    injected_vars = []
+    for var_name, declaration in harness_vars.items():
+        # Check if the variable is used but never declared
+        if re.search(rf'\b{var_name}\b', fixed_code):
+            # Skip if already declared (var X, Type X, string X patterns)
+            if re.search(rf'(?:string|var|Document)\s+{var_name}\b', fixed_code):
+                continue
+            injected_vars.append(declaration)
+
+    if injected_vars:
+        # Try inserting after Main opening brace (post-wrap)
+        main_pattern = r'(static\s+(?:async\s+)?(?:void|Task|int)\s+Main\s*\([^)]*\)\s*\{)'
+        match = re.search(main_pattern, fixed_code)
+        if match:
+            inject_block = '\n'.join(f'        {d}' for d in injected_vars)
+            insert_pos = match.end()
+            fixed_code = (
+                fixed_code[:insert_pos] +
+                '\n' + inject_block + '\n' +
+                fixed_code[insert_pos:]
+            )
+        else:
+            # Pre-wrap: prepend declarations at top of raw code (before usings)
+            inject_block = '\n'.join(injected_vars)
+            fixed_code = inject_block + '\n' + fixed_code
+        applied_fixes.append('harness_var_injection')
+        logger.info(f"Injected harness variable declarations: {[v for v in harness_vars if any(v in d for d in injected_vars)]}")
 
     return fixed_code, applied_fixes

@@ -67,6 +67,8 @@ class AppContextClassifier:
         r'^\s*public\s+class\s+\w+',
         r'^\s*public\s+interface\s+\w+',
         r'^\s*public\s+static\s+class\s+\w+',
+        r'^\s*static\s+class\s+\w+',
+        r'^\s*internal\s+(?:static\s+)?class\s+\w+',
     ]
 
     # Entrypoint patterns (has Main method)

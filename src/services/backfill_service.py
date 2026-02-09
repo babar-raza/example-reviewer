@@ -723,6 +723,9 @@ class BackfillService:
         """
         Backfill example files from example_repo to disk (artifacts/backfill/<family>/examples/).
 
+        Handles both examples_path and samples_path if configured, storing them in
+        separate subdirectories (examples/ and samples/).
+
         Also creates an index JSON file with metadata for each example.
 
         Args:
@@ -740,17 +743,19 @@ class BackfillService:
             # Load family config
             family_config = self.config_manager.load_family_config(family)
 
-            # Destination path
-            examples_dest = Path("artifacts/backfill") / family / "examples"
-            index_path = Path("artifacts/backfill") / family / "examples-index.json"
+            # Base destination path
+            base_dest = Path("artifacts/backfill") / family
+            index_path = base_dest / "examples-index.json"
 
             # Check if examples already exist
+            examples_dest = base_dest / "examples"
+            samples_dest = base_dest / "samples"
             if examples_dest.exists() and not force:
                 return BackfillResult(
                     success=True,
                     target="examples_files",
                     source="local",
-                    destination=str(examples_dest),
+                    destination=str(base_dest),
                     skipped=True,
                     skip_reason="examples_files_already_exist",
                     duration_seconds=(datetime.now() - start_time).total_seconds()
@@ -762,19 +767,21 @@ class BackfillService:
                     success=False,
                     target="examples_files",
                     source="example_repo",
-                    destination=str(examples_dest),
+                    destination=str(base_dest),
                     error="example_repo.url not configured",
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
 
-            # Check if examples_path is configured
-            if not family_config.example_repo.examples_path:
+            # Check if at least one path is configured
+            has_examples = bool(family_config.example_repo.examples_path)
+            has_samples = bool(getattr(family_config.example_repo, 'samples_path', ''))
+            if not has_examples and not has_samples:
                 return BackfillResult(
                     success=False,
                     target="examples_files",
                     source=family_config.example_repo.url,
-                    destination=str(examples_dest),
-                    error="example_repo.examples_path not configured",
+                    destination=str(base_dest),
+                    error="neither examples_path nor samples_path configured",
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
 
@@ -784,7 +791,7 @@ class BackfillService:
                     success=False,
                     target="examples_files",
                     source=family_config.example_repo.url,
-                    destination=str(examples_dest),
+                    destination=str(base_dest),
                     error="GitPython not installed - pip install gitpython",
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
@@ -801,76 +808,93 @@ class BackfillService:
                     success=False,
                     target="examples_files",
                     source=family_config.example_repo.url,
-                    destination=str(examples_dest),
+                    destination=str(base_dest),
                     error="Failed to clone repository",
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
 
-            # Extract examples from repo
-            examples_path = repo_path / family_config.example_repo.examples_path
-            if not examples_path.exists():
+            # Collect source paths to process
+            source_paths = []
+            if has_examples:
+                examples_src = repo_path / family_config.example_repo.examples_path
+                if examples_src.exists():
+                    source_paths.append(("examples", examples_src, examples_dest))
+                else:
+                    logger.warning(f"examples_path not found: {family_config.example_repo.examples_path}")
+
+            if has_samples:
+                samples_src = repo_path / family_config.example_repo.samples_path
+                if samples_src.exists():
+                    source_paths.append(("samples", samples_src, samples_dest))
+                else:
+                    logger.warning(f"samples_path not found: {family_config.example_repo.samples_path}")
+
+            if not source_paths:
                 return BackfillResult(
                     success=False,
                     target="examples_files",
-                    source=str(examples_path),
-                    destination=str(examples_dest),
-                    error=f"examples_path not found in repo: {family_config.example_repo.examples_path}",
+                    source=family_config.example_repo.url,
+                    destination=str(base_dest),
+                    error="no valid source paths found in repo",
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
-
-            # Create destination directory (with path guard)
-            assert_write_allowed(examples_dest, reason=f"backfill examples files for {family}")
-            examples_dest.mkdir(parents=True, exist_ok=True)
 
             # Copy .cs files and build index
             index_entries = []
             files_copied = 0
 
-            # Find all C# example files (sorted deterministically)
-            cs_files = sorted(examples_path.rglob("*.cs"), key=lambda p: str(p).lower())
+            for source_type, source_path, dest_path in source_paths:
+                # Create destination directory (with path guard)
+                assert_write_allowed(dest_path, reason=f"backfill {source_type} files for {family}")
+                dest_path.mkdir(parents=True, exist_ok=True)
 
-            for cs_file in cs_files:
-                try:
-                    # Calculate relative path
-                    relative_path = cs_file.relative_to(examples_path)
-                    dest_file = examples_dest / relative_path
+                # Find all C# example files (sorted deterministically)
+                cs_files = sorted(source_path.rglob("*.cs"), key=lambda p: str(p).lower())
 
-                    # Create parent directory if needed
-                    assert_write_allowed(dest_file, reason=f"backfill example file {cs_file.name}")
-                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                for cs_file in cs_files:
+                    try:
+                        # Calculate relative path
+                        relative_path = cs_file.relative_to(source_path)
+                        dest_file = dest_path / relative_path
 
-                    # Copy file
-                    shutil.copy2(cs_file, dest_file)
-                    files_copied += 1
+                        # Create parent directory if needed
+                        assert_write_allowed(dest_file, reason=f"backfill {source_type} file {cs_file.name}")
+                        dest_file.parent.mkdir(parents=True, exist_ok=True)
 
-                    # Read file for index metadata
-                    code = cs_file.read_text(encoding='utf-8')
+                        # Copy file
+                        shutil.copy2(cs_file, dest_file)
+                        files_copied += 1
 
-                    # Generate stable ID from file path
-                    file_id = hashlib.sha256(str(relative_path).encode()).hexdigest()[:16]
+                        # Read file for index metadata
+                        code = cs_file.read_text(encoding='utf-8')
 
-                    # Basic tag inference (can be enhanced later)
-                    tags = []
-                    if "compression" in code.lower():
-                        tags.append("compression")
-                    if "extract" in code.lower():
-                        tags.append("extraction")
-                    if "encrypt" in code.lower():
-                        tags.append("encryption")
-                    if "password" in code.lower():
-                        tags.append("password")
+                        # Generate stable ID from file path (include source_type for uniqueness)
+                        full_path = f"{source_type}/{relative_path}"
+                        file_id = hashlib.sha256(full_path.encode()).hexdigest()[:16]
 
-                    # Add to index
-                    index_entries.append({
-                        "id": file_id,
-                        "path": str(relative_path).replace("\\", "/"),
-                        "class_name": cs_file.stem,
-                        "tags": tags,
-                        "size_bytes": cs_file.stat().st_size,
-                    })
+                        # Basic tag inference (can be enhanced later)
+                        tags = [source_type]  # Tag with source type
+                        if "compression" in code.lower():
+                            tags.append("compression")
+                        if "extract" in code.lower():
+                            tags.append("extraction")
+                        if "encrypt" in code.lower():
+                            tags.append("encryption")
+                        if "password" in code.lower():
+                            tags.append("password")
 
-                except Exception as e:
-                    logger.warning(f"Failed to copy example file {cs_file}: {e}")
+                        # Add to index
+                        index_entries.append({
+                            "id": file_id,
+                            "path": full_path.replace("\\", "/"),
+                            "class_name": cs_file.stem,
+                            "source_type": source_type,
+                            "tags": tags,
+                            "size_bytes": cs_file.stat().st_size,
+                        })
+
+                    except Exception as e:
+                        logger.warning(f"Failed to copy {source_type} file {cs_file}: {e}")
 
             # Write index JSON
             assert_write_allowed(index_path, reason=f"write examples index for {family}")
@@ -881,16 +905,18 @@ class BackfillService:
                     "source": family_config.example_repo.url,
                     "generated_at": datetime.now().isoformat(),
                     "total_examples": len(index_entries),
+                    "examples_count": len([e for e in index_entries if e.get("source_type") == "examples"]),
+                    "samples_count": len([e for e in index_entries if e.get("source_type") == "samples"]),
                     "examples": index_entries
                 }, f, indent=2)
 
-            logger.info(f"Backfilled {files_copied} example files for {family} to {examples_dest}")
+            logger.info(f"Backfilled {files_copied} example/sample files for {family} to {base_dest}")
 
             return BackfillResult(
                 success=True,
                 target="examples_files",
                 source=family_config.example_repo.url,
-                destination=str(examples_dest),
+                destination=str(base_dest),
                 files_copied=files_copied,
                 duration_seconds=(datetime.now() - start_time).total_seconds()
             )
