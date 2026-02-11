@@ -1,12 +1,12 @@
 {
   "llm": {
-    "provider": "ollama",
-    "model": "qwen2.5-coder:7b",
+    "provider": "openai",
+    "model": "gpt-oss",
     "temperature": 0.2,
     "max_retries": 5,
     "retry_backoff_seconds": 5,
-    "api_key_env_var": "OPENAI_API_KEY",
-    "base_url": "http://localhost:11434/v1",
+    "api_key_env_var": "litellm_key",
+    "base_url": "https://llm.professionalize.com/v1",
     "timeout_seconds": 120,
     "seed": null,
     "deterministic_mode": false,
@@ -24,7 +24,7 @@
     "telemetry_log_resource_decisions": true
   },
   "git": {
-    "enabled": false,
+    "enabled": true,
     "commit_message_template": "chore({family}): verify {count} examples",
     "commit_description_template": "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}",
     "only_commit_touched_files": true
@@ -100,7 +100,7 @@
     },
     "normalize_to_canonical": true,
     "regex_timeout_seconds": 5.0,
-    "min_line_count": 5,
+    "min_line_count": 1,
     "max_line_count": 500,
     "content_exclude_patterns": [
       "^[\\s\\n]*\\{[\\s\\n]*[\"']",
@@ -140,8 +140,8 @@
   "final_review": {
     "enabled": true,
     "confidence_threshold": 0.7,
-    "provider": "ollama",
-    "model": "qwen2.5-coder:7b",
+    "provider": "openai",
+    "model": "gpt-oss",
     "timeout_seconds": 60,
     "enforce_model": true,
     "auto_remediation_enabled": false,
@@ -178,7 +178,7 @@
     "providers": {
       "company": {
         "base_url": "https://llm.professionalize.com/v1",
-        "api_key_env": "LLM_API_KEY",
+        "api_key_env": "litellm_key",
         "timeout_seconds": 10,
         "fallback_to": "ollama"
       }
@@ -189,7 +189,7 @@
     "providers": {
       "company": {
         "base_url": "https://llm.professionalize.com/v1",
-        "api_key_env": "LLM_API_KEY",
+        "api_key_env": "litellm_key",
         "fallback_to": "ollama",
         "timeout_seconds": 120
       },
@@ -200,9 +200,9 @@
       }
     },
     "model_tiers": {
-      "small": "qwen2.5-coder:1.5b",
-      "medium": "qwen2.5-coder:7b",
-      "large": "qwen2.5-coder:32b"
+      "small": "gpt-oss",
+      "medium": "gpt-oss",
+      "large": "gpt-oss"
     },
     "routing_rules": {
       "missing_type": "small",

@@ -4,6 +4,7 @@ Supports OpenAI-compatible models as required by the spec.
 """
 
 import os
+import re
 import time
 import json
 import logging
@@ -122,7 +123,7 @@ using (var archive = new Archive(settings))
 
     # Error-specific fix instructions
     ERROR_FIX_INSTRUCTIONS = {
-        "missing_type": "Add the appropriate 'using' statement at the top. Common Aspose.Zip namespaces: Aspose.Zip, Aspose.Zip.Saving, Aspose.Zip.SevenZip, Aspose.Zip.Rar",
+        "missing_type": "Add the appropriate 'using' statement at the top. Look up the correct namespace for the missing type in the API catalog context below.",
         "undefined_variable": "Declare the variable before use with proper type, or check if it's a typo",
         "missing_semicolon": "Add semicolon at the end of the statement",
         "missing_brace": "Add the missing closing brace }",
@@ -144,7 +145,6 @@ using (var archive = new Archive(settings))
         seed: Optional[int] = None,
         deterministic_mode: bool = False,
         enforce_timeout: bool = True,
-        api_context_service: Optional[Any] = None,
     ):
         """
         Initialize LLM service.
@@ -161,7 +161,6 @@ using (var archive = new Archive(settings))
             seed: Random seed for deterministic mode
             deterministic_mode: Enable deterministic mode (use seed)
             enforce_timeout: Enforce application-level timeout
-            api_context_service: Optional APIContextService for API documentation context injection
         """
         self.provider = provider
         self.model = model
@@ -172,7 +171,6 @@ using (var archive = new Archive(settings))
         self.seed = seed
         self.deterministic_mode = deterministic_mode
         self.enforce_timeout = enforce_timeout
-        self.api_context_service = api_context_service
 
         # Resolve API key from environment if not provided
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -454,7 +452,6 @@ using (var archive = new Archive(settings))
         Returns:
             Error code (e.g., 'CS0246') or None if not found
         """
-        import re
         # Match C# error codes (CS followed by 4 digits)
         match = re.search(r'\b(CS\d{4})\b', error_logs)
         if match:
@@ -609,6 +606,7 @@ using (var archive = new Archive(settings))
             start_time = time.time()
             try:
                 # Build request kwargs
+                # For routing path, model/messages passed explicitly; for direct path, in kwargs
                 request_kwargs = {
                     "model": selected_model,
                     "messages": messages,
@@ -633,7 +631,10 @@ using (var archive = new Archive(settings))
                 def make_request():
                     if self.routing_enabled and self.routing_config:
                         # Use fallback chain
-                        return self._call_with_fallback(selected_model, messages, **request_kwargs)
+                        # Extract model and messages from request_kwargs for explicit passing
+                        fallback_kwargs = {k: v for k, v in request_kwargs.items()
+                                         if k not in ("model", "messages")}
+                        return self._call_with_fallback(selected_model, messages, **fallback_kwargs)
                     else:
                         # Use primary client
                         return self._client.chat.completions.create(**request_kwargs)
@@ -706,6 +707,7 @@ using (var archive = new Archive(settings))
         description_context: Optional[str] = None,
         topic: Optional[str] = None,
         original_code: Optional[str] = None,
+        catalog=None,
     ) -> LLMResponse:
         """
         Fix code using LLM with enhanced context.
@@ -723,6 +725,7 @@ using (var archive = new Archive(settings))
             description_context: Paragraphs before the code block
             topic: Topic inferred from file path
             original_code: Original code before any fixes (for anchoring)
+            catalog: APICatalogService instance for enriched error context (optional)
 
         Returns:
             LLMResponse with fixed code
@@ -731,13 +734,13 @@ using (var archive = new Archive(settings))
             return self._fix_runtime_code(
                 code, error_logs, api_context, similar_examples, test_data_info,
                 family_config, scaffolding_hints, section_heading, description_context, topic,
-                original_code
+                original_code, catalog=catalog,
             )
         else:
             return self._fix_compile_code(
                 code, error_logs, api_context, similar_examples, family_config,
                 scaffolding_hints, section_heading, description_context, topic,
-                original_code
+                original_code, catalog=catalog,
             )
     
     def _get_api_patterns(self, family_config: Optional[Dict[str, Any]]) -> str:
@@ -775,34 +778,141 @@ using (var archive = new Archive(settings))
         error_message: str,
     ) -> str:
         """
-        Extract API context for an error using APIContextService.
+        Extract API context for an error.
+
+        Note: APIContextService has been removed (TASK-DLL-03).
+        This method is kept as a stub to avoid breaking callers; it always returns "".
 
         Args:
             error_code: Error code (e.g., 'CS0103')
             error_message: Full error message
 
         Returns:
-            Formatted API documentation context, or empty string if unavailable
+            Empty string (service removed)
         """
-        if not self.api_context_service:
+        return ""
+
+    def _build_catalog_context(self, error_code: str, error_message: str, catalog) -> str:
+        """
+        Build targeted catalog context for a specific error.
+
+        Uses the APICatalogService to provide precise API reference data
+        (namespace, enum members, constructor signatures) relevant to the
+        specific error being fixed.  Keeps output to 100-300 tokens max.
+
+        Args:
+            error_code: C# error code (e.g. 'CS0246', 'CS0103')
+            error_message: Full error message text
+            catalog: APICatalogService instance
+
+        Returns:
+            Formatted context string, or empty string if no relevant context.
+        """
+        if catalog is None or not catalog.is_loaded:
             return ""
 
-        try:
-            api_context = self.api_context_service.get_context_for_error(
-                error_code,
-                error_message
-            )
+        parts: List[str] = []
 
-            if api_context:
-                logger.info(
-                    f"Injected {len(api_context)} chars of API context for {error_code}"
-                )
-                return api_context
+        # ---- Extract type/symbol names from error message ----
+        # CS0246: "The type or namespace name 'Foo' could not be found"
+        # CS0103: "The name 'Foo' does not exist in the current context"
+        # CS0234: "The type or namespace name 'Foo' does not exist in 'Bar'"
+        type_names: List[str] = []
+        if error_code in ("CS0246", "CS0103", "CS0234"):
+            matches = re.findall(r"'(\w+)'", error_message)
+            type_names = matches[:3]  # Limit to first 3 extracted names
 
-        except Exception as e:
-            logger.warning(f"Failed to get API context for error {error_code}: {e}")
+        # CS1503: "cannot convert from 'X' to 'Y'"
+        elif error_code == "CS1503":
+            matches = re.findall(r"'(\w+)'", error_message)
+            type_names = matches[:4]
 
-        return ""
+        # CS7036: "no argument given that corresponds to required parameter 'x' of 'Type.Method'"
+        elif error_code == "CS7036":
+            matches = re.findall(r"'(\w[\w.]*)'", error_message)
+            type_names = matches[:3]
+
+        # CS0117: "'Type' does not contain a definition for 'Member'"
+        elif error_code == "CS0117":
+            matches = re.findall(r"'(\w+)'", error_message)
+            type_names = matches[:2]
+
+        # CS1061: "'Type' does not contain a definition for 'Member'"
+        elif error_code == "CS1061":
+            matches = re.findall(r"'([\w.]+)'", error_message)
+            type_names = [m.split(".")[-1] for m in matches[:2]]
+
+        # CS0104: "ambiguous reference between 'NS1.Type' and 'NS2.Type'"
+        elif error_code == "CS0104":
+            matches = re.findall(r"'([\w.]+)'", error_message)
+            # Extract simple type name from qualified names
+            for m in matches[:2]:
+                simple = m.rsplit(".", 1)[-1]
+                if simple not in type_names:
+                    type_names.append(simple)
+
+        # Generic fallback: try to extract quoted identifiers
+        if not type_names:
+            matches = re.findall(r"'(\w+)'", error_message)
+            type_names = [m for m in matches[:2] if len(m) > 1]
+
+        # ---- Look up each extracted name in the catalog ----
+        namespaces_mentioned: set = set()
+        for name in type_names:
+            ns = catalog.get_namespace_for_type(name)
+            if ns:
+                using = catalog.get_using_directive(name)
+                parts.append(f"- `{name}` is in namespace `{ns}`")
+                if using:
+                    parts.append(f"  Add: `{using}`")
+                namespaces_mentioned.add(ns)
+
+                # For CS0117/CS0103: show enum members if it's an enum
+                if error_code in ("CS0117", "CS0103"):
+                    members = catalog.get_enum_members(name)
+                    if members:
+                        display = ", ".join(members[:10])
+                        if len(members) > 10:
+                            display += f", ... ({len(members)} total)"
+                        parts.append(f"  Enum members: {display}")
+
+                # For CS1061: show properties and methods (member not found)
+                if error_code == "CS1061":
+                    all_members = catalog.get_all_members(name)
+                    if all_members:
+                        display = ", ".join(all_members[:15])
+                        if len(all_members) > 15:
+                            display += f", ... ({len(all_members)} total)"
+                        parts.append(f"  Known members: {display}")
+
+                # For CS7036/CS1503: show constructor signatures
+                if error_code in ("CS7036", "CS1503"):
+                    ctors = catalog.get_constructor_signatures(name)
+                    if ctors:
+                        parts.append(f"  Constructor overloads for `{name}`:")
+                        for ctor in ctors[:5]:
+                            params = ctor.get("params", "")
+                            parts.append(f"    new {name}({params})")
+
+            # Check ambiguity for CS0104
+            if error_code == "CS0104" and catalog.is_ambiguous(name):
+                amb_ns = catalog.get_ambiguous_namespaces(name)
+                parts.append(f"- `{name}` is ambiguous across: {', '.join(amb_ns)}")
+                parts.append(f"  Use fully qualified name (e.g. `{amb_ns[0]}.{name}`)")
+
+        # ---- Add namespace list summary (for CS0246/CS0234 missing using) ----
+        if error_code in ("CS0246", "CS0234") and not parts:
+            # Type not found in catalog, provide namespace list for reference
+            all_ns = sorted(catalog.get_namespace_set())
+            if all_ns:
+                parts.append(f"Available namespaces ({len(all_ns)}):")
+                # Show up to 15 namespaces
+                for ns in all_ns[:15]:
+                    parts.append(f"  - {ns}")
+                if len(all_ns) > 15:
+                    parts.append(f"  ... and {len(all_ns) - 15} more")
+
+        return "\n".join(parts) if parts else ""
 
     def _fix_compile_code(
         self,
@@ -816,6 +926,7 @@ using (var archive = new Archive(settings))
         description_context: Optional[str] = None,
         topic: Optional[str] = None,
         original_code: Optional[str] = None,
+        catalog=None,
     ) -> LLMResponse:
         """Fix compilation errors with enhanced context and minimal-change rules."""
 
@@ -962,6 +1073,29 @@ If you cannot fix the code without major changes, return the original code uncha
                 final_api_context,
             ])
 
+        # Inject targeted catalog context for this specific error (TASK-DLL-07)
+        if catalog:
+            error_code = self._extract_error_code_from_logs(error_logs) or "UNKNOWN"
+            catalog_context = self._build_catalog_context(error_code, error_logs, catalog)
+            if catalog_context:
+                prompt_parts.extend([
+                    "",
+                    "## Exact API Reference (from assembly catalog):",
+                    catalog_context,
+                ])
+
+            # Also inject namespace list for missing-type errors
+            if error_code in ("CS0246", "CS0234", "CS0103"):
+                all_ns = sorted(catalog.get_namespace_set())
+                if all_ns:
+                    ns_str = ", ".join(all_ns[:20])
+                    if len(all_ns) > 20:
+                        ns_str += f", ... ({len(all_ns)} total)"
+                    prompt_parts.extend([
+                        "",
+                        f"## Known Namespaces: {ns_str}",
+                    ])
+
         if similar_examples:
             prompt_parts.extend([
                 "",
@@ -1034,6 +1168,7 @@ If you cannot fix the code without major changes, return the original code uncha
         description_context: Optional[str] = None,
         topic: Optional[str] = None,
         original_code: Optional[str] = None,
+        catalog=None,
     ) -> LLMResponse:
         """Fix runtime errors with enhanced context and minimal-change rules."""
 
@@ -1147,13 +1282,13 @@ If you cannot fix the code without major changes, return the original code uncha
                 "",
                 "CRITICAL FILE PATH RULES:",
                 "1. When you see placeholder paths (e.g., 'path\\\\to\\\\file.zip', 'C:\\\\data\\\\input'), replace with actual test files from above",
-                "2. When you see aliased file names (check 'File Aliases' section if present), use the REAL file name (left side of →)",
+                "2. When you see aliased file names (check 'File Aliases' section if present), use the REAL file name (left side of ->)",
                 "3. Use relative paths from the workspace directory - DO NOT use absolute paths",
-                "4. Examples of placeholder → real file transformations:",
-                "   ❌ 'parent.zip' → ✅ use real file from alias mapping",
-                "   ❌ 'path\\\\to\\\\input.zip' → ✅ use real file from available list",
-                "   ❌ 'C:\\\\data\\\\archive.zip' → ✅ 'archive.zip' (if available)",
-                "   ❌ 'input_folder' → ✅ use real directory from alias mapping",
+                "4. Examples of placeholder -> real file transformations:",
+                "   BAD: 'parent.zip' -> GOOD: use real file from alias mapping",
+                "   BAD: 'path\\\\to\\\\input.zip' -> GOOD: use real file from available list",
+                "   BAD: 'C:\\\\data\\\\archive.zip' -> GOOD: 'archive.zip' (if available)",
+                "   BAD: 'input_folder' -> GOOD: use real directory from alias mapping",
             ])
 
         # Inject API context from error analysis if not already provided
@@ -1172,6 +1307,17 @@ If you cannot fix the code without major changes, return the original code uncha
                 "## Relevant API Documentation:",
                 final_api_context,
             ])
+
+        # Inject targeted catalog context for this specific error (TASK-DLL-07)
+        if catalog:
+            error_code = self._extract_error_code_from_logs(error_logs) or "UNKNOWN"
+            catalog_context = self._build_catalog_context(error_code, error_logs, catalog)
+            if catalog_context:
+                prompt_parts.extend([
+                    "",
+                    "## Exact API Reference (from assembly catalog):",
+                    catalog_context,
+                ])
 
         if similar_examples:
             prompt_parts.extend([
@@ -2006,7 +2152,6 @@ class LLMServiceFactory:
     def from_config(
         config: Dict[str, Any],
         use_final_review: bool = False,
-        api_context_service: Optional[Any] = None,
     ) -> LLMService:
         """
         Create LLM service from configuration dictionary.
@@ -2014,7 +2159,6 @@ class LLMServiceFactory:
         Args:
             config: Configuration dictionary with 'llm' and optionally 'final_review' sections
             use_final_review: If True, use final_review config instead of main llm config
-            api_context_service: Optional APIContextService for API documentation context injection
 
         Returns:
             LLMService instance
@@ -2045,7 +2189,6 @@ class LLMServiceFactory:
                 seed=None,  # Final review doesn't use seed
                 deterministic_mode=False,
                 enforce_timeout=True,
-                api_context_service=api_context_service,
             )
         else:
             # Use main llm configuration
@@ -2063,5 +2206,4 @@ class LLMServiceFactory:
                 seed=llm_config.get('seed'),
                 deterministic_mode=llm_config.get('deterministic_mode', False),
                 enforce_timeout=llm_config.get('enforce_timeout', True),
-                api_context_service=api_context_service,
             )
