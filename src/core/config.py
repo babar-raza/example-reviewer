@@ -152,6 +152,21 @@ class APICatalogConfig(BaseModel):
     storage_type: str = Field(default="json", pattern="^(json|database)$")
     path: str = ""
     lazy_loading: bool = False
+    assembly_verified: bool = Field(default=False, description="Whether catalog was validated against assembly")
+    assembly_version: str = Field(default="", description="Version of assembly used for validation")
+
+
+class FixtureResolverConfig(BaseModel):
+    """Fixture resolver configuration for self-healing runtime environment."""
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    max_generations_per_run: int = Field(default=50, ge=0)
+    registry_path: str = ""
+    skip_output_patterns: List[str] = Field(
+        default_factory=lambda: ["output*", "result*", "*.out"],
+        description="Glob patterns for filenames that should NOT be generated (look like outputs)"
+    )
 
 
 class TelemetryConfig(BaseModel):
@@ -211,8 +226,8 @@ class BackfillConfig(BaseModel):
 
     auto_enabled: bool = Field(default=False, description="Enable automatic backfill")
     targets: List[str] = Field(
-        default_factory=lambda: ["test_data", "api_reference", "examples", "gist_source_code"],
-        description="Backfill targets (test_data, api_reference, examples, gist_source_code)"
+        default_factory=lambda: ["test_data", "examples", "gist_source_code"],
+        description="Backfill targets (test_data, examples, gist_source_code)"
     )
     github_timeout_seconds: int = Field(default=120, ge=10)
     retry_on_failure: bool = Field(default=True)
@@ -618,19 +633,6 @@ class ExampleRepoConfig(BaseModel):
     ref: str = "main"
 
 
-class ApiReferenceConfig(BaseModel):
-    """API reference configuration for fetching documentation from Git."""
-    model_config = ConfigDict(extra="forbid")
-
-    git_repo: str = Field(default="", description="Git repository URL for API reference")
-    git_ref: str = Field(default="main", description="Git branch or tag to clone")
-    git_subpath: str = Field(default="", description="Subdirectory within repo containing API docs")
-    shallow_clone: bool = Field(default=True, description="Use shallow clone (depth=1)")
-    auto_fetch: bool = Field(default=True, description="Automatically fetch on first use")
-    max_context_chars: int = Field(default=8000, ge=100, le=50000, description="Max chars for context extraction")
-    clone_timeout_seconds: int = Field(default=120, ge=10, le=600, description="Git clone timeout in seconds")
-
-
 class FamilyConfig(BaseModel):
     """Per-family configuration settings."""
     model_config = ConfigDict(extra="forbid")
@@ -658,11 +660,13 @@ class FamilyConfig(BaseModel):
     
     # External resources
     example_repo: ExampleRepoConfig = Field(default_factory=ExampleRepoConfig)
-    api_reference: ApiReferenceConfig = Field(default_factory=ApiReferenceConfig)
     gist: Optional[GistConfig] = None
 
     # API catalog (HEAL-05)
     api_catalog: Optional[APICatalogConfig] = None
+
+    # Fixture resolver (self-healing runtime environment)
+    fixture_resolver: Optional[FixtureResolverConfig] = None
 
     # Patterns and hints
     patterns: List[Dict[str, Any]] = Field(default_factory=list)
@@ -863,10 +867,6 @@ class ConfigurationManager:
         if 'example_repo' in data:
             parsed['example_repo'] = ExampleRepoConfig(**data['example_repo'])
         
-        # API reference
-        if 'api_reference' in data:
-            parsed['api_reference'] = ApiReferenceConfig(**data['api_reference'])
-
         # Discovery patterns
         if 'discovery_patterns' in data:
             parsed['discovery_patterns'] = DiscoveryPatternsConfig(**data['discovery_patterns'])
@@ -883,6 +883,10 @@ class ConfigurationManager:
         # API catalog config (HEAL-05)
         if 'api_catalog' in data:
             parsed['api_catalog'] = APICatalogConfig(**data['api_catalog'])
+
+        # Fixture resolver config
+        if 'fixture_resolver' in data:
+            parsed['fixture_resolver'] = FixtureResolverConfig(**data['fixture_resolver'])
 
         # Learned patterns config
         if 'learned_patterns' in data:

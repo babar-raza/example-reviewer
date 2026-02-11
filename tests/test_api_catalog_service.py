@@ -21,7 +21,7 @@ class TestAPICatalogService:
     def test_load_with_explicit_path(self):
         svc = APICatalogService("zip", catalog_path=CATALOG_PATH)
         assert svc.is_loaded
-        assert len(svc.get_all_types()) == 137
+        assert len(svc.get_all_types()) == 138
 
     def test_missing_family_graceful(self):
         svc = APICatalogService("nonexistent_family_xyzzy")
@@ -70,7 +70,7 @@ class TestAPICatalogService:
     def test_using_directive_map(self):
         svc = APICatalogService("zip")
         m = svc.get_using_directive_map()
-        assert len(m) == 137
+        assert len(m) == 138
         assert "Archive" in m
 
 
@@ -131,15 +131,27 @@ class TestCatalogConfigIntegration:
         fc = cm.load_family_config("zip")
         svc = APICatalogService("zip", catalog_path=fc.api_catalog.path)
         assert svc.is_loaded
-        assert len(svc.get_all_types()) == 137
+        assert len(svc.get_all_types()) == 138
 
 
 class TestSemanticMicrofixesIntegration:
     """Integration: semantic_microfixes uses catalog via service."""
 
-    def test_allowlist_populated_from_catalog(self):
+    def test_catalog_directives_available_via_registry(self):
+        """Test that catalog directives are accessible via FamilyServiceRegistry."""
+        from pathlib import Path
+        from src.pipeline.family_service_registry import FamilyServiceRegistry
+        from src.core.config import ConfigurationManager
         from src.services.semantic_microfixes import USING_DIRECTIVE_ALLOWLIST
-        # Catalog has 137 types; allowlist also has base BCL types
-        assert len(USING_DIRECTIVE_ALLOWLIST) >= 137
-        assert "Archive" in USING_DIRECTIVE_ALLOWLIST
-        assert "TarArchive" in USING_DIRECTIVE_ALLOWLIST
+
+        config_manager = ConfigurationManager()
+        registry = FamilyServiceRegistry(config_manager, artifacts_dir=Path("artifacts"))
+
+        # Verify full catalog available through registry
+        directives = registry.get_using_directives('zip')
+        assert len(directives) >= 137
+        assert "Archive" in directives
+        assert "TarArchive" in directives
+
+        # Verify static fallback still exists (for backwards compatibility)
+        assert len(USING_DIRECTIVE_ALLOWLIST) >= 5  # Hardcoded fallback entries

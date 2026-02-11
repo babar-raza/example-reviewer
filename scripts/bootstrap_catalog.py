@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
 """
-Bootstrap API Catalog for a product family.
+Bootstrap API Catalog for a product family via assembly reflection.
 
-Generates a {family}_api_catalog.json from test-reference documentation files.
-Scans .md/.html API reference docs to extract type names, namespaces, and
-using directives.
+Generates a {family}_api_catalog.json by invoking the test-examples catalog-types
+command, which uses System.Reflection to extract all exported types from the
+NuGet assembly. This replaces the old markdown/HTML extraction approach.
 
 Usage:
-    python scripts/bootstrap_catalog.py --family zip --auto
-    python scripts/bootstrap_catalog.py --family zip --reference-dir test-reference/zip
-    python scripts/bootstrap_catalog.py --family words --reference-dir test-reference/words --dry-run
+    python scripts/bootstrap_catalog.py --family zip
+    python scripts/bootstrap_catalog.py --family zip --dry-run
+    python scripts/bootstrap_catalog.py --family words --package Aspose.Words --version 26.1.0
+    python scripts/bootstrap_catalog.py --family cells --package Aspose.Cells --version "*" --dry-run
 
-HEAL-01: Phase 0 Bootstrap Script (Task 1)
+HEAL-01 / TASK-DLL-02: Assembly-based catalog generation (replaces markdown extraction)
 """
 
 import argparse
 import json
 import logging
-import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict
 
 sys.stdout.reconfigure(encoding="utf-8")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -30,131 +31,182 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
-def find_reference_dir(family: str) -> Path:
-    """Auto-detect reference directory for a family."""
-    candidates = [
-        PROJECT_ROOT / "test-reference" / family,
-        PROJECT_ROOT / "docs" / "api-reference" / family,
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    raise FileNotFoundError(
-        f"No reference directory found for family '{family}'. "
-        f"Searched: {', '.join(str(c) for c in candidates)}"
-    )
-
-
-def extract_types_from_docs(reference_dir: Path) -> Tuple[Dict[str, str], Set[str]]:
+def invoke_catalog_types(package: str, version: str, namespace_prefix: str) -> dict:
     """
-    Extract type->namespace mappings from API reference documentation.
+    Invoke test-examples/Program.cs catalog-types command to extract assembly types.
+
+    Runs `dotnet run --project {PROJECT_ROOT}/test-examples -- catalog-types` with
+    the given package, version, and namespace prefix. Parses the JSON output,
+    skipping any build warnings that appear before the JSON block.
+
+    Args:
+        package: NuGet package name (e.g., "Aspose.Zip")
+        version: NuGet package version (e.g., "25.12.0" or "*" for latest)
+        namespace_prefix: Namespace prefix to filter types (e.g., "Aspose.Zip")
 
     Returns:
-        Tuple of (types_dict, namespaces_set)
+        dict with Namespaces, Types, TypesFullMap, AmbiguousTypes,
+        AssemblyVersion, TotalTypes, TotalNamespaces, etc.
+
+    Raises:
+        RuntimeError: If the dotnet command fails or times out
+        ValueError: If no JSON output is found
     """
-    types: Dict[str, str] = {}
-    namespaces: Set[str] = set()
+    logger.info(f"Invoking catalog-types for {package} v{version} (prefix: {namespace_prefix})...")
 
-    doc_files = list(reference_dir.rglob("*.md")) + list(reference_dir.rglob("*.html"))
-    logger.info(f"Scanning {len(doc_files)} documentation files in {reference_dir}")
+    cmd = [
+        "dotnet",
+        "run",
+        "--project",
+        str(PROJECT_ROOT / "test-examples"),
+        "--",
+        "catalog-types",
+        "--package",
+        package,
+        "--version",
+        version,
+        "--namespace-prefix",
+        namespace_prefix,
+    ]
 
-    # Pattern: "Aspose.Something.TypeName" in headings, titles, or code
-    fqn_pattern = re.compile(r"\b(Aspose(?:\.\w+)+)\.([A-Z]\w+)\b")
-    # Pattern: namespace declarations
-    ns_pattern = re.compile(r"\bnamespace\s+(Aspose(?:\.\w+)+)")
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=120
+        )
 
-    for doc_file in doc_files:
-        try:
-            content = doc_file.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            continue
+        if result.returncode != 0:
+            logger.error(f"Catalog extraction failed with code {result.returncode}")
+            logger.error(f"STDERR: {result.stderr}")
+            raise RuntimeError(f"Catalog extraction failed: {result.stderr}")
 
-        # Extract fully qualified type names
-        for match in fqn_pattern.finditer(content):
-            namespace = match.group(1)
-            type_name = match.group(2)
-            # Skip common false positives
-            if type_name in ("NET", "Api", "Com", "Zip"):
-                continue
-            namespaces.add(namespace)
-            if type_name not in types:
-                types[type_name] = namespace
+        # Filter out build warnings — find the first line starting with '{'
+        output_lines = result.stdout.strip().split("\n")
+        json_start = -1
+        for i, line in enumerate(output_lines):
+            if line.strip().startswith("{"):
+                json_start = i
+                break
 
-        # Extract explicit namespace declarations
-        for match in ns_pattern.finditer(content):
-            namespaces.add(match.group(1))
+        if json_start == -1:
+            raise ValueError(
+                "No JSON output found from catalog-types command. "
+                f"Output was: {result.stdout[:500]}"
+            )
 
-    return types, namespaces
+        json_output = "\n".join(output_lines[json_start:])
+        return json.loads(json_output)
+
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Catalog extraction timed out after 120 seconds")
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON output: {e}")
+        logger.error(f"Output was: {result.stdout[:500]}")
+        raise
 
 
-def build_catalog(
-    family: str,
-    types: Dict[str, str],
-    namespaces: Set[str],
-    reference_dir: Path,
-) -> Dict:
-    """Build the catalog JSON structure."""
-    sorted_namespaces = sorted(namespaces)
+def transform_assembly_catalog(assembly_catalog: dict, family: str) -> Dict:
+    """
+    Transform raw catalog-types output into the standard catalog JSON format.
+
+    Converts the raw assembly reflection output (PascalCase keys) into the
+    normalized catalog structure used by the rest of the pipeline.
+
+    Args:
+        assembly_catalog: Raw dict from invoke_catalog_types()
+        family: Product family name (e.g., "zip", "words")
+
+    Returns:
+        dict with _metadata, namespaces, types, using_directive_map,
+        and namespace_ambiguous_types sections.
+    """
+    namespaces = sorted(assembly_catalog.get("Namespaces", []))
+    types = dict(sorted(assembly_catalog.get("Types", {}).items()))
+    ambiguous_types = assembly_catalog.get("AmbiguousTypes", {})
+    assembly_version = assembly_catalog.get("AssemblyVersion")
+    total_types = assembly_catalog.get("TotalTypes", len(types))
+    total_namespaces = assembly_catalog.get("TotalNamespaces", len(namespaces))
+
+    # Build using directive map: type -> "using {namespace};"
     using_directive_map = {t: f"using {ns};" for t, ns in types.items()}
-
-    # Detect ambiguous types
-    ns_by_type: Dict[str, List[str]] = {}
-    for t, ns in types.items():
-        ns_by_type.setdefault(t, []).append(ns)
-    ambiguous = {t: nss for t, nss in ns_by_type.items() if len(nss) > 1}
 
     return {
         "_metadata": {
             "family": family,
-            "source": f"{reference_dir} API documentation ({len(list(reference_dir.rglob('*')))} files)",
-            "generated_by": "scripts/bootstrap_catalog.py (HEAL-01)",
+            "source": f"Aspose.{family.capitalize()} v{assembly_version or 'unknown'} assembly (via reflection)",
+            "generated_by": "scripts/bootstrap_catalog.py (assembly reflection)",
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "total_types": len(types),
-            "total_namespaces": len(sorted_namespaces),
+            "assembly_version": assembly_version,
+            "total_types": total_types,
+            "total_namespaces": total_namespaces,
+            "total_ambiguous_types": len(ambiguous_types),
+            "extraction_method": "assembly_reflection",
+            "assembly_validation": {
+                "enabled": True,
+                "assembly_version": assembly_version,
+                "direct_extraction": True,
+            },
         },
-        "namespaces": sorted_namespaces,
-        "types": dict(sorted(types.items())),
-        "namespace_ambiguous_types": ambiguous,
+        "namespaces": namespaces,
+        "types": types,
         "using_directive_map": dict(sorted(using_directive_map.items())),
+        "namespace_ambiguous_types": ambiguous_types,
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Bootstrap API catalog for a family")
-    parser.add_argument("--family", required=True, help="Product family (e.g., zip, words)")
-    parser.add_argument("--reference-dir", help="Path to API reference docs")
-    parser.add_argument("--output", help="Output JSON path (default: config/families/{family}_api_catalog.json)")
-    parser.add_argument("--auto", action="store_true", help="Auto-detect reference directory")
-    parser.add_argument("--dry-run", action="store_true", help="Print results without writing")
+    parser = argparse.ArgumentParser(
+        description="Bootstrap API catalog for a family via assembly reflection"
+    )
+    parser.add_argument(
+        "--family", required=True, help="Product family (e.g., zip, words, cells)"
+    )
+    parser.add_argument(
+        "--package", help="NuGet package name (default: Aspose.{Family})"
+    )
+    parser.add_argument(
+        "--version", default="*", help='NuGet package version (default: "*" for latest)'
+    )
+    parser.add_argument(
+        "--namespace-prefix",
+        help="Namespace prefix to filter (default: same as package name)",
+    )
+    parser.add_argument(
+        "--output",
+        help="Output JSON path (default: config/families/{family}_api_catalog.json)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print catalog JSON to stdout without writing to file",
+    )
     args = parser.parse_args()
 
     family = args.family
 
-    if args.reference_dir:
-        reference_dir = Path(args.reference_dir)
-    elif args.auto:
-        reference_dir = find_reference_dir(family)
-    else:
-        parser.error("Provide --reference-dir or --auto")
-
-    if not reference_dir.exists():
-        logger.error(f"Reference directory not found: {reference_dir}")
-        sys.exit(1)
-
-    logger.info(f"Bootstrapping API catalog for '{family}' from {reference_dir}")
-
-    types, namespaces = extract_types_from_docs(reference_dir)
-    logger.info(f"Extracted {len(types)} types in {len(namespaces)} namespaces")
-
-    if len(types) < 5:
-        logger.warning(f"Only {len(types)} types found. Check reference directory content.")
-
-    catalog = build_catalog(family, types, namespaces, reference_dir)
+    # Derive defaults from family name
+    package = args.package or f"Aspose.{family.capitalize()}"
+    version = args.version
+    namespace_prefix = args.namespace_prefix or package
 
     output_path = Path(args.output) if args.output else (
         PROJECT_ROOT / "config" / "families" / f"{family}_api_catalog.json"
     )
 
+    logger.info(f"Bootstrapping API catalog for '{family}'")
+    logger.info(f"  Package: {package}")
+    logger.info(f"  Version: {version}")
+    logger.info(f"  Namespace prefix: {namespace_prefix}")
+
+    # Step 1: Invoke assembly reflection
+    assembly_catalog = invoke_catalog_types(package, version, namespace_prefix)
+    raw_types = assembly_catalog.get("TotalTypes", 0)
+    raw_namespaces = assembly_catalog.get("TotalNamespaces", 0)
+    logger.info(f"Assembly contains {raw_types} types in {raw_namespaces} namespaces")
+
+    # Step 2: Transform to standard catalog format
+    catalog = transform_assembly_catalog(assembly_catalog, family)
+
+    # Step 3: Output
     if args.dry_run:
         print(json.dumps(catalog, indent=2))
         logger.info(f"[DRY RUN] Would write to {output_path}")
@@ -164,12 +216,20 @@ def main():
         logger.info(f"Wrote catalog to {output_path}")
 
     # Summary
-    print(f"\n{'='*50}")
-    print(f"Family: {family}")
-    print(f"Types: {len(types)}")
-    print(f"Namespaces: {len(namespaces)}")
-    print(f"Output: {output_path}")
-    print(f"{'='*50}")
+    final_types = len(catalog.get("types", {}))
+    final_namespaces = len(catalog.get("namespaces", []))
+    ambiguous = len(catalog.get("namespace_ambiguous_types", {}))
+
+    print(f"\n{'='*60}")
+    print(f"Family:           {family}")
+    print(f"Package:          {package}")
+    print(f"Assembly Version: {catalog['_metadata'].get('assembly_version', 'N/A')}")
+    print(f"Types:            {final_types}")
+    print(f"Namespaces:       {final_namespaces}")
+    print(f"Ambiguous Types:  {ambiguous}")
+    print(f"Extraction:       Assembly Reflection (direct)")
+    print(f"Output:           {output_path}")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":

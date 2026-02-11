@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
+# Known-bad namespaces that should NOT be in validated catalogs
+# NOTE: After v26.1.0 reflection verification, Drawing.Charts DOES exist!
+KNOWN_BAD_NAMESPACES = {
+    "words": [],  # All namespaces validated via assembly reflection
+    "zip": [],  # ZIP catalog is clean
+}
+
 
 def load_catalog(family: str, path: str = None) -> dict:
     """Load catalog JSON."""
@@ -38,13 +45,15 @@ def load_catalog(family: str, path: str = None) -> dict:
     return json.loads(catalog_path.read_text(encoding="utf-8"))
 
 
-def validate(catalog: dict, min_types: int = 100, min_namespaces: int = 10) -> list:
+def validate(catalog: dict, min_types: int = 100, min_namespaces: int = 10, family: str = None) -> list:
     """Run validation checks. Returns list of (level, message) tuples."""
     results = []
 
     types = catalog.get("types", {})
     namespaces = catalog.get("namespaces", [])
     using_map = catalog.get("using_directive_map", {})
+    metadata = catalog.get("_metadata", {})
+    assembly_validation = metadata.get("assembly_validation", {})
 
     # Check type count
     if len(types) >= min_types:
@@ -93,6 +102,68 @@ def validate(catalog: dict, min_types: int = 100, min_namespaces: int = 10) -> l
     else:
         results.append(("FAIL", f"Namespace coverage: {coverage:.1f}% (below 80%)"))
 
+    # Assembly Validation Checks (Layer 2)
+    if assembly_validation:
+        assembly_enabled = assembly_validation.get("enabled", False)
+        if assembly_enabled:
+            results.append(("PASS", "Assembly validation: ENABLED"))
+
+            # Check assembly version is recorded
+            assembly_version = assembly_validation.get("assembly_version")
+            if assembly_version:
+                results.append(("PASS", f"Assembly version: {assembly_version}"))
+            else:
+                results.append(("WARN", "Assembly version not recorded"))
+
+            # Check validation stats (for legacy filtered catalogs)
+            types_before = assembly_validation.get("types_before_validation", 0)
+            types_after = assembly_validation.get("types_after_validation", 0)
+            types_removed = assembly_validation.get("types_removed", 0)
+
+            if types_before > 0:
+                # Legacy filtered catalog — show filtering stats
+                if types_removed > 0:
+                    removal_pct = (types_removed / types_before * 100) if types_before > 0 else 0
+                    results.append(("PASS", f"Types filtered: {types_removed} removed ({removal_pct:.1f}%)"))
+                else:
+                    results.append(("PASS", "Types filtered: 0 removed (100% match)"))
+
+            # Check for known-bad namespaces
+            if family and family in KNOWN_BAD_NAMESPACES:
+                bad_namespaces = KNOWN_BAD_NAMESPACES[family]
+                found_bad = [ns for ns in bad_namespaces if ns in namespaces]
+                if not found_bad:
+                    results.append(("PASS", f"Known-bad namespaces: None found (checked {len(bad_namespaces)})"))
+                else:
+                    results.append(("FAIL", f"Known-bad namespaces found: {found_bad}"))
+
+            # Direct extraction check (TASK-DLL-02: assembly reflection catalogs)
+            direct_extraction = assembly_validation.get("direct_extraction", False)
+            if direct_extraction:
+                results.append(("PASS", "Direct assembly extraction: YES (no markdown intermediary)"))
+            else:
+                results.append(("WARN", "Direct assembly extraction: NO (filtered from markdown)"))
+
+        else:
+            results.append(("FAIL", "Assembly validation: DISABLED (expected enabled=True)"))
+    else:
+        results.append(("WARN", "Assembly validation: NOT CONFIGURED"))
+
+    # Extraction method check (TASK-DLL-02)
+    extraction_method = metadata.get("extraction_method")
+    if extraction_method:
+        if extraction_method == "assembly_reflection":
+            results.append(("PASS", f"Extraction method: {extraction_method}"))
+        else:
+            results.append(("WARN", f"Extraction method: {extraction_method} (expected assembly_reflection)"))
+
+    # Assembly version in top-level metadata
+    top_assembly_version = metadata.get("assembly_version")
+    if top_assembly_version:
+        results.append(("PASS", f"Metadata assembly_version: {top_assembly_version}"))
+    else:
+        results.append(("WARN", "Metadata assembly_version: not recorded"))
+
     return results
 
 
@@ -110,7 +181,7 @@ def main():
         logger.error(str(e))
         sys.exit(1)
 
-    results = validate(catalog, args.min_types, args.min_namespaces)
+    results = validate(catalog, args.min_types, args.min_namespaces, args.family)
 
     # Print results
     print(f"\nValidation Results for '{args.family}' API Catalog")

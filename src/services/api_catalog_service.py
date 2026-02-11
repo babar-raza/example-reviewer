@@ -33,6 +33,10 @@ class APICatalogService:
         self._namespaces: List[str] = []
         self._using_directives: Dict[str, str] = {}  # type_name -> using directive
         self._ambiguous_types: Dict[str, List[str]] = {}
+        self._enums: Dict[str, List[str]] = {}        # enum_name -> [member_names]
+        self._constructors: Dict[str, List[Dict]] = {}  # type_name -> [{params: ...}]
+        self._key_methods: Dict[str, List[Dict]] = {}   # type_name -> [{name, params, returns, static}]
+        self._properties: Dict[str, List[str]] = {}      # type_name -> [property_names]
         self._metadata: Dict = {}
         self._loaded = False
 
@@ -55,10 +59,27 @@ class APICatalogService:
             self._types = data.get("types", {})
             self._using_directives = data.get("using_directive_map", {})
             self._ambiguous_types = data.get("namespace_ambiguous_types", {})
+            # Enrichment sections (optional — present when catalog generated with --full)
+            self._enums = data.get("enums", {})
+            self._constructors = data.get("constructors", {})
+            self._key_methods = data.get("key_methods", {})
+            self._properties = data.get("properties", {})
             self._loaded = True
+
+            enrichment_parts = []
+            if self._enums:
+                enrichment_parts.append(f"{len(self._enums)} enums")
+            if self._constructors:
+                enrichment_parts.append(f"{len(self._constructors)} constructors")
+            if self._key_methods:
+                enrichment_parts.append(f"{len(self._key_methods)} key_methods")
+            if self._properties:
+                enrichment_parts.append(f"{len(self._properties)} properties")
+            enrichment_str = f", {', '.join(enrichment_parts)}" if enrichment_parts else ""
+
             logger.info(
                 f"APICatalogService({self.family}): loaded {len(self._types)} types, "
-                f"{len(self._namespaces)} namespaces from {path.name}"
+                f"{len(self._namespaces)} namespaces{enrichment_str} from {path.name}"
             )
         except (json.JSONDecodeError, KeyError) as e:
             logger.error(f"Failed to load API catalog from {path}: {e}")
@@ -110,3 +131,96 @@ class APICatalogService:
     def get_namespace_set(self) -> Set[str]:
         """Return the set of all known namespaces (for whitelist integration)."""
         return set(self._namespaces)
+
+    # --- Enrichment query methods (TASK-DLL-06) ---
+
+    def get_enum_members(self, enum_name: str) -> List[str]:
+        """Return member names for an enum type, or [] if not found/not enriched.
+
+        Args:
+            enum_name: The simple name of the enum type (e.g. "CompressionLevel")
+
+        Returns:
+            List of member name strings, e.g. ["Store", "Deflate", "Normal", ...]
+        """
+        return list(self._enums.get(enum_name, []))
+
+    def get_all_enums(self) -> Dict[str, List[str]]:
+        """Return the full enum_name -> [members] dictionary."""
+        return dict(self._enums)
+
+    def get_constructor_signatures(self, type_name: str) -> List[Dict]:
+        """Return constructor overloads for a type, or [] if not found/not enriched.
+
+        Args:
+            type_name: The simple name of the type (e.g. "Archive")
+
+        Returns:
+            List of dicts, each with a "params" key describing the constructor signature.
+            Example: [{"params": ""}, {"params": "string? sourceFileName"}]
+        """
+        return list(self._constructors.get(type_name, []))
+
+    def get_method_signatures(self, type_name: str, method_name: Optional[str] = None) -> List[Dict]:
+        """Return key method signatures for a type, optionally filtered by method name.
+
+        Args:
+            type_name: The simple name of the type (e.g. "Archive")
+            method_name: If provided, only return methods whose name contains this string
+                         (case-insensitive). If None, return all key methods.
+
+        Returns:
+            List of dicts with keys: "name", "params", "returns", "static".
+            Example: [{"name": "Save", "params": "string? destinationFileName",
+                       "returns": "void", "static": "false"}]
+        """
+        methods = self._key_methods.get(type_name, [])
+        if method_name is not None:
+            method_lower = method_name.lower()
+            methods = [m for m in methods if method_lower in m.get("name", "").lower()]
+        return list(methods)
+
+    def get_properties(self, type_name: str) -> List[str]:
+        """Return public property names for a type, or [] if not found/not enriched.
+
+        Args:
+            type_name: The simple name of the type (e.g. "BarcodeParameters")
+
+        Returns:
+            List of property name strings, e.g. ["BarColor", "BackColor", "Resolution"]
+        """
+        return list(self._properties.get(type_name, []))
+
+    def get_all_members(self, type_name: str) -> List[str]:
+        """Return all known member names (properties + methods) for a type.
+
+        Useful for CS1061 "member not found" fuzzy matching — merges properties
+        and method names into a single list for difflib matching.
+
+        Args:
+            type_name: The simple name of the type
+
+        Returns:
+            Combined list of property names and method names (deduplicated)
+        """
+        members = set(self._properties.get(type_name, []))
+        for m in self._key_methods.get(type_name, []):
+            name = m.get("name", "")
+            if name:
+                members.add(name)
+        return sorted(members)
+
+    def find_type_case_insensitive(self, type_name: str) -> Optional[str]:
+        """Find a type by case-insensitive match. Returns the correctly-cased name or None.
+
+        Useful for CS0246 where casing is wrong (e.g. BarCodeGenerator vs BarcodeGenerator).
+        """
+        lower = type_name.lower()
+        for catalog_type in self._types:
+            if catalog_type.lower() == lower:
+                return catalog_type
+        return None
+
+    def has_enrichment(self) -> bool:
+        """Check whether the catalog includes enrichment data (enums, constructors, methods, properties)."""
+        return bool(self._enums or self._constructors or self._key_methods or self._properties)
