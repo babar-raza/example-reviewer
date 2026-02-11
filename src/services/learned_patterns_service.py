@@ -92,6 +92,8 @@ class LearnedPatternsService:
         self.family = family
         self.db_path = db_path or DEFAULT_DB_PATH
         self._connection: Optional[sqlite3.Connection] = None
+        # In-run cache: patterns that succeeded during this run get priority boost
+        self._run_cache: Dict[str, List[int]] = {}  # error_signature -> [pattern_ids that succeeded]
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create database connection."""
@@ -146,7 +148,20 @@ class LearnedPatternsService:
         try:
             cursor = conn.execute(query, params)
             rows = cursor.fetchall()
-            return [LearnedPattern.from_row(row) for row in rows]
+            patterns = [LearnedPattern.from_row(row) for row in rows]
+
+            # Boost patterns that succeeded in this run (in-run cache)
+            cached_ids = set(self._run_cache.get(error_signature, []))
+            if cached_ids:
+                boosted = [p for p in patterns if p.id in cached_ids]
+                rest = [p for p in patterns if p.id not in cached_ids]
+                patterns = boosted + rest
+                if boosted:
+                    logger.debug(
+                        f"In-run cache boost: {len(boosted)} patterns for '{error_signature}'"
+                    )
+
+            return patterns
         except sqlite3.Error as e:
             logger.error(f"Error querying patterns: {e}")
             return []
@@ -403,6 +418,25 @@ class LearnedPatternsService:
             )
 
             conn.commit()
+
+            # Update in-run cache on success (for boosting in same run)
+            if success:
+                # Find which error_signature this pattern belongs to
+                try:
+                    row = conn.execute(
+                        "SELECT error_signature FROM learned_patterns WHERE id = ?",
+                        (pattern_id,)
+                    ).fetchone()
+                    if row:
+                        sig = row["error_signature"]
+                        if sig not in self._run_cache:
+                            self._run_cache[sig] = []
+                        if pattern_id not in self._run_cache[sig]:
+                            self._run_cache[sig].append(pattern_id)
+                            logger.debug(f"In-run cache: pattern {pattern_id} cached for '{sig}'")
+                except sqlite3.Error:
+                    pass
+
             logger.debug(
                 f"Recorded pattern {pattern_id} application: success={success}"
             )
@@ -564,44 +598,82 @@ def extract_error_signature(errors: List[str]) -> str:
         errors: List of compiler/runtime error messages
 
     Returns:
-        Error signature (e.g., 'CS0246', 'PASSWORD_ISSUE', 'MISSING_FILE')
+        Error signature (e.g., 'CS0246', 'PASSWORD_ISSUE', 'NullReferenceException', 'MISSING_FILE:document.docx')
     """
+    error_text = " ".join(errors)
+
+    # Priority 1: CS error codes (compile-time)
     for error in errors:
-        # Try to extract CS error code
         cs_match = re.search(r"(CS\d{4})", error)
         if cs_match:
             return cs_match.group(1)
 
-    # Check for common runtime patterns
-    error_text = " ".join(errors).lower()
-    if "password" in error_text:
+    # Priority 2: Exception types (runtime)
+    exc_match = re.search(r'\b(\w+Exception):', error_text)
+    if exc_match:
+        exception_type = exc_match.group(1)
+
+        # Special handling for FileNotFoundException - include filename
+        if exception_type == 'FileNotFoundException':
+            file_match = re.search(r"'([^']+\.\w+)'", error_text)
+            if file_match:
+                return f"MISSING_FILE:{file_match.group(1)}"
+
+        return exception_type
+
+    # Priority 3: Infrastructure patterns (legacy)
+    error_text_lower = error_text.lower()
+    if "password" in error_text_lower:
         return "PASSWORD_ISSUE"
-    if "file" in error_text and ("not found" in error_text or "missing" in error_text):
+    if "file" in error_text_lower and ("not found" in error_text_lower or "missing" in error_text_lower):
         return "MISSING_FILE"
-    if "directory" in error_text and "not found" in error_text:
+    if "directory" in error_text_lower and "not found" in error_text_lower:
         return "MISSING_DIRECTORY"
-    if "disposed" in error_text:
+    if "disposed" in error_text_lower:
         return "DISPOSED_STREAM"
 
-    return "UNKNOWN"
+    return "RUNTIME_ERROR"
 
 
 def extract_all_error_signatures(errors: List[str]) -> List[str]:
     """Extract all unique error signatures from a list of error messages."""
     signatures = []
     seen = set()
+
+    # Extract CS error codes
     for error in errors:
         cs_match = re.search(r"(CS\d{4})", error)
         if cs_match and cs_match.group(1) not in seen:
             signatures.append(cs_match.group(1))
             seen.add(cs_match.group(1))
-    error_text = " ".join(errors).lower()
-    if "password" in error_text and "PASSWORD_ISSUE" not in seen:
+
+    error_text = " ".join(errors)
+
+    # Extract runtime exceptions
+    for exc_match in re.finditer(r'\b(\w+Exception):', error_text):
+        exception_type = exc_match.group(1)
+        if exception_type not in seen:
+            # Special handling for FileNotFoundException
+            if exception_type == 'FileNotFoundException':
+                file_match = re.search(r"'([^']+\.\w+)'", error_text)
+                if file_match:
+                    sig = f"MISSING_FILE:{file_match.group(1)}"
+                    if sig not in seen:
+                        signatures.append(sig)
+                        seen.add(sig)
+                        continue
+            signatures.append(exception_type)
+            seen.add(exception_type)
+
+    # Infrastructure patterns (legacy)
+    error_text_lower = error_text.lower()
+    if "password" in error_text_lower and "PASSWORD_ISSUE" not in seen:
         signatures.append("PASSWORD_ISSUE")
-    if ("file" in error_text and ("not found" in error_text or "missing" in error_text)
+    if ("file" in error_text_lower and ("not found" in error_text_lower or "missing" in error_text_lower)
             and "MISSING_FILE" not in seen):
         signatures.append("MISSING_FILE")
-    return signatures if signatures else ["UNKNOWN"]
+
+    return signatures if signatures else ["RUNTIME_ERROR"]
 
 
 def _register_default_transformers():

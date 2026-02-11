@@ -237,99 +237,18 @@ class BackfillService:
         force: bool = False,
     ) -> BackfillResult:
         """
-        Backfill API reference documentation for a family.
-
-        Args:
-            family: Family identifier
-            force: Force download even if cache exists
-
-        Returns:
-            BackfillResult with operation details
+        Deprecated: API reference backfill removed (TASK-DLL-04).
+        API catalogs are now generated directly from assembly reflection.
         """
-        start_time = datetime.now()
-
-        try:
-            # Load family config
-            family_config = self.config_manager.load_family_config(family)
-
-            # Check if cache path is configured
-            if not family_config.api_reference.cache_path:
-                return BackfillResult(
-                    success=True,
-                    target="api_reference",
-                    source="config",
-                    destination="",
-                    skipped=True,
-                    skip_reason="cache_path_not_configured",
-                    duration_seconds=(datetime.now() - start_time).total_seconds()
-                )
-
-            cache_path = Path(family_config.api_reference.cache_path)
-
-            # Check if cache already exists
-            if cache_path.exists() and not force:
-                return BackfillResult(
-                    success=True,
-                    target="api_reference",
-                    source="local",
-                    destination=str(cache_path),
-                    skipped=True,
-                    skip_reason="cache_already_exists",
-                    duration_seconds=(datetime.now() - start_time).total_seconds()
-                )
-
-            # Check if sources are configured
-            if not family_config.api_reference.sources:
-                return BackfillResult(
-                    success=True,
-                    target="api_reference",
-                    source="config",
-                    destination=str(cache_path),
-                    skipped=True,
-                    skip_reason="no_sources_configured",
-                    duration_seconds=(datetime.now() - start_time).total_seconds()
-                )
-
-            # Create cache directory (with path guard)
-            assert_write_allowed(cache_path, reason=f"backfill API reference cache for {family}")
-            cache_path.mkdir(parents=True, exist_ok=True)
-
-            # Copy from sources (currently assumes local sources)
-            files_copied = 0
-            for source in family_config.api_reference.sources:
-                source_path = Path(source)
-                if source_path.exists():
-                    if source_path.is_dir():
-                        files_copied += self._copy_directory(source_path, cache_path)
-                    else:
-                        dest_file = cache_path / source_path.name
-                        assert_write_allowed(dest_file, reason=f"backfill API reference file {source_path.name}")
-                        shutil.copy2(source_path, dest_file)
-                        files_copied += 1
-                else:
-                    logger.warning(f"API reference source not found: {source}")
-
-            logger.info(f"Backfilled {files_copied} API reference files for {family}")
-
-            return BackfillResult(
-                success=True,
-                target="api_reference",
-                source=",".join(family_config.api_reference.sources),
-                destination=str(cache_path),
-                files_copied=files_copied,
-                duration_seconds=(datetime.now() - start_time).total_seconds()
-            )
-
-        except Exception as e:
-            logger.exception(f"Error backfilling API reference for {family}")
-            return BackfillResult(
-                success=False,
-                target="api_reference",
-                source="",
-                destination="",
-                error=str(e),
-                duration_seconds=(datetime.now() - start_time).total_seconds()
-            )
+        return BackfillResult(
+            success=True,
+            target="api_reference",
+            source="deprecated",
+            destination="",
+            skipped=True,
+            skip_reason="api_reference_backfill_removed_use_assembly_reflection",
+            duration_seconds=0.0
+        )
 
     def backfill_examples_to_vector_db(
         self,
@@ -608,20 +527,13 @@ class BackfillService:
                     duration_seconds=(datetime.now() - start_time).total_seconds()
                 )
 
-            # Get gist PAT from environment
+            # Get gist PAT from environment (optional — public gists work without auth)
             pat_env_var = family_config.gist.pat_env_var
             gist_pat = os.environ.get(pat_env_var)
 
             if not gist_pat:
-                return BackfillResult(
-                    success=True,
-                    target="gist_source_code",
-                    source="github_api",
-                    destination="database",
-                    skipped=True,
-                    skip_reason=f"gist_pat_not_set ({pat_env_var})",
-                    duration_seconds=(datetime.now() - start_time).total_seconds()
-                )
+                logger.info(f"No {pat_env_var} set, fetching public gists without authentication (rate-limited)")
+
 
             from ..core.database import Database
             from ..core.models import SourceType

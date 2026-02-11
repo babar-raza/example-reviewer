@@ -179,9 +179,11 @@ class ExampleReviewerTools:
         """
         try:
             family_config = self.orchestrator.config_manager.load_family_config(family)
-            
+
             stats = self.orchestrator.discovery_service.discover_family(
-                family, family_config, max_files
+                family, family_config,
+                max_files=max_files,
+                max_examples=None  # MCP scan/extract don't use example limits
             )
             
             return ToolResult(
@@ -365,8 +367,21 @@ class ExampleReviewerTools:
             ToolResult with update statistics
         """
         try:
-            # Create a run record for standalone md-update phase
-            run_id = self.orchestrator.db.create_run(family, "md_update")
+            # Use the latest completed run to access verified examples
+            # (Don't create a new run - we need the run that has the verified examples)
+            import sqlite3
+            with self.orchestrator.db.get_connection() as conn:
+                row = conn.execute("""
+                    SELECT run_id FROM run_records
+                    WHERE family = ? AND status = 'completed'
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                """, (family,)).fetchone()
+
+            if not row:
+                return ToolResult(success=False, error=f"No completed runs found for family {family}")
+
+            run_id = row[0]
 
             stats = self.orchestrator._run_markdown_update_phase(
                 run_id, family, dry_run, allow_md_write=allow_md_write
@@ -397,7 +412,20 @@ class ExampleReviewerTools:
             ToolResult with review statistics
         """
         try:
-            stats = self.orchestrator._run_final_review_phase(family)
+            # Use the latest completed run
+            with self.orchestrator.db.get_connection() as conn:
+                row = conn.execute("""
+                    SELECT run_id FROM run_records
+                    WHERE family = ? AND status = 'completed'
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                """, (family,)).fetchone()
+
+            if not row:
+                return ToolResult(success=False, error=f"No completed runs found for family {family}")
+
+            run_id = row[0]
+            stats = self.orchestrator._run_final_review_phase(run_id, family)
             return ToolResult(success=True, data=stats)
             
         except Exception as e:
@@ -424,8 +452,20 @@ class ExampleReviewerTools:
             ToolResult with commit information
         """
         try:
-            run_id = self.orchestrator.db.create_run(family, "commit")
-            stats = self.orchestrator._run_finalization_phase(family, run_id, dry_run=False)
+            # Use the latest completed run
+            with self.orchestrator.db.get_connection() as conn:
+                row = conn.execute("""
+                    SELECT run_id FROM run_records
+                    WHERE family = ? AND status = 'completed'
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                """, (family,)).fetchone()
+
+            if not row:
+                return ToolResult(success=False, error=f"No completed runs found for family {family}")
+
+            run_id = row[0]
+            stats = self.orchestrator._run_finalization_phase(family, run_id, dry_run=False, allow_commit=True)
             return ToolResult(success=True, data=stats)
             
         except Exception as e:
@@ -598,6 +638,7 @@ class ExampleReviewerTools:
         skip_llm_runtime_fixes: bool = False,
         dry_run: bool = False,
         allow_md_write: bool = False,
+        allow_commit: bool = False,
         strategy_config: Optional[dict] = None,
     ) -> ToolResult:
         """
@@ -611,6 +652,7 @@ class ExampleReviewerTools:
             skip_llm_runtime_fixes: Skip LLM fixes for runtime errors only
             dry_run: Don't write changes
             allow_md_write: Override global config to allow markdown writes
+            allow_commit: Override global config to allow git commit
             strategy_config: Dict controlling which fix strategies to enable
 
         Returns:
@@ -625,6 +667,7 @@ class ExampleReviewerTools:
                 skip_llm_runtime_fixes=skip_llm_runtime_fixes,
                 dry_run=dry_run,
                 allow_md_write=allow_md_write,
+                allow_commit=allow_commit,
                 strategy_config=strategy_config,
             )
 

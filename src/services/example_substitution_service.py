@@ -576,17 +576,40 @@ def apply_quick_fixes(code: str, errors: List[str]) -> Tuple[str, List[str]]:
 
     # Fix 8: Inject MyDir / ArtifactsDir / master declarations for partial snippets
     # These are test-harness constants from Aspose example repos
+    # TASK-R3: Added httpFile and sourceStreams for ASP.NET/partial snippet support
     harness_vars = {
         'MyDir': 'string MyDir = @"./";',
         'ArtifactsDir': 'string ArtifactsDir = @"./artifacts/";',
         'master': 'var master = new Document();',
+        'httpFile': 'var httpFile = Request.Files[0];',  # ASP.NET file upload
+        'sourceStreams': 'var sourceStreams = new List<Stream>();',  # Stream collection
     }
     injected_vars = []
     for var_name, declaration in harness_vars.items():
-        # Check if the variable is used but never declared
-        if re.search(rf'\b{var_name}\b', fixed_code):
-            # Skip if already declared (var X, Type X, string X patterns)
-            if re.search(rf'(?:string|var|Document)\s+{var_name}\b', fixed_code):
+        # Enhanced detection - check for actual usage patterns (not just bare word)
+        # Skip comments and string literals (except interpolated strings)
+        code_without_comments = re.sub(r'//.*$', '', fixed_code, flags=re.MULTILINE)
+        code_without_comments = re.sub(r'/\*.*?\*/', '', code_without_comments, flags=re.DOTALL)
+
+        # Check for actual usage patterns:
+        # 1. Concatenation: MyDir + "file"
+        # 2. Method arguments: Method(MyDir, ...) or Method(..., MyDir)
+        # 3. Interpolated strings: $"{MyDir}..."
+        # 4. Assignment/property: var x = MyDir; or Prop = MyDir;
+        usage_patterns = [
+            rf'\b{var_name}\s*\+',                    # MyDir + "file"
+            rf'\(\s*{var_name}\s*[,)]',               # Method(MyDir, ...) or Method(MyDir)
+            rf'[,(]\s*{var_name}\s*\)',               # Method(..., MyDir)
+            rf'\$"[^"]*\{{{var_name}\}}[^"]*"',       # $"{MyDir}..."
+            rf'=\s*{var_name}\s*;',                   # var x = MyDir;
+            rf'\b{var_name}\s*\.',                    # httpFile.Property, master.Method()
+        ]
+
+        var_is_used = any(re.search(pattern, code_without_comments) for pattern in usage_patterns)
+
+        if var_is_used:
+            # Skip if already declared (var X, Type X, string X, const X patterns)
+            if re.search(rf'(?:string|var|Document|const)\s+{var_name}\b', fixed_code):
                 continue
             injected_vars.append(declaration)
 
@@ -603,9 +626,25 @@ def apply_quick_fixes(code: str, errors: List[str]) -> Tuple[str, List[str]]:
                 fixed_code[insert_pos:]
             )
         else:
-            # Pre-wrap: prepend declarations at top of raw code (before usings)
-            inject_block = '\n'.join(injected_vars)
-            fixed_code = inject_block + '\n' + fixed_code
+            # Pre-wrap: insert after using statements but before code body (TASK-R6 FIX)
+            # Find the last using statement
+            using_pattern = r'(using\s+[\w\.]+\s*;)'
+            matches = list(re.finditer(using_pattern, fixed_code))
+
+            if matches:
+                # Insert after the last using statement
+                last_using = matches[-1]
+                insert_pos = last_using.end()
+                inject_block = '\n'.join(injected_vars)
+                fixed_code = (
+                    fixed_code[:insert_pos] +
+                    '\n' + inject_block + '\n' +
+                    fixed_code[insert_pos:]
+                )
+            else:
+                # No using statements - inject at top (edge case)
+                inject_block = '\n'.join(injected_vars)
+                fixed_code = inject_block + '\n' + fixed_code
         applied_fixes.append('harness_var_injection')
         logger.info(f"Injected harness variable declarations: {[v for v in harness_vars if any(v in d for d in injected_vars)]}")
 

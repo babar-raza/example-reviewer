@@ -3,6 +3,7 @@ Pipeline Orchestrator for Example Reviewer.
 Coordinates all pipeline phases as defined in the spec.
 """
 
+import json
 import logging
 import os
 import re
@@ -28,8 +29,6 @@ from ..services.vector_db_service import VectorDBService
 from ..services.telemetry_service import TelemetryService
 from ..services.example_substitution_service import ExampleSubstitutionService, apply_quick_fixes
 from ..services.semantic_microfixes import apply_semantic_microfixes
-from ..services.api_reference_service import APIReferenceService
-from ..services.api_context_service import APIContextService
 from .failure_tracker import track_infra_missing_test_data, track_failure, track_compile_failure
 from ..core.path_guard import is_read_only_path
 from .escalation_classifier import classify_escalation_reason, should_escalate_to_review
@@ -168,9 +167,8 @@ class PipelineOrchestrator:
         self._context_drift_validator: Optional['ContextDriftValidator'] = None
         self._context_harness_service: Optional['ContextHarnessService'] = None
 
-        # API reference services (lazy initialization per family)
-        self._api_reference_services: Dict[str, APIReferenceService] = {}
-        self._api_context_services: Dict[str, APIContextService] = {}
+        # Track examples that received LLM fixes (for final review filtering)
+        self._llm_fixed_example_ids: set = set()
 
         # VectorDB and DriftDetector startup decision (Track 1: C.2)
         # Make a single decision at startup, never change mid-run
@@ -208,6 +206,8 @@ class PipelineOrchestrator:
                 'seed': global_config.llm.seed,
                 'deterministic_mode': global_config.llm.deterministic_mode,
                 'enforce_timeout': global_config.llm.enforce_timeout,
+                'api_key_env_var': global_config.llm.api_key_env_var,
+                'base_url': global_config.llm.base_url,
             }
 
             # Override with CLI values if present
@@ -215,9 +215,15 @@ class PipelineOrchestrator:
                 for key, value in self.cli_overrides['llm'].items():
                     llm_config_dict[key] = value
 
+            # Resolve API key: config specifies which env var holds the key
+            _api_key_env = llm_config_dict.get('api_key_env_var', 'OPENAI_API_KEY')
+            _api_key = os.getenv(_api_key_env) if _api_key_env else None
+
             self._llm_service = LLMService(
                 provider=llm_config_dict['provider'],
                 model=llm_config_dict['model'],
+                api_key=_api_key,
+                base_url=llm_config_dict.get('base_url'),
                 temperature=llm_config_dict['temperature'],
                 max_retries=llm_config_dict['max_retries'],
                 retry_backoff_seconds=llm_config_dict['retry_backoff_seconds'],
@@ -249,21 +255,21 @@ class PipelineOrchestrator:
             provider = global_config.final_review.provider
             if provider == 'anthropic':
                 api_key = os.getenv('ANTHROPIC_API_KEY')
-            elif provider == 'openai':
-                api_key = os.getenv('OPENAI_API_KEY')
             elif provider == 'ollama':
                 api_key = 'ollama'  # Placeholder for Ollama
             else:
-                # Fallback to main LLM api_key_env_var
-                api_key = os.getenv(global_config.llm.api_key_env_var)
+                # Use configured api_key_env_var from main LLM config
+                _fr_key_env = global_config.llm.api_key_env_var or 'OPENAI_API_KEY'
+                api_key = os.getenv(_fr_key_env)
 
-            # Determine base_url
+            # Determine base_url — inherit from main LLM config for same provider
             base_url = None
             if provider == 'ollama':
                 base_url = global_config.llm.base_url or "http://localhost:11434/v1"
             elif provider == 'anthropic':
                 base_url = None  # Use default Anthropic API
-            # For other providers, could check if a base_url is configured
+            elif global_config.llm.base_url:
+                base_url = global_config.llm.base_url
 
             self._final_review_llm_service = LLMService(
                 provider=provider,
@@ -320,43 +326,6 @@ class PipelineOrchestrator:
             artifacts_dir=self.artifacts_dir / "runtime",
         )
 
-    def _get_api_reference_service(self, family: str) -> Optional[APIReferenceService]:
-        """Get or initialize API reference service for family."""
-        if family not in self._api_reference_services:
-            try:
-                family_config = self.config_manager.load_family_config(family)
-                if hasattr(family_config, 'api_reference') and family_config.api_reference:
-                    service = APIReferenceService(
-                        family=family,
-                        config=family_config.api_reference,
-                        cache_dir=self.artifacts_dir / "cache"
-                    )
-                    # Ensure repo is cached if auto_fetch enabled
-                    if family_config.api_reference.auto_fetch:
-                        service.ensure_cached()
-                    self._api_reference_services[family] = service
-                    logger.info(f"Initialized API reference service for {family}")
-                else:
-                    logger.debug(f"No api_reference config for {family}")
-                    return None
-            except Exception as e:
-                logger.warning(f"Failed to initialize API reference for {family}: {e}")
-                return None
-
-        return self._api_reference_services.get(family)
-
-    def _get_api_context_service(self, family: str) -> Optional[APIContextService]:
-        """Get or initialize API context service for family."""
-        if family not in self._api_context_services:
-            api_ref_service = self._get_api_reference_service(family)
-            if api_ref_service:
-                self._api_context_services[family] = APIContextService(api_ref_service)
-                logger.info(f"Initialized API context service for {family}")
-            else:
-                return None
-
-        return self._api_context_services.get(family)
-
     @property
     def markdown_service(self) -> MarkdownUpdateService:
         """Get or initialize markdown service."""
@@ -393,6 +362,84 @@ class PipelineOrchestrator:
                 global_config.resource_detection
             )
         return self._resource_detection_service
+
+    def _analyze_catalog_gaps(self, family: str, run_id: str, catalog=None) -> Dict:
+        """
+        C1: Post-run gap analysis. Analyze failures to identify catalog fix gaps.
+
+        For each COMPILE_FAILED/RUNTIME_FAILED example, check if the catalog
+        COULD have provided data to fix the error deterministically.
+
+        Returns:
+            Dict with gap counts and details for telemetry.
+        """
+        if not catalog or not catalog.is_loaded:
+            return {}
+
+        from .escalation_classifier import EscalationReason
+        import re as _re
+
+        gap_results = {
+            'catalog_fix_gaps': 0,    # Catalog has data but fixer didn't use it
+            'catalog_data_gaps': 0,   # Catalog lacks data to fix
+            'details': [],
+        }
+
+        # Query failed examples from this run
+        try:
+            conn = self.db._get_connection()
+            rows = conn.execute(
+                "SELECT example_id, status, failure_reason FROM example_records "
+                "WHERE family = ? AND run_id = ? AND status IN ('compile_failed', 'runtime_failed')",
+                (family, run_id)
+            ).fetchall()
+        except Exception:
+            return gap_results
+
+        for row in rows:
+            failure = row['failure_reason'] or ''
+
+            # Extract error code from failure reason
+            code_match = _re.search(r'CS\d{4}', failure)
+            if not code_match:
+                continue
+            error_code = code_match.group()
+
+            # Extract type/member names from error
+            type_match = _re.search(r"'(\w+)'", failure)
+            if not type_match:
+                continue
+            type_name = type_match.group(1)
+
+            # Check if catalog has relevant data
+            has_type = catalog.validate_symbol(type_name)
+            has_members = bool(catalog.get_all_members(type_name))
+            has_enum = bool(catalog.get_enum_members(type_name))
+
+            if has_type or has_members or has_enum:
+                gap_results['catalog_fix_gaps'] += 1
+                gap_results['details'].append({
+                    'example_id': row['example_id'],
+                    'error_code': error_code,
+                    'type': type_name,
+                    'gap': 'fix_gap',
+                })
+            else:
+                gap_results['catalog_data_gaps'] += 1
+                gap_results['details'].append({
+                    'example_id': row['example_id'],
+                    'error_code': error_code,
+                    'type': type_name,
+                    'gap': 'data_gap',
+                })
+
+        if gap_results['details']:
+            logger.info(
+                f"Gap analysis: {gap_results['catalog_fix_gaps']} fix gaps (catalog had data), "
+                f"{gap_results['catalog_data_gaps']} data gaps (catalog missing data)"
+            )
+
+        return gap_results
 
     def _emit_llm_telemetry(
         self,
@@ -657,8 +704,8 @@ class PipelineOrchestrator:
         """
         Load relevant API documentation context for an error.
 
-        Uses APIContextService to extract entity names from error and fetch
-        relevant documentation sections from the API reference repository.
+        Note: APIReferenceService and APIContextService have been removed (TASK-DLL-03).
+        This method is kept as a stub to avoid breaking callers; it always returns "".
 
         Args:
             family: Product family
@@ -667,28 +714,9 @@ class PipelineOrchestrator:
             max_chars: Maximum characters of context to return
 
         Returns:
-            Formatted API documentation context, or empty string if unavailable
+            Empty string (service removed)
         """
-        try:
-            context_service = self._get_api_context_service(family)
-            if not context_service:
-                logger.debug(f"No API context service for {family}")
-                return ""
-
-            context = context_service.get_context_for_error(
-                error_signature=error_signature,
-                error_message=error_message,
-                max_chars=max_chars
-            )
-
-            if context:
-                logger.info(f"Loaded {len(context)} chars of API context for {error_signature}")
-
-            return context
-
-        except Exception as e:
-            logger.warning(f"Failed to load API context: {e}")
-            return ""
+        return ""
 
     def run_full_pipeline(
         self,
@@ -699,6 +727,7 @@ class PipelineOrchestrator:
         skip_llm_runtime_fixes: bool = False,
         dry_run: bool = False,
         allow_md_write: bool = False,
+        allow_commit: bool = False,
         strategy_config: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """
@@ -712,6 +741,7 @@ class PipelineOrchestrator:
             skip_llm_runtime_fixes: Skip LLM fixes for runtime errors only
             dry_run: Don't write changes to files
             allow_md_write: Override global config to allow markdown writes
+            allow_commit: Override global config to allow git commit
             strategy_config: Dict controlling which fix strategies to enable
 
         Returns:
@@ -862,7 +892,7 @@ class PipelineOrchestrator:
             # Phase F: Telemetry and Commit
             logger.info(f"Phase F: Finalization for {family}")
             with track_phase_timing(self.db, run_id, family, "finalization"):
-                final_stats = self._run_finalization_phase(family, run_id, dry_run)
+                final_stats = self._run_finalization_phase(family, run_id, dry_run, allow_commit=allow_commit)
             results['phases']['finalization'] = final_stats
 
             # Export run artifacts (fingerprint.json, results_summary.json)
@@ -892,6 +922,18 @@ class PipelineOrchestrator:
                             datetime.now(),
                             commit_source="llm",
                         )
+
+                    # C1: Post-run gap analysis — identify catalog fix gaps
+                    try:
+                        gap_analysis = self._analyze_catalog_gaps(family, run_id, _catalog if '_catalog' in dir() else None)
+                        if gap_analysis:
+                            logger.info(
+                                f"Catalog gap analysis: {gap_analysis.get('catalog_fix_gaps', 0)} fixable gaps, "
+                                f"{gap_analysis.get('catalog_data_gaps', 0)} data gaps"
+                            )
+                    except Exception as ga_err:
+                        gap_analysis = {}
+                        logger.debug(f"Gap analysis skipped: {ga_err}")
 
                     # Flush accumulated LLM metrics to metrics_json / context_json
                     llm_metrics_flush = dict(self._llm_metrics)
@@ -965,14 +1007,29 @@ class PipelineOrchestrator:
         family_config: FamilyConfig,
         max_examples: Optional[int],
     ) -> Dict[str, Any]:
-        """Run Phase A: Discovery and Extraction."""
-        max_files = None
-        if max_examples:
-            # Estimate ~5 examples per file
-            max_files = max(1, max_examples // 5)
+        """
+        Run Phase A: Discovery and Extraction.
 
+        Discovers examples from markdown files in content roots, up to max_examples limit.
+        Discovery stops when the specified number of examples is reached, processing only
+        as many files as needed. This ensures efficient discovery without wasting resources
+        on examples that won't be compiled/run.
+
+        Args:
+            run_id: UUID for this run
+            family: Family name
+            family_config: FamilyConfig object
+            max_examples: Maximum number of examples to discover (None = no limit)
+
+        Returns:
+            Discovery statistics dictionary
+        """
+        # Pass max_examples directly to discovery (not converted to max_files)
         stats = self.discovery_service.discover_family(
-            family, family_config, max_files, run_id=run_id
+            family, family_config,
+            max_files=None,  # No file limit unless explicit
+            max_examples=max_examples,  # Limit total examples discovered
+            run_id=run_id
         )
 
         # Emit discovery summary event
@@ -1102,16 +1159,96 @@ class PipelineOrchestrator:
                     stats['failed'] += 1
                     continue
 
+                # A3: Detect foreign family/external library usage before compilation
+                # Uses existing detect_foreign_families() to save LLM cycles on unfixable examples
+                try:
+                    foreign = self.discovery_service.detect_foreign_families(
+                        example.original_code or "", family
+                    )
+                    if foreign:
+                        # Check if any are actual foreign families (not just warnings)
+                        foreign_families = [f for f in foreign if not f.startswith('external_') and not f.startswith('invalid_')]
+                        external_deps = [f for f in foreign if f.startswith('external_')]
+
+                        if foreign_families:
+                            logger.info(
+                                f"Example {example.example_id} contains foreign family code: "
+                                f"{foreign_families} - escalating to NEEDS_REVIEW"
+                            )
+                            self.db.update_example_status(
+                                example.example_id,
+                                ExampleStatus.NEEDS_REVIEW,
+                                escalation_reason=f"wrong_family_detected:{','.join(foreign_families)}",
+                                run_id=run_id,
+                            )
+                            stats['failed'] += 1
+                            continue
+
+                        if external_deps:
+                            logger.info(
+                                f"Example {example.example_id} uses external dependencies: "
+                                f"{external_deps} - escalating to NEEDS_REVIEW"
+                            )
+                            self.db.update_example_status(
+                                example.example_id,
+                                ExampleStatus.NEEDS_REVIEW,
+                                escalation_reason=f"external_dependency_missing:{','.join(external_deps)}",
+                                run_id=run_id,
+                            )
+                            stats['failed'] += 1
+                            continue
+                except Exception as e:
+                    logger.debug(f"Foreign family detection failed for {example.example_id}: {e}")
+
+                # CRITICAL: Proactive using directive injection (BEFORE semantic microfixes)
+                # This prevents CS0246 errors by adding missing using directives based on
+                # detected API usage, ensuring code compiles first-try when possible.
+                if strategy_config.get('enable_semantic_microfixes', False) and self.registry:
+                    from ..services.semantic_microfixes import proactive_add_using_directives
+
+                    namespace_map = self.registry.get_namespace_map(family)
+                    if namespace_map:
+                        code_with_usings, using_fixes = proactive_add_using_directives(
+                            example.original_code or "",
+                            namespace_map
+                        )
+                        if using_fixes:
+                            logger.info(
+                                f"Proactive using directives for {example.example_id}: "
+                                f"{', '.join(using_fixes)}"
+                            )
+                            example.original_code = code_with_usings
+                            try:
+                                from ..core.telemetry import emit_telemetry_event
+                                emit_telemetry_event(
+                                    self.db, run_id, family,
+                                    event_type='proactive_using_directives_added',
+                                    phase='compilation',
+                                    example_id=example.example_id,
+                                    success=True,
+                                    metadata={'fixes': using_fixes, 'count': len(using_fixes)},
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        logger.warning(
+                            f"Namespace map is empty for family '{family}' - cannot apply proactive using directives. "
+                            f"Check if API catalog is loaded correctly."
+                        )
+
                 # Proactive semantic microfixes (before compilation)
                 # Apply ALL semantic microfixes proactively since many issues
                 # (stream disposal, CompressionLevel, DeflateCompressionSettings, etc.)
                 # can be detected and fixed without waiting for compile errors.
+                # Pass catalog for catalog-driven proactive fixes (B3-B6 generic fixers)
+                _catalog = self.registry.get_api_catalog(family) if (family and self.registry) else None
                 if strategy_config.get('enable_semantic_microfixes', False):
                     proactive_code, proactive_fixes = apply_semantic_microfixes(
                         example.original_code or "",
                         [],
                         family=family,
-                        registry=self.registry
+                        registry=self.registry,
+                        catalog=_catalog
                     )
                     if proactive_fixes:
                         logger.info(
@@ -1156,6 +1293,18 @@ class PipelineOrchestrator:
                         )
                     except Exception:
                         pass
+
+                # A6: Proactive fixture resolution before compilation
+                # Scan code for file references and ensure test data files exist
+                try:
+                    pre_fixture_resolver = self.registry.get_fixture_resolver(family) if self.registry else None
+                    pre_test_data_str = family_config.get('test_data', {}).get('local_path', '') if isinstance(family_config, dict) else getattr(getattr(family_config, 'test_data', None), 'local_path', '')
+                    if pre_fixture_resolver and pre_test_data_str:
+                        pre_fixture_resolver.precheck_code_references(
+                            example.original_code or "", Path(pre_test_data_str)
+                        )
+                except Exception as e:
+                    logger.debug(f"Proactive fixture resolution skipped: {e}")
 
                 # Try initial compilation
                 success, result = self.get_compilation_service(family).compile_example(
@@ -1274,7 +1423,8 @@ class PipelineOrchestrator:
                         current_code,
                         result.errors,
                         family=family,
-                        registry=self.registry
+                        registry=self.registry,
+                        catalog=_catalog
                     )
 
                     if applied_fixes:
@@ -1608,7 +1758,7 @@ class PipelineOrchestrator:
                     family=family,
                     error_signature=error_signature,
                     error_message=error_message,
-                    max_chars=family_config.api_reference.max_context_chars if family_config.api_reference else 8000
+                    max_chars=8000
                 )
                 if api_context:
                     logger.debug(f"Loaded {len(api_context)} chars of API context for {example.example_id}")
@@ -1675,6 +1825,8 @@ class PipelineOrchestrator:
                     )
 
                     # Get LLM fix with all context including content context for relevance
+                    # TASK-DLL-07: Pass API catalog for enriched error context
+                    _catalog = self.registry.get_api_catalog(family) if family else None
                     llm_response = self.llm_service.fix_code(
                         code=current_code,
                         error_logs='\n'.join(result.errors),
@@ -1686,6 +1838,7 @@ class PipelineOrchestrator:
                         section_heading=example.section_heading,
                         description_context=example.description_context,
                         topic=example.topic,
+                        catalog=_catalog,
                     )
                     self._emit_llm_telemetry(
                         run_id=run_id, family=family,
@@ -1712,7 +1865,7 @@ class PipelineOrchestrator:
                         if drift_result.should_reject:
                             logger.warning(
                                 f"Rejecting LLM fix for {example.example_id} due to context drift: "
-                                f"{drift_result.original_context} → {drift_result.fixed_context}"
+                                f"{drift_result.original_context} -> {drift_result.fixed_context}"
                             )
                             # Store drift evidence in failure reason
                             drift_details = {
@@ -1872,6 +2025,7 @@ class PipelineOrchestrator:
                                 )
 
                         stats['compiled_with_fix'] += 1
+                        self._llm_fixed_example_ids.add(example.example_id)
                         try:
                             from ..core.telemetry import emit_telemetry_event
                             emit_telemetry_event(
@@ -2105,7 +2259,7 @@ class PipelineOrchestrator:
             if family_config.runtime_validation.file_aliases:
                 alias_lines = []
                 for real_file, aliases in family_config.runtime_validation.file_aliases.items():
-                    alias_lines.append(f"  {real_file} → replaces: {', '.join(aliases)}")
+                    alias_lines.append(f"  {real_file} -> replaces: {', '.join(aliases)}")
                 test_data_info += "\n\nFile Aliases (use the real file when you see these placeholder names):\n" + "\n".join(alias_lines)
                 logger.info(f"Added {len(alias_lines)} file aliases to test_data_info for LLM context")
             else:
@@ -2218,6 +2372,22 @@ class PipelineOrchestrator:
 
                 # Track first failure separately from last result (TASK-1A fix)
                 first_failure_result = None
+
+                # Proactive fixture resolution: scan code for file references
+                # and resolve missing ones BEFORE first runtime attempt
+                fixture_resolver = self.registry.get_fixture_resolver(family)
+                if fixture_resolver and test_data_path:
+                    code_to_scan = example.compilable_code or example.original_code or ""
+                    pre_results = fixture_resolver.precheck_code_references(
+                        code_to_scan, workspace_dir=None  # test-data placement only
+                    )
+                    for pr in pre_results:
+                        if pr.resolved:
+                            logger.info(
+                                f"Proactive fixture for {example.example_id}: "
+                                f"{pr.filename} via {pr.method}"
+                            )
+                            stats['fixture_proactive'] = stats.get('fixture_proactive', 0) + 1
 
                 success, result = self.get_runtime_service(family).execute_example(
                     example, family_config, test_data_path
@@ -2498,6 +2668,62 @@ class PipelineOrchestrator:
                     continue
 
                 if error_category in ("missing_file", "missing_directory"):
+                    # --- Fixture resolution: fix the ENVIRONMENT first ---
+                    # Try to provide the missing file/directory before fixing the code
+                    if not fixture_resolver:
+                        fixture_resolver = self.registry.get_fixture_resolver(family)
+                    if fixture_resolver and test_data_path:
+                        from ..services.fixture_resolver_service import extract_missing_filename, extract_missing_dirname
+                        error_text = (result.stderr or "") + (result.exception_message or "")
+
+                        if error_category == "missing_file":
+                            missing_name = extract_missing_filename(error_text)
+                        else:
+                            missing_name = extract_missing_dirname(error_text)
+
+                        if missing_name:
+                            resolve_result = fixture_resolver.resolve_missing_file(
+                                missing_name
+                            ) if error_category == "missing_file" else fixture_resolver.resolve_missing_directory(
+                                missing_name
+                            )
+
+                            if resolve_result.resolved:
+                                logger.info(
+                                    f"Fixture resolved for {example.example_id}: "
+                                    f"{missing_name} via {resolve_result.method}"
+                                )
+                                # Re-execute: _copy_test_data will now find the new file
+                                success, result = self.get_runtime_service(family).execute_example(
+                                    example, family_config, test_data_path
+                                )
+                                self.get_runtime_service(family).record_attempt(
+                                    example_id=example.example_id,
+                                    family=family,
+                                    runtime_result=result,
+                                    sample_ref=str(test_data_path) if test_data_path else "none",
+                                    scenario=f"fixture_resolved_{error_category}",
+                                    retrieved_examples=None,
+                                    llm_request=None,
+                                    llm_response=None,
+                                    run_id=run_id,
+                                )
+                                if success:
+                                    deterministic_fixed = True
+                                    stats['fixture_resolved'] = stats.get('fixture_resolved', 0) + 1
+                                    self.db.update_example_status(
+                                        example.example_id, ExampleStatus.VERIFIED, run_id=run_id
+                                    )
+                                    self.db.update_example_code(
+                                        example.example_id,
+                                        verified_code=current_code,
+                                        run_id=run_id,
+                                    )
+                                    logger.info(f"Fixture resolution succeeded for {example.example_id}")
+                                    continue
+                                # Still failing — fall through to code fixes
+
+                    # --- Deterministic code fixes (existing) ---
                     # Get available test data files for substitution
                     available_files = []
                     if test_data_path and test_data_path.exists():
@@ -2571,15 +2797,103 @@ class PipelineOrchestrator:
                         logger.info(f"Example {example.example_id}: INFRA_BLOCKED (missing file: {failure_reason[:100]})")
                         stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
                     else:
-                        # Mark as RUNTIME_FAILED for other runtime errors
-                        self.db.update_example_status(
-                            example.example_id,
-                            ExampleStatus.RUNTIME_FAILED,
-                            failure_reason=failure_reason,
-                            run_id=run_id,
-                        )
-                        logger.info(f"Example {example.example_id}: RUNTIME_FAILED (no LLM fixes, deterministic fix didn't work)")
-                    continue
+                        # Try learned patterns for runtime errors before marking as RUNTIME_FAILED
+                        runtime_pattern_fixed = False
+                        strategy_config = self._get_fix_strategy_config()
+
+                        if (strategy_config.get('enable_learned_patterns', False) and
+                                hasattr(self, 'learned_patterns_service') and
+                                self.learned_patterns_service):
+
+                            # Extract error signatures from runtime result
+                            error_messages = []
+                            if result.exception_message:
+                                error_messages.append(result.exception_message)
+                            if result.stderr:
+                                error_messages.append(result.stderr)
+
+                            if error_messages:
+                                from ..services.learned_patterns_service import extract_all_error_signatures
+
+                                error_signatures = extract_all_error_signatures(error_messages)
+                                logger.info(f"Runtime error signatures for {example.example_id}: {error_signatures}")
+
+                                # Try patterns for each error signature
+                                for error_sig in error_signatures:
+                                    patterns = self.learned_patterns_service.query_patterns(
+                                        error_sig,
+                                        min_confidence=strategy_config.get('learned_patterns_min_confidence', 0.6),
+                                        approved_only=strategy_config.get('learned_patterns_require_approval', True),
+                                        limit=strategy_config.get('learned_patterns_max_per_error', 3),
+                                    )
+
+                                    for pattern in patterns:
+                                        logger.info(f"Trying learned pattern {pattern.id} ({pattern.error_signature}) on {example.example_id}")
+
+                                        # Apply pattern
+                                        fixed_code, success, description = self.learned_patterns_service.apply_pattern(
+                                            pattern,
+                                            current_code,
+                                            result.stderr or result.exception_message,
+                                            self.llm_service if pattern.requires_llm else None,
+                                        )
+
+                                        if success and fixed_code != current_code:
+                                            # Recompile and rerun with fixed code
+                                            logger.info(f"Pattern {pattern.id} applied: {description}")
+
+                                            # Recompile
+                                            compile_result = self.compilation_service.compile_code(fixed_code)
+                                            if compile_result.success:
+                                                # Rerun
+                                                runtime_result_retry = self.runtime_service.execute(fixed_code, timeout_seconds=30)
+                                                if runtime_result_retry.exit_code == 0:
+                                                    # Success!
+                                                    logger.info(f"Runtime pattern {pattern.id} fixed {example.example_id}")
+                                                    runtime_pattern_fixed = True
+
+                                                    # Record success
+                                                    if strategy_config.get('learned_patterns_feedback_tracking', True):
+                                                        self.learned_patterns_service.record_application(
+                                                            pattern.id, example.example_id, run_id, success=True
+                                                        )
+
+                                                    # Update example with verified code
+                                                    self.db.update_example(
+                                                        example.example_id,
+                                                        verified_code=fixed_code,
+                                                        run_id=run_id,
+                                                    )
+                                                    self.db.update_example_status(
+                                                        example.example_id,
+                                                        ExampleStatus.VERIFIED,
+                                                        run_id=run_id,
+                                                    )
+                                                    stats['passed_with_fix'] = stats.get('passed_with_fix', 0) + 1
+                                                    break  # Exit pattern loop
+                                                else:
+                                                    # Pattern didn't fix runtime
+                                                    if strategy_config.get('learned_patterns_feedback_tracking', True):
+                                                        self.learned_patterns_service.record_application(
+                                                            pattern.id, example.example_id, run_id, success=False
+                                                        )
+
+                                    if runtime_pattern_fixed:
+                                        break  # Exit error signature loop
+
+                        # If no pattern fixed it, mark as RUNTIME_FAILED
+                        if not runtime_pattern_fixed:
+                            self.db.update_example_status(
+                                example.example_id,
+                                ExampleStatus.RUNTIME_FAILED,
+                                failure_reason=failure_reason,
+                                run_id=run_id,
+                            )
+                            logger.info(f"Example {example.example_id}: RUNTIME_FAILED (no LLM fixes, deterministic fix didn't work, patterns didn't help)")
+                            stats['failed'] += 1
+
+                    if not runtime_pattern_fixed:
+                        continue
 
                 # Task 5: Limit runtime LLM fixes to 1 iteration
                 runtime_max_retries = min(max_retries, 1)
@@ -2603,7 +2917,7 @@ class PipelineOrchestrator:
                         family=family,
                         error_signature=error_signature,
                         error_message=error_message,
-                        max_chars=family_config.api_reference.max_context_chars if family_config.api_reference else 8000
+                        max_chars=8000
                     )
                     if api_context:
                         logger.debug(f"Loaded {len(api_context)} chars of API context for runtime fix")
@@ -2690,6 +3004,8 @@ class PipelineOrchestrator:
                             error_categories = self.get_compilation_service(family).categorize_errors(error_logs)
                             hints = self.get_compilation_service(family).get_error_fix_hints(error_categories, family_config)
 
+                            # TASK-DLL-07: Pass API catalog for enriched error context
+                            _catalog = self.registry.get_api_catalog(family) if family else None
                             llm_response = self.llm_service.fix_code(
                                 code=current_code,
                                 error_logs=error_logs,
@@ -2702,6 +3018,7 @@ class PipelineOrchestrator:
                                 description_context=example.description_context,
                                 topic=example.topic,
                                 original_code=example.original_code,
+                                catalog=_catalog,
                             )
                             self._emit_llm_telemetry(
                                 run_id=run_id, family=family,
@@ -2716,6 +3033,8 @@ Exception Type: {result.exception_type or 'Unknown'}
 Exception Message: {result.exception_message or 'No message'}
 Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
+                            # TASK-DLL-07: Pass API catalog for enriched error context
+                            _catalog = self.registry.get_api_catalog(family) if family else None
                             llm_response = self.llm_service.fix_code(
                                 code=current_code,
                                 error_logs=error_context,
@@ -2728,6 +3047,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                 description_context=example.description_context,
                                 topic=example.topic,
                                 original_code=example.original_code,
+                                catalog=_catalog,
                             )
                             self._emit_llm_telemetry(
                                 run_id=run_id, family=family,
@@ -2753,7 +3073,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             if drift_result.should_reject:
                                 logger.warning(
                                     f"Rejecting LLM fix for {example.example_id} due to context drift: "
-                                    f"{drift_result.original_context} → {drift_result.fixed_context}"
+                                    f"{drift_result.original_context} -> {drift_result.fixed_context}"
                                 )
                                 # Store drift evidence in failure reason
                                 drift_details = {
@@ -2924,6 +3244,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                     )
 
                             stats['passed_with_fix'] += 1
+                            self._llm_fixed_example_ids.add(example.example_id)
                             self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
                             self.db.update_example_code(
                                 example.example_id,
@@ -3053,15 +3374,27 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             logger.info(f"Marked {example.example_id} as RUNTIME_FAILED")
                             stats['failed'] += 1
                     else:
-                        # No runtime attempts - shouldn't happen, but mark as RUNTIME_FAILED
-                        self.db.update_example_status(
-                            example.example_id,
-                            ExampleStatus.RUNTIME_FAILED,
-                            failure_reason="No runtime attempts recorded",
-                            run_id=run_id,
-                        )
-                        logger.warning(f"Marked {example.example_id} as RUNTIME_FAILED (no runtime attempts)")
-                        stats['failed'] += 1
+                        # No runtime attempts - check if this is an ASP.NET/library example
+                        # that can't be executed in the current runtime harness
+                        app_ctx = getattr(example, 'app_context', None) or ''
+                        if app_ctx.startswith('aspnet') or app_ctx == 'library':
+                            self.db.update_example_status(
+                                example.example_id,
+                                ExampleStatus.NEEDS_REVIEW,
+                                escalation_reason="aspnet_not_runnable",
+                                run_id=run_id,
+                            )
+                            logger.info(f"Marked {example.example_id} as NEEDS_REVIEW (app_context={app_ctx}, not runnable)")
+                            stats['needs_review'] = stats.get('needs_review', 0) + 1
+                        else:
+                            self.db.update_example_status(
+                                example.example_id,
+                                ExampleStatus.RUNTIME_FAILED,
+                                failure_reason="No runtime attempts recorded",
+                                run_id=run_id,
+                            )
+                            logger.warning(f"Marked {example.example_id} as RUNTIME_FAILED (no runtime attempts)")
+                            stats['failed'] += 1
                 except Exception as cleanup_error:
                     logger.error(f"Error cleaning up COMPILABLE example {example.example_id}: {cleanup_error}")
                     # Default to RUNTIME_FAILED as safe fallback
@@ -3095,17 +3428,20 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         Returns:
             Statistics dictionary
         """
-        # If allow_md_write is explicitly True, recreate service with override
-        if allow_md_write and not self.markdown_service.allow_markdown_write:
-            global_config = self.config_manager.load_global_config()
-            self._markdown_service = MarkdownUpdateService(
-                self.db,
-                artifacts_dir=self.artifacts_dir / "diffs",
-                allow_markdown_write=True,  # Override to True
-                use_workspace_copy=self.use_workspace_copy,
-                workspace_root=self.artifacts_dir / "workspace",
-                run_id=run_id,
-            )
+        # ALWAYS recreate service with correct run_id (fixes run_id mismatch bug)
+        global_config = self.config_manager.load_global_config()
+        allow_write = allow_md_write or global_config.markdown_write.allow_markdown_write
+
+        self._markdown_service = MarkdownUpdateService(
+            self.db,
+            artifacts_dir=self.artifacts_dir / "diffs",
+            allow_markdown_write=allow_write,
+            use_workspace_copy=self.use_workspace_copy,
+            workspace_root=self.artifacts_dir / "workspace",
+            run_id=run_id,  # Always use current run_id, not "default"
+        )
+
+        if allow_md_write:
             logger.info("Markdown writes ENABLED via --allow-md-write flag")
 
         result = self.markdown_service.update_all_files(family, dry_run)
@@ -3250,12 +3586,48 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         # Get updated examples
         examples = self.db.get_examples_by_family(family, ExampleStatus.MD_UPDATED, run_id=run_id)
 
+        # When only_review_llm_fixed is True, only review files containing LLM-fixed examples
+        only_review_llm_fixed = getattr(final_review_config, 'only_review_llm_fixed', True)
+
         # Group by file
         files: Dict[str, List[ExampleRecord]] = {}
+        auto_pass_files: Dict[str, List[ExampleRecord]] = {}
         for example in examples:
-            if example.file_path not in files:
-                files[example.file_path] = []
-            files[example.file_path].append(example)
+            file_key = example.file_path
+            has_llm_fixed = any(e.example_id in self._llm_fixed_example_ids
+                                for e in [example])
+
+            if only_review_llm_fixed and not has_llm_fixed:
+                # Check if any example in this file was LLM-fixed (defer grouping)
+                if file_key not in auto_pass_files:
+                    auto_pass_files[file_key] = []
+                auto_pass_files[file_key].append(example)
+            else:
+                if file_key not in files:
+                    files[file_key] = []
+                files[file_key].append(example)
+
+        # Merge: if a file has ANY LLM-fixed example, review the whole file
+        if only_review_llm_fixed:
+            for file_key, file_examples in list(auto_pass_files.items()):
+                if file_key in files:
+                    # File already has LLM-fixed examples, add remaining to review
+                    files[file_key].extend(file_examples)
+                    del auto_pass_files[file_key]
+
+            # Auto-pass files with zero LLM-fixed examples
+            for file_key, file_examples in auto_pass_files.items():
+                for e in file_examples:
+                    self.db.update_example_status(
+                        e.example_id, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id
+                    )
+                stats['approved'] += 1
+                stats['files_reviewed'] += 1
+            if auto_pass_files:
+                logger.info(
+                    f"Auto-passed {len(auto_pass_files)} files with {sum(len(v) for v in auto_pass_files.values())} "
+                    f"examples (no LLM fixes, only_review_llm_fixed=True)"
+                )
 
         for file_path, file_examples in files.items():
             stats['files_reviewed'] += 1
@@ -3402,6 +3774,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         family: str,
         run_id: str,
         dry_run: bool,
+        allow_commit: bool = False,
     ) -> Dict[str, Any]:
         """Run Phase F: Persist, Telemetry, Commit."""
         stats = {
@@ -3427,21 +3800,31 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 logger.warning(f"Telemetry export failed: {e}")
                 stats['telemetry_export_error'] = str(e)
 
-        if dry_run or not global_config.git.enabled:
+        # Resolve commit permission: CLI --commit flag OR global config
+        commit_enabled = allow_commit or global_config.git.enabled
+        if dry_run or not commit_enabled:
+            if not dry_run and not commit_enabled:
+                logger.info("Git commit skipped (use --commit flag or set git.enabled=true)")
             return stats
 
-        # Get files that were updated
-        examples = self.db.get_examples_by_family(family, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
-        touched_files = list(set(e.file_path for e in examples))
+        # Family-level gate (only when not using explicit --commit override)
+        if not allow_commit:
+            family_config = self.config_manager.load_family_config(family)
+            if not family_config.auto_commit:
+                logger.info(f"Git commit skipped for '{family}' (auto_commit=false in family config)")
+                return stats
 
-        if not touched_files:
+        # Get candidate files from FINAL_REVIEW_PASSED examples
+        examples = self.db.get_examples_by_family(family, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
+        candidate_files = list(set(e.file_path for e in examples))
+
+        if not candidate_files:
             return stats
 
         # Attempt git commit
         try:
             # Resolve absolute paths and find git root
-            # File paths are stored relative to content_roots, need to find actual git repo
-            first_file = Path(touched_files[0]).resolve()
+            first_file = Path(candidate_files[0]).resolve()
 
             # Find git root directory containing the content files
             git_root_result = subprocess.run(
@@ -3469,8 +3852,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             content_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "unknown"
             logger.info(f"Committing to branch '{content_branch}' in {git_root}")
 
-            # Stage files - paths relative to git root
-            for file_path in touched_files:
+            # Stage all candidate files - paths relative to git root
+            for file_path in candidate_files:
                 abs_path = Path(file_path).resolve()
                 try:
                     rel_path = abs_path.relative_to(git_root)
@@ -3485,17 +3868,126 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     capture_output=True,
                 )
 
-            # Build full commit message with description and co-author
-            message_title = global_config.git.commit_message_template.format(
-                family=family,
-                count=len(touched_files),
+            # CRITICAL: Query what was ACTUALLY staged (git-verified truth)
+            git_status_result = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=git_root,
+                capture_output=True,
+                text=True,
             )
-            description = global_config.git.commit_description_template.format(
-                family=family,
-                count=len(touched_files),
-                run_id=run_id,
-            )
-            # Hardcoded co-author per project policy
+
+            if git_status_result.returncode != 0:
+                logger.error("Failed to get staged files")
+                stats['error'] = "Could not determine staged files"
+                return stats
+
+            # Get absolute paths of actually staged files
+            staged_relative_paths = git_status_result.stdout.strip().split('\n')
+            staged_files = [
+                str((git_root / Path(rel_path)).resolve())
+                for rel_path in staged_relative_paths
+                if rel_path  # Skip empty lines
+            ]
+
+            if not staged_files:
+                logger.warning("No files were actually staged for commit")
+                return stats
+
+            logger.info(f"Git staging verified: {len(staged_files)} files have changes (from {len(candidate_files)} candidates)")
+
+            # Filter examples to only those whose files are actually staged
+            committed_examples = [
+                ex for ex in examples
+                if str(Path(ex.file_path).resolve()) in staged_files
+            ]
+
+            if not committed_examples:
+                logger.warning("No examples match staged files")
+                return stats
+
+            logger.info(f"Commit will include {len(committed_examples)} examples across {len(staged_files)} files")
+
+            # Calculate statistics from COMMITTED examples only (not entire run)
+            committed_example_ids = [ex.example_id for ex in committed_examples]
+
+            # Count compilation attempts for committed examples
+            compile_attempts = 0
+            compile_success = 0
+            for example_id in committed_example_ids:
+                attempts = self.db.get_compile_attempts(example_id, run_id=run_id)
+                if attempts:
+                    compile_attempts += len(attempts)
+                    compile_success += sum(1 for a in attempts if a.success)
+
+            # LLM fixes = examples that needed multiple compile attempts
+            llm_fixes = compile_attempts - len(committed_examples) if compile_attempts > len(committed_examples) else 0
+
+            # Calculate first-try successes
+            first_try_success = len(committed_examples) - llm_fixes
+
+            total_examples = len(committed_examples)
+            verified_count = len(committed_examples)  # All committed examples are verified by definition
+
+            # Get family config for categorization
+            family_config = self.config_manager.load_family_config(family)
+            content_roots = family_config.content_roots or []
+            content_pattern = family_config.content_pattern or {}
+
+            # Categorize STAGED files by content root (blog, kb, docs, etc.)
+            categorized_files = {}
+            for category, root in zip(content_pattern.keys(), content_roots):
+                categorized_files[category] = []
+                norm_root = str(Path(root).resolve())
+                for file_path in staged_files:  # Use staged_files, not candidate_files
+                    norm_file = str(Path(file_path).resolve())
+                    if norm_file.startswith(norm_root):
+                        categorized_files[category].append(Path(file_path).name)
+
+            # Build category summaries
+            category_lines = []
+            for category, files in categorized_files.items():
+                if files:
+                    # Extract unique topics from filenames (remove extension, take stems)
+                    topics = []
+                    for f in files[:5]:  # First 5 as sample
+                        stem = Path(f).stem
+                        # Clean up common patterns (index, etc.)
+                        if stem != 'index':
+                            topics.append(stem.replace('-', ' ').replace('_', ' '))
+
+                    if topics:
+                        topic_list = ', '.join(sorted(set(topics)))
+                        category_lines.append(f"{category.title()}: {len(files)} files updated ({topic_list})")
+                    else:
+                        category_lines.append(f"{category.title()}: {len(files)} files updated")
+
+            # Build commit message with ACCURATE counts
+            message_title = f"fix({family}): verify and update {verified_count} C# code examples across {len(staged_files)} markdown files"
+
+            # Build detailed description
+            description_lines = [
+                f"VFV pipeline run {run_id[:16]}:",
+                f"- {total_examples} examples verified and committed",
+            ]
+
+            # Add compilation details
+            if compile_success > 0:
+                if llm_fixes > 0:
+                    description_lines.append(f"- {first_try_success} compiled first-try, {llm_fixes} fixed via LLM")
+                else:
+                    description_lines.append(f"- {compile_success} compiled first-try")
+
+            # Add deterministic fixes mention
+            description_lines.append("- Deterministic fixes applied: stream disposal, using directives, context harness")
+
+            # Add blank line before category details
+            if category_lines:
+                description_lines.append("")
+                description_lines.extend(category_lines)
+
+            description = '\n'.join(description_lines)
+
+            # Hardcoded co-author per project policy (NEVER use Claude model name)
             co_author = "Example Reviewer <example-reviewer@aspose.net>"
             full_message = f"{message_title}\n\n{description}\n\nCo-Authored-By: {co_author}"
 

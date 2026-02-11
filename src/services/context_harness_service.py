@@ -5,6 +5,7 @@ Phase-2 Gate B: Compiles ASP.NET examples as ASP.NET projects instead of console
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -27,6 +28,7 @@ class ContextHarnessService:
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
 {package_refs}
   </ItemGroup>
 </Project>
@@ -69,12 +71,13 @@ class ContextHarnessService:
         """
         self.enabled = enabled
 
-    def get_project_template(self, app_context: Optional[str]) -> str:
+    def get_project_template(self, app_context: Optional[str], code: Optional[str] = None) -> str:
         """
         Get the appropriate project template for the app context.
 
         Args:
             app_context: Application context (console, aspnet_core_minimal, etc.)
+            code: The wrapped code to analyze for controller detection (TASK-R8)
 
         Returns:
             Project template string
@@ -82,6 +85,17 @@ class ContextHarnessService:
         if not self.enabled or not app_context:
             # Default to console when disabled or context unknown
             return self.CONSOLE_PROJECT_TEMPLATE
+
+        # TASK-R8: Detect controller-only ASP.NET code (no Main, no builder/app refs)
+        if app_context and app_context.startswith('aspnet') and code:
+            has_class = bool(re.search(r'\bclass\s+\w+', code))
+            has_main = 'static void Main' in code or 'static int Main' in code
+            has_builder = 'WebApplication.CreateBuilder' in code or 'app.' in code
+
+            # Controller class without entry point -> use Library template
+            if has_class and not has_main and not has_builder:
+                logger.debug(f"TASK-R8: Detected controller-only code for {app_context}, using Library template")
+                return self.LIBRARY_PROJECT_TEMPLATE
 
         # Map app_context to project template
         if app_context in ['aspnet_core_minimal', 'aspnet_core_mvc', 'aspnet_core_webapi']:

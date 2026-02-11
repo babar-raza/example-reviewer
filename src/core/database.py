@@ -714,9 +714,21 @@ class Database:
                 if not example.example_key:
                     example.example_key = example.generate_example_key()
 
+                # Handle (family, example_key) UNIQUE constraint:
+                # If an example with same key exists under a different ID, reuse that ID
+                existing_by_key = conn.execute(
+                    "SELECT example_id FROM example_records WHERE family = ? AND example_key = ?",
+                    (example.family, example.example_key),
+                ).fetchone()
+                if existing_by_key and existing_by_key["example_id"] != example.example_id:
+                    example.example_id = existing_by_key["example_id"]
+
                 # Save ONLY canonical fields to example_records
+                # Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE to avoid
+                # DELETE+INSERT which triggers FK violations on child tables
+                # (compile_attempts, runtime_attempts, markdown_edits use ON DELETE NO ACTION)
                 conn.execute("""
-                    INSERT OR REPLACE INTO example_records (
+                    INSERT INTO example_records (
                         example_id, family, file_path, source_type, language,
                         location_block_index, location_start_line, location_end_line, location_anchor,
                         gist_owner, gist_id, gist_filename,
@@ -724,6 +736,27 @@ class Database:
                         section_heading, description_context, topic, app_context, example_key,
                         code_block_signature, extraction_warning
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(example_id) DO UPDATE SET
+                        family = excluded.family,
+                        file_path = excluded.file_path,
+                        source_type = excluded.source_type,
+                        language = excluded.language,
+                        location_block_index = excluded.location_block_index,
+                        location_start_line = excluded.location_start_line,
+                        location_end_line = excluded.location_end_line,
+                        location_anchor = excluded.location_anchor,
+                        gist_owner = excluded.gist_owner,
+                        gist_id = excluded.gist_id,
+                        gist_filename = excluded.gist_filename,
+                        original_code = excluded.original_code,
+                        updated_at = excluded.updated_at,
+                        section_heading = excluded.section_heading,
+                        description_context = excluded.description_context,
+                        topic = excluded.topic,
+                        app_context = excluded.app_context,
+                        example_key = excluded.example_key,
+                        code_block_signature = excluded.code_block_signature,
+                        extraction_warning = excluded.extraction_warning
                 """, (
                     example.example_id,
                     example.family,

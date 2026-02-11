@@ -5,7 +5,6 @@ Provides lazy initialization and caching for family-specific services:
 - API Catalog Service (type->namespace mappings)
 - Learned Patterns Service (auto-learned fix patterns)
 - Example Substitution Service (example repository integration)
-- API Reference Service (placeholder for Phase 3)
 
 This registry eliminates hardcoded family references (e.g., APICatalogService("zip"))
 across the codebase, enabling true multi-family extensibility.
@@ -19,6 +18,7 @@ from typing import Dict, Optional, Any
 
 from src.core.config import ConfigurationManager
 from src.services.api_catalog_service import APICatalogService
+from src.services.fixture_resolver_service import FixtureResolverService
 from src.services.learned_patterns_service import LearnedPatternsService
 from src.services.example_substitution_service import ExampleSubstitutionService
 
@@ -89,17 +89,17 @@ class FamilyServiceRegistry:
 
     def get_api_reference(self, family: str) -> Optional[Any]:
         """
-        Get API reference documentation service (Phase 3 placeholder).
+        Get API reference documentation service.
 
-        Future: Will clone Git repo and provide API documentation lookup.
+        Deprecated: APIReferenceService and APIContextService have been removed (TASK-DLL-03).
+        This method is kept for interface compatibility; it always returns None.
 
         Args:
             family: Product family identifier
 
         Returns:
-            None (not yet implemented)
+            None (service removed)
         """
-        logger.debug(f"get_api_reference({family}): Phase 3 placeholder, returning None")
         return None
 
     def get_learned_patterns(self, family: str) -> LearnedPatternsService:
@@ -131,6 +131,29 @@ class FamilyServiceRegistry:
             ExampleSubstitutionService instance for the family
         """
         return self._get_cached('substitution', family, self._create_substitution)
+
+    def get_fixture_resolver(self, family: str) -> Optional[FixtureResolverService]:
+        """
+        Get fixture resolver service for family.
+
+        Returns None if fixture resolution is disabled for this family
+        (fixture_resolver.enabled = false or not configured).
+
+        Args:
+            family: Product family identifier
+
+        Returns:
+            FixtureResolverService instance, or None if disabled
+        """
+        try:
+            family_config = self._config_manager.load_family_config(family)
+        except FileNotFoundError:
+            return None
+
+        if not family_config.fixture_resolver or not family_config.fixture_resolver.enabled:
+            return None
+
+        return self._get_cached('fixture_resolver', family, self._create_fixture_resolver)
 
     def _get_cached(self, service_name: str, family: str, factory_fn) -> Any:
         """
@@ -230,6 +253,36 @@ class FamilyServiceRegistry:
         return ExampleSubstitutionService(
             backfill_dir=backfill_dir,
             same_context_only=same_context_only
+        )
+
+    def _create_fixture_resolver(self, family: str) -> FixtureResolverService:
+        """
+        Factory: Create FixtureResolverService for family.
+
+        Args:
+            family: Product family identifier
+
+        Returns:
+            FixtureResolverService instance
+        """
+        family_config = self._config_manager.load_family_config(family)
+        fr_config = family_config.fixture_resolver
+
+        # Determine test-data directory
+        test_data_dir = self._artifacts_dir / "backfill" / family / "test-data"
+
+        # Registry path from config or default
+        registry_path = None
+        if fr_config and fr_config.registry_path:
+            registry_path = Path(fr_config.registry_path)
+
+        return FixtureResolverService(
+            family=family,
+            test_data_dir=test_data_dir,
+            file_aliases=family_config.runtime_validation.file_aliases,
+            max_generations_per_run=fr_config.max_generations_per_run if fr_config else 50,
+            registry_path=registry_path,
+            skip_output_patterns=fr_config.skip_output_patterns if fr_config else None,
         )
 
     def clear_cache(self, family: Optional[str] = None) -> None:

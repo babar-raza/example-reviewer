@@ -99,7 +99,7 @@ class ContextDriftValidator:
 
         if drift_detected:
             logger.warning(
-                f"Context drift detected: {original_context} → {fixed_context}"
+                f"Context drift detected: {original_context} -> {fixed_context}"
             )
 
             rejection_reason = (
@@ -116,7 +116,7 @@ class ContextDriftValidator:
             )
         else:
             logger.debug(
-                f"No context drift: {original_context} → {fixed_context}"
+                f"No context drift: {original_context} -> {fixed_context}"
             )
 
             return ContextDriftResult(

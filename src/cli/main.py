@@ -13,6 +13,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
+# Fix Windows cp1252 encoding issues with Unicode in log messages
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 from ..mcp_tools.tools import ExampleReviewerTools, ToolResult
 
 
@@ -600,11 +606,11 @@ def _render_drift_trends(trends: dict, n_runs: int) -> str:
         if i > 0:
             prev_avg = runs[i - 1].get('avg_drift', 0.0)
             if avg_drift < prev_avg:
-                arrow = '  ↓'
+                arrow = '  v'
             elif avg_drift > prev_avg:
-                arrow = '  ↑'
+                arrow = '  ^'
             else:
-                arrow = '  →'
+                arrow = '  ='
 
         lines.append(f"Run {run_num} ({date}): Avg {avg_drift:.2f}, Max {max_drift:.2f}{arrow}")
 
@@ -771,7 +777,9 @@ def main() -> int:
                             help="Don't write changes")
     run_parser.add_argument('--allow-md-write', action='store_true',
                             help='REQUIRED to write .md files (safety guard)')
-    
+    run_parser.add_argument('--commit', action='store_true',
+                            help='Commit verified changes to git (overrides config)')
+
     # List families command
     list_parser = subparsers.add_parser('list-families',
                                          help='List available families')
@@ -782,7 +790,7 @@ def main() -> int:
     backfill_parser.add_argument('--family', '-f', type=str, required=True,
                                   help='Family identifier')
     backfill_parser.add_argument('--targets', '-t', type=str, nargs='+',
-                                  help='Backfill targets (test_data, api_reference, examples, examples_files, gist_source_code)')
+                                  help='Backfill targets (test_data, examples, examples_files, gist_source_code)')
     backfill_parser.add_argument('--force', action='store_true',
                                   help='Force re-download even if data exists')
 
@@ -987,6 +995,7 @@ def main() -> int:
             skip_llm_runtime_fixes=getattr(args, 'skip_llm_runtime_fixes', False),
             dry_run=args.dry_run,
             allow_md_write=getattr(args, 'allow_md_write', False),
+            allow_commit=getattr(args, 'commit', False),
             strategy_config=strategy_config,
         )
     

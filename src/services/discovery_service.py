@@ -158,6 +158,42 @@ class DiscoveryService:
         validatable_lower = [lang.lower() for lang in self.discovery_patterns.validatable_languages]
         return normalized.lower() in validatable_lower
 
+    def _validate_extraction(self, code: str) -> Tuple[bool, str]:
+        """
+        Quick syntax validation to catch malformed extractions (TASK-R5).
+
+        Checks for common CS1001 errors without full parsing:
+        - Incomplete control flow statements
+        - Unbalanced braces
+
+        Args:
+            code: Code content to validate
+
+        Returns:
+            Tuple of (is_valid: bool, reason: str if invalid)
+        """
+        # Check 1: Incomplete control flow statements (foreach/for/if/while with unclosed parens)
+        # Matches: "foreach (var item in" or "if (condition" without closing ")"
+        incomplete_pattern = r'\b(foreach|for|if|while)\s*\([^)]*$'
+        if re.search(incomplete_pattern, code, re.MULTILINE):
+            return False, "malformed_extraction_incomplete_statement"
+
+        # Check 2: Unbalanced braces
+        # Count opening and closing braces (excluding those in strings/comments)
+        # Simplified version - doesn't handle all edge cases but catches obvious issues
+        code_without_strings = re.sub(r'"(?:[^"\\]|\\.)*"', '', code)  # Remove string literals
+        code_without_strings = re.sub(r"'(?:[^'\\]|\\.)*'", '', code_without_strings)  # Remove char literals
+        code_without_comments = re.sub(r'//.*$', '', code_without_strings, flags=re.MULTILINE)  # Remove line comments
+        code_without_comments = re.sub(r'/\*.*?\*/', '', code_without_comments, flags=re.DOTALL)  # Remove block comments
+
+        open_braces = code_without_comments.count('{')
+        close_braces = code_without_comments.count('}')
+
+        if open_braces != close_braces:
+            return False, f"malformed_extraction_unbalanced_braces (open:{open_braces}, close:{close_braces})"
+
+        return True, ""
+
     def _is_meaningful_code(self, code: str) -> Tuple[bool, str]:
         """
         Check if code is meaningful (not empty, whitespace-only, or comment-only).
@@ -467,27 +503,125 @@ class DiscoveryService:
         # Normalize: strip and use consistent line endings
         normalized = code.strip().replace('\r\n', '\n')
         return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
-    
+
+    def detect_foreign_families(self, code: str, current_family: str) -> List[str]:
+        """
+        Detect if code references families other than the current family,
+        or uses external libraries, or references invalid Aspose namespaces.
+
+        Args:
+            code: C# code to analyze
+            current_family: Current family being processed (e.g., 'words')
+
+        Returns:
+            List of foreign family names detected (e.g., ['cells', 'pdf'])
+            or external libraries (e.g., ['external_microsoft_ml'])
+            or invalid namespaces (e.g., ['invalid_namespace_watermarking'])
+        """
+        foreign = []
+
+        # Family markers: using statements and namespace-qualified references
+        # CRITICAL FIX: Removed ambiguous patterns (new Document, new Image) that match multiple families
+        # Now using ONLY strong indicators: "using X" statements and "X.Y." namespaced references
+        family_markers = {
+            'cells': [
+                'using Aspose.Cells',
+                'Aspose.Cells.',
+                'new Workbook(',  # Cells-specific
+                'WorksheetCollection',
+            ],
+            'pdf': [
+                'using Aspose.PDF',
+                'using Aspose.Pdf',
+                'Aspose.PDF.',
+                'Aspose.Pdf.',
+                'PdfFileEditor',  # PDF-specific
+                # REMOVED: 'new Document(' - ambiguous with Words.Document
+            ],
+            'slides': [
+                'using Aspose.Slides',
+                'Aspose.Slides.',
+                'new Presentation(',  # Slides-specific
+                'ISlide',
+            ],
+            'email': [
+                'using Aspose.Email',
+                'Aspose.Email.',
+                'new MailMessage(',  # Email-specific
+                'SmtpClient',
+            ],
+            'imaging': [
+                'using Aspose.Imaging',
+                'Aspose.Imaging.',
+                # REMOVED: 'new Image(' - ambiguous with System.Drawing.Image
+            ],
+            'zip': [
+                'using Aspose.Zip',
+                'Aspose.Zip.',
+                # Keep 'new Archive(' - not used in Words
+            ],
+        }
+
+        # External library patterns (TASK-R7)
+        external_markers = {
+            'microsoft_ml': ['using Microsoft.ML', 'Microsoft.ML.'],
+            'aws': ['using Amazon.', 'Amazon.'],
+            'google': ['using Google.', 'Google.'],
+            'svg': ['using Svg', 'Svg.'],
+            'newtonsoft': ['using Newtonsoft.', 'Newtonsoft.'],
+        }
+
+        # Invalid Aspose namespaces (known to not exist in assemblies)
+        invalid_namespaces = {
+            'words': ['Aspose.Words.Watermarking', 'Aspose.Words.Drawing.Charts'],
+            # Add more as discovered during remediation
+        }
+
+        for family_name, markers in family_markers.items():
+            if family_name != current_family:
+                if any(marker in code for marker in markers):
+                    foreign.append(family_name)
+
+        # Check external libraries (TASK-R7)
+        for lib_name, markers in external_markers.items():
+            if any(marker in code for marker in markers):
+                foreign.append(f'external_{lib_name}')
+
+        # Check invalid namespaces for current family (TASK-R7)
+        if current_family in invalid_namespaces:
+            for invalid_ns in invalid_namespaces[current_family]:
+                if invalid_ns in code:
+                    # Extract last part of namespace for concise marker
+                    ns_suffix = invalid_ns.split('.')[-1].lower()
+                    foreign.append(f'invalid_namespace_{ns_suffix}')
+
+        return foreign
+
     def discover_family(
         self,
         family: str,
         family_config: Optional[FamilyConfig] = None,
         max_files: Optional[int] = None,
         max_pages: Optional[int] = None,
+        max_examples: Optional[int] = None,
         run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Discover all code examples for a family.
+        Discover code examples for a family, up to max_examples limit.
+
+        Discovery processes files sequentially until the specified number of examples
+        is reached. This allows efficient discovery without processing unnecessary files.
 
         Args:
             family: Family identifier
             family_config: Family configuration
-            max_files: Maximum files to process (for testing)
+            max_files: Maximum files to process (for testing/scan commands)
             max_pages: Alias for max_files (legacy compatibility)
+            max_examples: Maximum examples to discover (stops when reached)
             run_id: Run identifier for run-scoped tracking
 
         Returns:
-            Statistics dictionary
+            Statistics dictionary with examples_found, files_processed, etc.
         """
         if family_config is None:
             family_config = FamilyConfig(family=family, content_roots=self.content_roots)
@@ -523,18 +657,38 @@ class DiscoveryService:
             files = files[:max_files]
         
         logger.info(f"Processing {len(files)} files for family {family}")
-        
+
         for file_path in files:
+            # Early exit: stop processing if we've reached the example limit
+            if max_examples and stats['examples_found'] >= max_examples:
+                logger.info(
+                    f"Reached max_examples limit ({max_examples}) after processing "
+                    f"{stats['files_processed']} files, stopping discovery"
+                )
+                break
+
             try:
                 examples = self._process_file(file_path, family)
 
                 if self._uses_legacy_schema():
+                    # Legacy schema: bulk save (with potential truncation)
+                    if max_examples:
+                        remaining = max_examples - stats['examples_found']
+                        examples = examples[:remaining]
                     self._save_examples_legacy(file_path, family, examples)
                     stats['examples_found'] += len(examples)
                     stats['inline_examples'] += sum(1 for e in examples if e.source_type == SourceType.INLINE)
                     stats['gist_examples'] += sum(1 for e in examples if e.source_type != SourceType.INLINE)
                 else:
+                    # Modern schema: individual save with per-example check
                     for example in examples:
+                        if max_examples and stats['examples_found'] >= max_examples:
+                            logger.info(
+                                f"Reached max_examples limit ({max_examples}) within "
+                                f"file {file_path}, stopping discovery"
+                            )
+                            break
+
                         self.db.save_example(example, run_id=run_id)
                         stats['examples_found'] += 1
 
@@ -542,8 +696,15 @@ class DiscoveryService:
                             stats['inline_examples'] += 1
                         else:
                             stats['gist_examples'] += 1
-                
+
                 stats['files_processed'] += 1
+
+                # Check again after processing this file
+                if max_examples and stats['examples_found'] >= max_examples:
+                    logger.info(
+                        f"Reached max_examples limit ({max_examples}), stopping discovery"
+                    )
+                    break
 
             except Exception as e:
                 logger.error(f"Error processing {file_path}: {e}")
@@ -745,6 +906,36 @@ class DiscoveryService:
                 # Skip empty blocks
                 continue
 
+            # TASK-R5: Validate extraction syntax (before other filtering)
+            is_valid, validation_reason = self._validate_extraction(code_content)
+            if not is_valid:
+                logger.info(f"Filtered out malformed snippet at {file_path}:{code_start_line} - {validation_reason}")
+                self._record_skipped_candidate(
+                    file_path=file_path,
+                    line_number=code_start_line,
+                    reason=validation_reason,
+                    code_preview=code_content
+                )
+                # Track in filter stats for reporting
+                self._track_filter_reason(validation_reason)
+                continue
+
+            # TASK-R1: Check for foreign family usage FIRST (before content filtering)
+            foreign_families = self.detect_foreign_families(code_content, family)
+            if foreign_families:
+                filter_reason = f"foreign_family_{','.join(foreign_families)}"
+                logger.info(f"Filtered out snippet at {file_path}:{code_start_line} - references foreign families: {', '.join(foreign_families)}")
+                self._record_skipped_candidate(
+                    file_path=file_path,
+                    line_number=code_start_line,
+                    reason=filter_reason,
+                    code_preview=code_content
+                )
+                # Track in filter stats for reporting
+                self._track_filter_reason(filter_reason)
+                # Skip this block (but block_index already accounted for in all_blocks)
+                continue
+
             # CD-02: Apply content-based filtering
             should_include, filter_reason = self.filter_snippet(code_content)
 
@@ -790,7 +981,6 @@ class DiscoveryService:
                 app_context=app_context.value,
                 # Code block location metadata (Migration 011)
                 code_block_signature=code_signature,  # From canonical parser
-                extraction_warning=None,  # TODO: Detect duplicate signatures
             )
             # Generate ID is called in model_post_init
             examples.append(example)

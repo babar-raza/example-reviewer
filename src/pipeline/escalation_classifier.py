@@ -126,6 +126,18 @@ def classify_escalation_reason(
     if len(code_lines) < 3:
         return EscalationReason.SNIPPET_TOO_INCOMPLETE
 
+    # Check 3b: Skeleton/placeholder code — only creates objects with placeholder comments
+    placeholder_phrases = [
+        "further processing", "your code here", "add your", "todo",
+        "processing steps follow", "processing follows here",
+    ]
+    if any(phrase in code.lower() for phrase in placeholder_phrases):
+        # Count actual code statements (excluding using/braces/comments)
+        stmt_lines = [l for l in code_lines
+                      if not l.startswith('using ') and not l.startswith('{') and not l.startswith('}')]
+        if len(stmt_lines) <= 3:
+            return EscalationReason.SNIPPET_TOO_INCOMPLETE
+
     # Check 4: No Aspose usage detected
     if not _has_aspose_usage(code):
         return EscalationReason.NO_ASPOSE_USAGE
