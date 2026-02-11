@@ -1,4 +1,0 @@
-ID,Name,Value
-1,Sample A,100
-2,Sample B,200
-3,Sample C,300

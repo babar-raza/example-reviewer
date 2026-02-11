@@ -1,2 +1,0 @@
-This file is nested inside a subfolder.
-Used to test directory structure preservation in ZIP operations.
