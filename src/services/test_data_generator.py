@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # Canterbury Corpus snippets for compression testing
@@ -549,6 +549,286 @@ def generate_all_zip_family(destination_dir: Path, verbose: bool = False) -> Dic
             print(f"  [{status}] {message}")
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Multi-family file generators (for FixtureResolverService)
+# ---------------------------------------------------------------------------
+
+# Minimal valid PNG: 1x1 transparent pixel (67 bytes)
+_MINIMAL_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAB"
+    "Nl7BcQAAAABJRU5ErkJggg=="
+)
+
+# Minimal valid JPEG: 1x1 white pixel
+_MINIMAL_JPEG_BYTES = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoH"
+    "BwYIDAoMCwsKCwsNCxAODxMOCgsQFBESExoSEhQYGRkaIR8fIhwcJB4c/2wBDAME"
+    "AwMEBQQFBQQFBwYFBgcOCggICg4TDhAOEBMUExATExMYFBQUGBQTExoaGhMaJCQk"
+    "JCQkJCQkJCQkJCQkJCT/wAARCAABAAEDASIAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAACf"
+    "/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAUAQEAAAAAAAAAAAAAAAAAAAAA/8QAFBEBAAAA"
+    "AAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCwAB//2Q=="
+)
+
+# Minimal valid BMP: 1x1 white pixel (58 bytes)
+_MINIMAL_BMP_BYTES = (
+    b'BM:\x00\x00\x00\x00\x00\x00\x006\x00\x00\x00(\x00\x00\x00'
+    b'\x01\x00\x00\x00\x01\x00\x00\x00\x01\x00\x18\x00\x00\x00\x00\x00'
+    b'\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+    b'\x00\x00\x00\x00\xff\xff\xff\x00'
+)
+
+# Hint-based canonical selection for .docx files
+_DOCX_HINT_MAP = {
+    "template": "Blank.docx",
+    "blank": "Blank.docx",
+    "empty": "Blank.docx",
+    "new": "Blank.docx",
+    "table": "Tables.docx",
+    "bookmark": "Bookmarks.docx",
+    "comment": "Comments.docx",
+}
+
+
+def _select_canonical_docx(filename: str, test_data_dir: Path) -> Optional[Path]:
+    """Select the best canonical .docx based on filename hints."""
+    name_lower = Path(filename).stem.lower()
+
+    # Check hints
+    for hint, canonical in _DOCX_HINT_MAP.items():
+        if hint in name_lower:
+            candidate = test_data_dir / canonical
+            if candidate.exists():
+                return candidate
+
+    # Default: Document.docx (richest content) -> Blank.docx (fallback)
+    for fallback in ("Document.docx", "Blank.docx"):
+        candidate = test_data_dir / fallback
+        if candidate.exists():
+            return candidate
+
+    # Last resort: any .docx in test-data
+    for f in test_data_dir.rglob("*.docx"):
+        if f.is_file():
+            return f
+
+    return None
+
+
+def _generate_docx_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
+    """Generate a .docx by copying the best canonical source."""
+    canonical = _select_canonical_docx(dest.name, test_data_dir)
+    if canonical:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(canonical, dest)
+        return (True, f"Generated {dest.name} from canonical {canonical.name}")
+    return (False, f"No canonical .docx found in test-data for {dest.name}")
+
+
+def _generate_doc_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
+    """Generate a .doc by copying canonical source."""
+    for name in ("Document.doc", "Blank.doc"):
+        candidate = test_data_dir / name
+        if candidate.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(candidate, dest)
+            return (True, f"Generated {dest.name} from canonical {candidate.name}")
+    # Try any .doc
+    for f in test_data_dir.rglob("*.doc"):
+        if f.is_file() and f.suffix.lower() == ".doc":
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dest)
+            return (True, f"Generated {dest.name} from {f.name}")
+    return (False, f"No canonical .doc found in test-data for {dest.name}")
+
+
+def _generate_pdf_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
+    """Generate a .pdf by copying canonical source."""
+    for f in test_data_dir.rglob("*.pdf"):
+        if f.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dest)
+            return (True, f"Generated {dest.name} from canonical {f.name}")
+    # Minimal valid PDF
+    minimal_pdf = (
+        b"%PDF-1.0\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj "
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj "
+        b"3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\n"
+        b"xref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n"
+        b"0000000058 00000 n \n0000000115 00000 n \n"
+        b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(minimal_pdf)
+    return (True, f"Generated minimal PDF {dest.name}")
+
+
+def _generate_html(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid HTML file."""
+    content = (
+        "<!DOCTYPE html>\n<html>\n<head><title>Sample</title></head>\n"
+        "<body>\n<h1>Sample Document</h1>\n<p>This is a sample HTML document for testing.</p>\n"
+        "<table><tr><th>Name</th><th>Value</th></tr>"
+        "<tr><td>Item1</td><td>100</td></tr></table>\n"
+        "</body>\n</html>\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated HTML {dest.name}")
+
+
+def _generate_text(dest: Path) -> Tuple[bool, str]:
+    """Generate a text file with sample content."""
+    # Reuse Canterbury corpus snippet
+    content = CANTERBURY_CORPUS.get("alice29.txt", "Sample text content for testing.\n")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated text {dest.name}")
+
+
+def _generate_png(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid 1x1 PNG."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(_MINIMAL_PNG_BYTES)
+    return (True, f"Generated minimal PNG {dest.name}")
+
+
+def _generate_jpeg(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid JPEG."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(_MINIMAL_JPEG_BYTES)
+    return (True, f"Generated minimal JPEG {dest.name}")
+
+
+def _generate_bmp(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid 1x1 BMP."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(_MINIMAL_BMP_BYTES)
+    return (True, f"Generated minimal BMP {dest.name}")
+
+
+def _generate_csv(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal CSV file."""
+    content = "Name,Value,Category\nItem1,100,A\nItem2,200,B\nItem3,300,C\n"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated CSV {dest.name}")
+
+
+def _generate_xml(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid XML file."""
+    content = '<?xml version="1.0" encoding="utf-8"?>\n<root>\n  <item id="1">Sample</item>\n  <item id="2">Data</item>\n</root>\n'
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated XML {dest.name}")
+
+
+def _generate_rtf(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid RTF file."""
+    content = r"{\rtf1\ansi{\fonttbl\f0 Calibri;}{\pard Sample RTF document for testing.\par}}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="ascii")
+    return (True, f"Generated RTF {dest.name}")
+
+
+def _generate_odt_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
+    """Generate a .odt by copying canonical source."""
+    for f in test_data_dir.rglob("*.odt"):
+        if f.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dest)
+            return (True, f"Generated {dest.name} from canonical {f.name}")
+    return (False, f"No canonical .odt found in test-data for {dest.name}")
+
+
+# Extension-to-generator dispatch table
+_FAMILY_GENERATORS: Dict[str, Any] = {
+    # Document formats (copy canonical)
+    ".docx": lambda dest, td, _: _generate_docx_from_canonical(dest, td),
+    ".doc": lambda dest, td, _: _generate_doc_from_canonical(dest, td),
+    ".pdf": lambda dest, td, _: _generate_pdf_from_canonical(dest, td),
+    ".odt": lambda dest, td, _: _generate_odt_from_canonical(dest, td),
+    # Text formats (generate)
+    ".html": lambda dest, td, _: _generate_html(dest),
+    ".htm": lambda dest, td, _: _generate_html(dest),
+    ".txt": lambda dest, td, _: _generate_text(dest),
+    ".csv": lambda dest, td, _: _generate_csv(dest),
+    ".xml": lambda dest, td, _: _generate_xml(dest),
+    ".rtf": lambda dest, td, _: _generate_rtf(dest),
+    # Image formats (minimal valid bytes)
+    ".png": lambda dest, td, _: _generate_png(dest),
+    ".jpg": lambda dest, td, _: _generate_jpeg(dest),
+    ".jpeg": lambda dest, td, _: _generate_jpeg(dest),
+    ".bmp": lambda dest, td, _: _generate_bmp(dest),
+    ".gif": lambda dest, td, _: _generate_png(dest),  # PNG as fallback for GIF
+    ".tiff": lambda dest, td, _: _generate_bmp(dest),  # BMP as fallback for TIFF
+    ".tif": lambda dest, td, _: _generate_bmp(dest),
+    ".svg": lambda dest, td, _: _generate_svg(dest),
+}
+
+
+def _generate_svg(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid SVG file."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>\n',
+        encoding="utf-8",
+    )
+    return (True, f"Generated minimal SVG {dest.name}")
+
+
+def generate_file_for_family(
+    filename: str,
+    dest: Path,
+    test_data_dir: Path,
+    family: str,
+) -> Tuple[bool, str]:
+    """
+    Generate a fixture file for any family, using existing test-data
+    as canonical sources when possible.
+
+    Priority:
+    1. Extension-specific generator (copy canonical or create minimal valid file)
+    2. Copy any same-extension file from test-data
+    3. Generate placeholder text
+
+    Args:
+        filename: Target filename (e.g. "ReportTemplate.docx")
+        dest: Full destination path for the generated file
+        test_data_dir: Directory containing existing test data (for canonical sources)
+        family: Product family identifier (e.g. "zip", "words")
+
+    Returns:
+        (success, message) tuple
+    """
+    ext = dest.suffix.lower()
+
+    # Try extension-specific generator
+    generator = _FAMILY_GENERATORS.get(ext)
+    if generator:
+        try:
+            return generator(dest, test_data_dir, family)
+        except Exception as e:
+            # Fall through to generic handling
+            pass
+
+    # Try copying any same-extension file from test-data
+    if ext:
+        for f in test_data_dir.rglob(f"*{ext}"):
+            if f.is_file():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, dest)
+                return (True, f"Generated {filename} by copying {f.name}")
+
+    # Last resort: placeholder text (only for text-like extensions)
+    text_like = {".txt", ".csv", ".xml", ".html", ".htm", ".rtf", ".json", ".md", ".log"}
+    if ext in text_like or not ext:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(f"Placeholder content for {filename}\n", encoding="utf-8")
+        return (True, f"Generated placeholder {filename}")
+
+    return (False, f"Cannot generate {filename}: unsupported extension '{ext}'")
 
 
 if __name__ == "__main__":

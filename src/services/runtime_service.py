@@ -242,7 +242,7 @@ class RuntimeService:
                 self._copy_test_data(test_data_path, work_dir, family_config.runtime_validation)
             
             # Build and run the project
-            result = self._build_and_run(work_dir, code, family_config)
+            result = self._build_and_run(work_dir, code, family_config, app_context=example.app_context)
             
             return result.success, result
             
@@ -411,12 +411,13 @@ class RuntimeService:
         work_dir: Path,
         code: str,
         family_config: FamilyConfig,
+        app_context: Optional[str] = None,
     ) -> RuntimeResult:
         """Build and execute code in workspace."""
         import time
-        
+
         # Write project and code files
-        self._write_project(work_dir, family_config)
+        self._write_project(work_dir, family_config, app_context=app_context)
         
         # Wrap code if needed
         wrapped_code = self._wrap_code(code, family_config)
@@ -521,13 +522,14 @@ class RuntimeService:
                 exception_message=str(e),
             )
     
-    def _write_project(self, work_dir: Path, family_config: FamilyConfig) -> None:
+    def _write_project(self, work_dir: Path, family_config: FamilyConfig,
+                       app_context: Optional[str] = None) -> None:
         """Write .csproj file for execution."""
         nuget_config = family_config.nuget_config
-        
+
         # Build package references
         package_refs = []
-        
+
         if nuget_config:
             # Primary package
             primary = nuget_config.primary_package
@@ -536,7 +538,7 @@ class RuntimeService:
                 package_refs.append(
                     f'    <PackageReference Include="{primary.name}" Version="{version}" />'
                 )
-            
+
             # Additional packages
             for pkg in nuget_config.additional_packages:
                 if pkg.name:
@@ -544,8 +546,13 @@ class RuntimeService:
                     package_refs.append(
                         f'    <PackageReference Include="{pkg.name}" Version="{version}" />'
                     )
-        
-        project_content = f"""<Project Sdk="Microsoft.NET.Sdk">
+
+        # Use Web SDK for ASP.NET contexts
+        is_aspnet = app_context and app_context.startswith('aspnet')
+        sdk = "Microsoft.NET.Sdk.Web" if is_aspnet else "Microsoft.NET.Sdk"
+        framework_ref = '    <FrameworkReference Include="Microsoft.AspNetCore.App" />\n' if is_aspnet else ''
+
+        project_content = f"""<Project Sdk="{sdk}">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -553,7 +560,7 @@ class RuntimeService:
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
-{chr(10).join(package_refs)}
+{framework_ref}{chr(10).join(package_refs)}
   </ItemGroup>
 </Project>
 """
@@ -569,7 +576,10 @@ class RuntimeService:
         # Check for various code elements
         has_usings = bool(re.search(r'^\s*using\s+[\w\.]+\s*;', code, re.MULTILINE))
         has_namespace = bool(re.search(r'\bnamespace\s+[\w\.]+', code))
-        has_class = bool(re.search(r'\bclass\s+\w+', code))
+        has_class = any(
+            re.search(r'\bclass\s+\w+', line.split('//')[0])
+            for line in code.split('\n')
+        )
         has_main = bool(re.search(r'\bstatic\s+(?:async\s+)?(?:void|Task|Task<int>|int)\s+Main\s*\(', code))
         is_async = bool(re.search(r'\bawait\s+', code)) or bool(re.search(r'\basync\s+', code))
 

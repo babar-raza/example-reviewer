@@ -13,6 +13,7 @@ Error Handlers:
 
 import re
 import json
+import difflib
 import logging
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
@@ -605,6 +606,419 @@ def fix_stream_disposal_pattern(code: str) -> Tuple[str, str]:
 # - fix_placeholder_archive_paths -> fix_placeholder_archive_paths
 
 
+def parse_cs0117_error(error: str) -> Optional[Tuple[str, str]]:
+    """
+    Parse CS0117 error to extract type name and invalid member name.
+
+    Error format: "'CompressionLevel' does not contain a definition for 'Normal'"
+
+    Args:
+        error: CS0117 error message
+
+    Returns:
+        Tuple of (type_name, member_name) or None
+    """
+    match = re.search(r"'(\w+)' does not contain a definition for '(\w+)'", error)
+    if match:
+        return (match.group(1), match.group(2))
+    return None
+
+
+def fix_cs0117_invalid_member(code: str, type_name: str, member_name: str, catalog=None) -> Optional[str]:
+    """
+    Fix CS0117 (invalid member) using catalog enum data + difflib fuzzy match.
+
+    When a type does not contain a member (e.g. CompressionLevel.Normal),
+    this function looks up valid enum members from the API catalog and
+    finds the closest match using difflib.
+
+    Args:
+        code: Original code
+        type_name: The type that doesn't contain the member (e.g. "CompressionLevel")
+        member_name: The invalid member name (e.g. "Normal")
+        catalog: Optional APICatalogService instance with enum data
+
+    Returns:
+        Fixed code string if a match was found, or None
+    """
+    if not catalog:
+        return None
+    members = catalog.get_enum_members(type_name)
+    if not members:
+        return None
+    best_match = difflib.get_close_matches(member_name, members, n=1, cutoff=0.4)
+    if best_match:
+        old_ref = f"{type_name}.{member_name}"
+        new_ref = f"{type_name}.{best_match[0]}"
+        if old_ref in code:
+            logger.info(f"CS0117: Fuzzy-matched '{old_ref}' -> '{new_ref}' (catalog enum lookup)")
+            return code.replace(old_ref, new_ref)
+    return None
+
+
+def fix_cs1503_constructor_type(code: str, type_name: str, catalog=None) -> Optional[str]:
+    """
+    Fix CS1503 (wrong argument type) using catalog constructor data.
+
+    When a constructor is called with the wrong argument type, this function
+    looks up the catalog's constructor signatures for the type and tries to
+    find one that takes an Options/Settings/LoadOptions parameter. If found,
+    it suggests wrapping the argument in the appropriate Options object.
+
+    Args:
+        code: Original code
+        type_name: The type whose constructor has a type mismatch
+        catalog: Optional APICatalogService instance with constructor data
+
+    Returns:
+        Fixed code string if a suggestion was applied, or None
+    """
+    if not catalog:
+        return None
+    ctors = catalog.get_constructor_signatures(type_name)
+    if not ctors:
+        return None
+
+    # Find constructor overloads that accept an Options/Settings/LoadOptions parameter
+    options_ctor = None
+    options_param_type = None
+    for c in ctors:
+        params_str = c.get("params", "")
+        # params can be a string like "string? sourceFileName, ArchiveLoadOptions? options"
+        # or a list of dicts — handle both formats
+        if isinstance(params_str, str):
+            # Parse comma-separated params from string
+            for part in params_str.split(","):
+                part = part.strip()
+                # Check if param type contains Options/Settings/LoadOptions
+                if any(kw in part for kw in ["Options", "Settings", "LoadOptions"]):
+                    # Extract the type name (first token, removing nullable ?)
+                    tokens = part.split()
+                    if tokens:
+                        options_param_type = tokens[0].rstrip("?")
+                        options_ctor = c
+                        break
+        elif isinstance(params_str, list):
+            for p in params_str:
+                p_type = p.get("type", "")
+                if any(kw in p_type for kw in ["Options", "Settings", "LoadOptions"]):
+                    options_param_type = p_type.rstrip("?")
+                    options_ctor = c
+                    break
+        if options_ctor:
+            break
+
+    if not options_ctor or not options_param_type:
+        return None
+
+    # Look for patterns like: new TypeName("arg1", "arg2")
+    # where the second argument is a plain string that should be wrapped in Options
+    # Common case: new RarArchive("file.rar", "password") ->
+    #   new RarArchive("file.rar", new RarArchiveLoadOptions() { DecryptionPassword = "password" })
+    pattern = rf'new\s+{re.escape(type_name)}\s*\(\s*("(?:[^"\\]|\\.)*")\s*,\s*("(?:[^"\\]|\\.)*")\s*\)'
+    match = re.search(pattern, code)
+    if match:
+        first_arg = match.group(1)
+        second_arg = match.group(2)
+
+        # Determine the property name based on common patterns
+        prop_name = "DecryptionPassword"  # Most common case for archive types
+        if "Load" in options_param_type:
+            prop_name = "DecryptionPassword"
+        elif "Save" in options_param_type or "Saving" in options_param_type:
+            prop_name = "Password"
+
+        replacement = (
+            f'new {type_name}({first_arg}, '
+            f'new {options_param_type}() {{ {prop_name} = {second_arg} }})'
+        )
+        fixed_code = code[:match.start()] + replacement + code[match.end():]
+        logger.info(
+            f"CS1503: Replaced string arg with {options_param_type} in {type_name} constructor (catalog-driven)"
+        )
+        return fixed_code
+    return None
+
+
+def parse_cs1061_error(error: str) -> Optional[Tuple[str, str]]:
+    """
+    Parse CS1061 error to extract type name and missing member name.
+
+    Error format: "'Archive' does not contain a definition for 'SaveAsync'"
+    Also matches: "'BaseGenerationParameters' does not contain a definition for 'ForeColor'"
+
+    Returns:
+        Tuple of (type_name, member_name) or None
+    """
+    match = re.search(r"'([\w.]+)' does not contain a definition for '(\w+)'", error)
+    if match:
+        return (match.group(1).split(".")[-1], match.group(2))
+    return None
+
+
+def fix_cs1061_member_not_found(code: str, type_name: str, member_name: str, catalog=None) -> Optional[str]:
+    """
+    Fix CS1061 (member not found) using catalog property+method data + difflib fuzzy match.
+
+    Generic, catalog-driven: works for ANY family without hardcoded fix patterns.
+    When a type does not contain a member (e.g. BaseGenerationParameters.ForeColor),
+    this function looks up ALL known members (properties + methods) from the API catalog
+    and finds the closest match using difflib.
+
+    Args:
+        code: Original code
+        type_name: The type that doesn't contain the member
+        member_name: The missing member name (e.g. "ForeColor")
+        catalog: APICatalogService instance with property/method data
+
+    Returns:
+        Fixed code string if a match was found, or None
+    """
+    if not catalog:
+        return None
+
+    all_members = catalog.get_all_members(type_name)
+    if not all_members:
+        return None
+
+    # Exact match means the member exists — CS1061 is about something else (skip)
+    if member_name in all_members:
+        return None
+
+    best_match = difflib.get_close_matches(member_name, all_members, n=1, cutoff=0.4)
+    if best_match:
+        old_ref = f".{member_name}"
+        new_ref = f".{best_match[0]}"
+        if old_ref in code:
+            logger.info(
+                f"CS1061: Fuzzy-matched member '{type_name}.{member_name}' -> "
+                f"'{type_name}.{best_match[0]}' (catalog property/method lookup)"
+            )
+            return code.replace(old_ref, new_ref)
+    return None
+
+
+def fix_cs0246_fuzzy_type(code: str, type_name: str, catalog=None) -> Optional[Tuple[str, str]]:
+    """
+    Fix CS0246 (type not found) by case-insensitive fuzzy matching against catalog types.
+
+    When the exact type name isn't in the catalog (e.g. BarCodeGenerator with wrong casing),
+    this function does case-insensitive lookup to find the correct name (BarcodeGenerator),
+    replaces all occurrences in code, and adds the correct using directive.
+
+    Args:
+        code: Original code
+        type_name: The missing type name from the CS0246 error
+        catalog: APICatalogService instance
+
+    Returns:
+        Tuple of (fixed_code, fix_description) or None if no match
+    """
+    if not catalog:
+        return None
+
+    # Try case-insensitive match first
+    correct_name = catalog.find_type_case_insensitive(type_name)
+    if not correct_name or correct_name == type_name:
+        # No case mismatch — try fuzzy match against all types
+        all_types = catalog.get_all_types()
+        matches = difflib.get_close_matches(type_name, all_types, n=1, cutoff=0.7)
+        if matches:
+            correct_name = matches[0]
+        else:
+            return None
+
+    # Replace the wrong type name with the correct one in code
+    fixed_code = re.sub(rf'\b{re.escape(type_name)}\b', correct_name, code)
+
+    # Add using directive for the correct type
+    using_directive = catalog.get_using_directive(correct_name)
+    if using_directive and using_directive not in fixed_code:
+        # Insert after last existing using statement
+        lines = fixed_code.split('\n')
+        last_using = -1
+        for i, line in enumerate(lines):
+            if line.strip().startswith('using ') and line.strip().endswith(';'):
+                last_using = i
+        if last_using >= 0:
+            lines.insert(last_using + 1, using_directive)
+        else:
+            lines.insert(0, using_directive)
+        fixed_code = '\n'.join(lines)
+
+    fix_desc = f"CS0246: Fuzzy-matched type '{type_name}' -> '{correct_name}' (catalog lookup)"
+    logger.info(fix_desc)
+    return (fixed_code, fix_desc)
+
+
+def fix_namespace_redirect(code: str, type_name: str, catalog=None) -> Optional[Tuple[str, str]]:
+    """
+    Fix CS0246 by detecting namespace redirects (e.g. System.Drawing -> Aspose.Drawing).
+
+    When code uses 'using System.Drawing;' but the type (e.g. Bitmap) actually lives in
+    'Aspose.Drawing' per the catalog, replace the using directive. This is common when
+    families wrap System.* namespaces with their own implementations.
+
+    Args:
+        code: Original code
+        type_name: The missing type name
+        catalog: APICatalogService instance
+
+    Returns:
+        Tuple of (fixed_code, fix_description) or None
+    """
+    if not catalog:
+        return None
+
+    # Check if the type exists in the catalog
+    target_ns = catalog.get_namespace_for_type(type_name)
+    if not target_ns:
+        return None
+
+    # Build a mapping of System.* -> Aspose.* namespace redirects from the catalog
+    # If the type's namespace is something like "Aspose.Drawing", check if code has
+    # a corresponding "System.Drawing" using directive
+    if not target_ns.startswith("Aspose."):
+        return None
+
+    # Extract the suffix after "Aspose." (e.g. "Drawing" from "Aspose.Drawing")
+    suffix = target_ns[len("Aspose."):]
+
+    # Check for common system namespace prefixes that could be redirected
+    system_ns_candidates = [
+        f"System.{suffix}",
+        f"System.{suffix}.Imaging",
+    ]
+
+    fixed_code = code
+    redirected = []
+    for sys_ns in system_ns_candidates:
+        old_using = f"using {sys_ns};"
+        if old_using in fixed_code:
+            new_using = f"using {target_ns};"
+            if target_ns == f"Aspose.{suffix}":
+                # Direct redirect: System.Drawing -> Aspose.Drawing
+                new_using = f"using {target_ns};"
+            # Only redirect if new namespace isn't already imported
+            if new_using not in fixed_code:
+                fixed_code = fixed_code.replace(old_using, new_using)
+                redirected.append(f"{sys_ns} -> {target_ns}")
+            else:
+                # Remove the duplicate system namespace
+                fixed_code = fixed_code.replace(old_using + "\n", "")
+                redirected.append(f"removed duplicate {sys_ns}")
+
+    if not redirected:
+        return None
+
+    fix_desc = f"NS_REDIRECT: {'; '.join(redirected)} (catalog-driven)"
+    logger.info(fix_desc)
+    return (fixed_code, fix_desc)
+
+
+def fix_cs1503_constructor_type_generic(code: str, error: str, catalog=None) -> Optional[Tuple[str, str]]:
+    """
+    Fix CS1503 (wrong argument type) using catalog constructor signatures.
+
+    Generic version: when a constructor expects type Y but receives type X,
+    and type Y has a constructor that accepts type X, wrap the argument:
+        new Reader("path") -> new Reader(new Bitmap("path"))
+
+    Also handles the reverse: if the catalog shows the correct overload takes
+    a different parameter configuration.
+
+    Args:
+        code: Original code
+        error: The full CS1503 error message
+        catalog: APICatalogService instance
+
+    Returns:
+        Tuple of (fixed_code, fix_description) or None
+    """
+    if not catalog:
+        return None
+
+    # Parse: "cannot convert from 'string' to 'Bitmap'"
+    convert_match = re.search(r"cannot convert from '([\w.]+)' to '([\w.]+)'", error)
+    if not convert_match:
+        return None
+
+    from_type = convert_match.group(1).split(".")[-1]
+    to_type = convert_match.group(2).split(".")[-1]
+
+    # Check if the target type has a constructor that accepts the source type
+    to_ctors = catalog.get_constructor_signatures(to_type)
+    can_wrap = False
+    for c in to_ctors:
+        params_str = c.get("params", "")
+        if isinstance(params_str, str) and from_type.lower() in params_str.lower():
+            can_wrap = True
+            break
+
+    if not can_wrap:
+        return None
+
+    # Find all instances in code where a constructor has a raw from_type argument
+    # that should be wrapped with new to_type(...)
+    # Pattern: something(..."string_literal"...) where the arg should be wrapped
+    # We look for: new SomeType("literal") where SomeType's ctor expects to_type not string
+
+    # Try to find the enclosing constructor call and wrap the argument
+    # Pattern: new EnclosingType("arg") -> new EnclosingType(new to_type("arg"))
+    # We need to figure out which constructor call is failing
+    enclosing_match = re.search(
+        r"The best overloaded method match for '([\w.]+)\.([\w]+)\((.*?)\)'",
+        error
+    )
+    if not enclosing_match:
+        # Try alternate error format for constructor
+        enclosing_match = re.search(r"'([\w.]+)\.(\w+)\(", error)
+
+    # Generic approach: find string literal arguments that should be wrapped
+    # Look for patterns: new Type("string_arg") where Type expects to_type
+    # Replace "string_arg" with new to_type("string_arg")
+    wrap_pattern = rf'(new\s+\w+\s*\(\s*)(\"[^\"]*\")(\s*[,\)])'
+    matches = list(re.finditer(wrap_pattern, code))
+
+    if not matches:
+        return None
+
+    fixed_code = code
+    applied = False
+    for m in reversed(matches):
+        prefix = m.group(1)
+        arg = m.group(2)
+        suffix = m.group(3)
+
+        # Only wrap if this looks like a from_type->to_type conversion
+        new_arg = f"new {to_type}({arg})"
+        replacement = f"{prefix}{new_arg}{suffix}"
+        fixed_code = fixed_code[:m.start()] + replacement + fixed_code[m.end():]
+        applied = True
+        break  # Only fix the first match to be safe
+
+    if not applied:
+        return None
+
+    # Ensure the to_type's namespace is imported
+    using_dir = catalog.get_using_directive(to_type)
+    if using_dir and using_dir not in fixed_code:
+        lines = fixed_code.split('\n')
+        last_using = -1
+        for i, line in enumerate(lines):
+            if line.strip().startswith('using ') and line.strip().endswith(';'):
+                last_using = i
+        if last_using >= 0:
+            lines.insert(last_using + 1, using_dir)
+        else:
+            lines.insert(0, using_dir)
+        fixed_code = '\n'.join(lines)
+
+    fix_desc = f"CS1503: Wrapped {from_type} arg with new {to_type}(...) (catalog constructor match)"
+    logger.info(fix_desc)
+    return (fixed_code, fix_desc)
+
+
 def fix_placeholder_directory_paths(code: str) -> Tuple[str, str]:
     """
     Fix placeholder directory paths that don't exist at runtime.
@@ -798,6 +1212,107 @@ def fix_cs0246_password_protection(code: str) -> Tuple[str, str]:
     return fixed_code, fix_desc
 
 
+def fix_archive_password_as_path(code: str) -> Tuple[str, str]:
+    """
+    Fix Archive("password") where password is mistakenly passed as file path.
+
+    Blog examples sometimes show:
+        new Archive("your_password")  or  new Aspose.Zip.Archive("p@s$")
+    where the constructor expects a FILE PATH, not a password.
+
+    Correct API:
+        new Archive("sample.zip", new ArchiveLoadOptions() { DecryptionPassword = "p@s$" })
+
+    Detection: new Archive(str) where str matches a known placeholder password
+    or the real test password.
+    """
+    all_passwords = PLACEHOLDER_PASSWORDS + [REAL_TEST_PASSWORD]
+
+    for pw in all_passwords:
+        # Match: new Archive("password") or new Aspose.Zip.Archive("password")
+        pattern = rf'new\s+(?:Aspose\.Zip\.)?Archive\s*\(\s*"{re.escape(pw)}"\s*\)'
+        match = re.search(pattern, code)
+        if match:
+            replacement = f'new Archive("sample.zip", new ArchiveLoadOptions() {{ DecryptionPassword = "{REAL_TEST_PASSWORD}" }})'
+            fixed_code = code[:match.start()] + replacement + code[match.end():]
+
+            # Ensure using Aspose.Zip is present
+            if 'using Aspose.Zip;' not in fixed_code and 'using Aspose.Zip;' not in fixed_code:
+                lines = fixed_code.split('\n')
+                using_lines = [i for i, line in enumerate(lines)
+                               if line.strip().startswith('using ') and line.strip().endswith(';')]
+                if using_lines:
+                    lines.insert(using_lines[-1] + 1, 'using Aspose.Zip;')
+                else:
+                    lines.insert(0, 'using Aspose.Zip;')
+                fixed_code = '\n'.join(lines)
+
+            fix_desc = f"RUNTIME: Replaced Archive(\"{pw}\") — password passed as file path, rewrote to Archive(\"sample.zip\", ArchiveLoadOptions)"
+            logger.info(f"Applied fix: {fix_desc}")
+            return fixed_code, fix_desc
+
+    return code, ""
+
+
+def fix_partial_snippet_undefined_vars(code: str) -> Tuple[str, str]:
+    """
+    Inject missing variable declarations for partial code snippets.
+
+    Blog examples sometimes show only the inner body of a loop or method,
+    referencing variables like 'rarArchive', 'entry', 'file' that are
+    defined in the surrounding (but not shown) context.
+
+    This fix detects undefined archive-related variables and injects
+    the minimum declarations needed to make the snippet compilable.
+    """
+    applied = []
+    fixed_code = code
+    lines = code.strip().split('\n')
+    meaningful = [l.strip() for l in lines if l.strip() and not l.strip().startswith('//')]
+
+    # Skip if code already has enough context (class, Main, etc.)
+    if any('class ' in l for l in meaningful) or any('static void Main' in l for l in meaningful):
+        return code, ""
+
+    # Pattern 1: 'rarArchive' referenced but not declared
+    if re.search(r'\brarArchive\b', code) and not re.search(r'\bvar\s+rarArchive\b|\bRarArchive\s+rarArchive\b', code):
+        injection = 'using var rarArchive = new RarArchive("archive.rar");\n'
+        fixed_code = injection + fixed_code
+        applied.append('rarArchive')
+
+    # Pattern 2: 'entry' referenced but not declared (in context of archive iteration)
+    if (re.search(r'\bentry\.Open\b|\bentry\.Name\b|\bentry\.Extract\b', fixed_code)
+            and not re.search(r'\bvar\s+entry\b|\bforeach\s*\(.*\bentry\b', fixed_code)):
+        # This is a loop body — need archive + loop context
+        if 'rarArchive' not in fixed_code:
+            pre = 'using var archive = new RarArchive("archive.rar");\nforeach (var entry in archive.Entries) {\n'
+        else:
+            pre = 'foreach (var entry in rarArchive.Entries) {\n'
+        fixed_code = pre + fixed_code + '\n}'
+        applied.append('entry (loop context)')
+
+    # Pattern 3: 'file' used as stream but not declared (file.Write pattern)
+    if (re.search(r'\bfile\.Write\b', fixed_code)
+            and not re.search(r'\bvar\s+file\b|\bFileStream\s+file\b|\bStream\s+file\b', fixed_code)):
+        injection = 'using var file = File.Create(entry.Name);\n'
+        # Insert before the first line that uses 'file'
+        flines = fixed_code.split('\n')
+        for i, line in enumerate(flines):
+            if 'file.Write' in line or 'file.' in line:
+                indent = len(line) - len(line.lstrip())
+                flines.insert(i, ' ' * indent + injection.rstrip())
+                break
+        fixed_code = '\n'.join(flines)
+        applied.append('file (FileStream)')
+
+    if not applied:
+        return code, ""
+
+    fix_desc = f"PARTIAL_SNIPPET: Injected missing variable declarations: {', '.join(applied)}"
+    logger.info(f"Applied fix: {fix_desc}")
+    return fixed_code, fix_desc
+
+
 def fix_aspnet_minimal_boilerplate(code: str) -> Tuple[str, str]:
     """
     Fix ASP.NET minimal API snippets missing builder/app boilerplate.
@@ -955,11 +1470,108 @@ def fix_file_exists_on_extract(code: str) -> Tuple[str, str]:
 # - fix_compression_level_parameter
 
 
+def proactive_add_using_directives(code: str, namespace_map: Dict[str, str]) -> Tuple[str, List[str]]:
+    """
+    Proactively add missing using directives based on detected API usage in code.
+
+    This function scans the code for Aspose API class references and adds the necessary
+    using directives BEFORE compilation, preventing CS0246 errors from occurring.
+
+    Args:
+        code: Original code to analyze
+        namespace_map: Dictionary mapping API class names to their namespaces
+                      (e.g., {"SevenZipArchive": "Aspose.Zip.SevenZip"})
+
+    Returns:
+        Tuple of (modified_code, list_of_fix_descriptions)
+
+    Example:
+        >>> namespace_map = {"SevenZipArchive": "Aspose.Zip.SevenZip"}
+        >>> code = "class Program { void Main() { var a = new SevenZipArchive(); } }"
+        >>> fixed_code, fixes = proactive_add_using_directives(code, namespace_map)
+        >>> "using Aspose.Zip.SevenZip;" in fixed_code
+        True
+    """
+    if not namespace_map:
+        # No catalog available, can't add using directives proactively
+        return code, []
+
+    # Detect API usage in code
+    detected_apis = []
+    for api_class in namespace_map.keys():
+        # Look for patterns indicating API usage:
+        # - new ApiClass(...) - instantiation
+        # - ApiClass. - static member access
+        # - ApiClass< - generic type usage
+        # - <ApiClass> - generic type parameter
+        # - (ApiClass param) - parameter declaration
+        patterns = [
+            rf'\bnew\s+{re.escape(api_class)}\b',
+            rf'\b{re.escape(api_class)}\.',
+            rf'\b{re.escape(api_class)}<',
+            rf'<{re.escape(api_class)}>',
+            rf'\({re.escape(api_class)}\s+\w+\)',
+        ]
+        if any(re.search(pattern, code) for pattern in patterns):
+            detected_apis.append(api_class)
+
+    if not detected_apis:
+        # No APIs detected, no using directives needed
+        return code, []
+
+    # Extract existing using directives from code
+    existing_usings = set()
+    using_pattern = r'using\s+([\w\.]+)\s*;'
+    for match in re.finditer(using_pattern, code):
+        existing_usings.add(match.group(1))
+
+    # Find missing using directives
+    needed_usings = set()
+    for api in detected_apis:
+        namespace = namespace_map.get(api)
+        if namespace and namespace not in existing_usings:
+            needed_usings.add(namespace)
+
+    if not needed_usings:
+        # All necessary using directives already present
+        return code, []
+
+    # Add missing using directives
+    # Find insertion point: after last existing using directive, or at top
+    lines = code.split('\n')
+    last_using_idx = -1
+
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('using ') and stripped.endswith(';'):
+            last_using_idx = idx
+
+    # Insert new using directives (sorted for consistency)
+    sorted_usings = sorted(needed_usings)
+    if last_using_idx >= 0:
+        # Insert after last existing using directive
+        for using_ns in reversed(sorted_usings):
+            lines.insert(last_using_idx + 1, f'using {using_ns};')
+    else:
+        # No existing using directives, insert at top
+        for using_ns in reversed(sorted_usings):
+            lines.insert(0, f'using {using_ns};')
+
+    fixed_code = '\n'.join(lines)
+
+    # Create fix descriptions
+    fixes = [f"PROACTIVE: Added using directive '{ns}' for detected API usage" for ns in sorted_usings]
+
+    logger.info(f"Proactively added {len(sorted_usings)} using directive(s): {', '.join(sorted_usings)}")
+    return fixed_code, fixes
+
+
 def apply_semantic_microfixes(
     code: str,
     errors: List[str],
     family: str = None,
-    registry: 'FamilyServiceRegistry' = None
+    registry: 'FamilyServiceRegistry' = None,
+    catalog: 'APICatalogService' = None
 ) -> Tuple[str, List[str]]:
     """
     Apply diagnostic-driven semantic micro-fixes (family-aware).
@@ -968,13 +1580,18 @@ def apply_semantic_microfixes(
     0. STREAM_DISPOSAL: Fix premature stream disposal (always applied)
     1. Family-specific proactive fixes (if family specified)
     2. Generic proactive fixes (passwords, directories, ASP.NET, etc.)
-    3. Error-driven fixes (CS0246, CS0103, CS7036, CS0104)
+    3. Error-driven fixes (CS0246, CS0103, CS7036, CS0104, CS0117, CS1503)
+
+    When a catalog (APICatalogService) is provided, CS0117 and CS1503 errors
+    can be fixed dynamically using enum member data and constructor signatures
+    from the API catalog. Existing hardcoded fixes remain as fallback.
 
     Args:
         code: Original code
         errors: Compilation errors
         family: Product family identifier (e.g., 'zip', 'words') - optional for backwards compat
         registry: FamilyServiceRegistry instance for family-aware using directives - optional
+        catalog: APICatalogService instance for dynamic enum/constructor fixes - optional
 
     Returns:
         Tuple of (fixed_code, applied_fixes)
@@ -1008,7 +1625,9 @@ def apply_semantic_microfixes(
     if fix_desc:
         applied_fixes.append(fix_desc)
 
-    # 1. Apply family-specific proactive fixes
+    # 1. Apply family-specific proactive fixes (LEGACY — generic catalog-driven fixers
+    # in steps 6-8 below now handle most of these cases autonomously. Per-family files
+    # are kept as fallback for truly unique patterns that can't be derived from catalog.)
     if family == 'zip':
         try:
             from .semantic_microfixes_zip import ZIP_SPECIFIC_FIXES
@@ -1016,6 +1635,7 @@ def apply_semantic_microfixes(
                 fixed_code, fix_desc = fix_fn(fixed_code)
                 if fix_desc:
                     applied_fixes.append(fix_desc)
+                    logger.debug(f"[LEGACY] Per-family fix applied: {fix_desc} (consider catalog-driven alternative)")
         except ImportError as e:
             logger.warning(f"Failed to import ZIP-specific fixes: {e}")
     elif family == 'words':
@@ -1025,6 +1645,7 @@ def apply_semantic_microfixes(
                 fixed_code, fix_desc = fix_fn(fixed_code)
                 if fix_desc:
                     applied_fixes.append(fix_desc)
+                    logger.debug(f"[LEGACY] Per-family fix applied: {fix_desc} (consider catalog-driven alternative)")
         except ImportError as e:
             logger.warning(f"Failed to import Words-specific fixes: {e}")
 
@@ -1065,6 +1686,16 @@ def apply_semantic_microfixes(
     if fix_desc:
         applied_fixes.append(fix_desc)
 
+    # 2h-pre. Fix Archive("password") wrong constructor: password passed as file path
+    fixed_code, fix_desc = fix_archive_password_as_path(fixed_code)
+    if fix_desc:
+        applied_fixes.append(fix_desc)
+
+    # 2h-pre2. Inject missing variable declarations for partial snippets
+    fixed_code, fix_desc = fix_partial_snippet_undefined_vars(fixed_code)
+    if fix_desc:
+        applied_fixes.append(fix_desc)
+
     # 2h. Fix file-exists collision on ExtractToDirectory
     fixed_code, fix_desc = fix_file_exists_on_extract(fixed_code)
     if fix_desc:
@@ -1077,9 +1708,14 @@ def apply_semantic_microfixes(
 
     # Parse all errors and categorize by type
     cs0246_types = []
+    cs0246_raw_types = []  # type names extracted from raw error (before allowlist filter)
     cs0103_vars = []
     cs7036_params = []
     cs0104_refs = []  # (type_name, fully_qualified_name)
+    cs0117_members = []  # (type_name, member_name)
+    cs1061_members = []  # (type_name, member_name) — new: generic member-not-found
+    cs1503_types = []  # type_name (from error context)
+    cs1503_raw_errors = []  # raw error strings for generic constructor fix
 
     for error in errors:
         error_code = parse_error_code(error)
@@ -1088,6 +1724,12 @@ def apply_semantic_microfixes(
             type_name = parse_cs0246_error(error, using_directives)
             if type_name and type_name not in cs0246_types:
                 cs0246_types.append(type_name)
+            # Also capture the raw type name (before allowlist filter) for fuzzy matching
+            raw_match = re.search(r"The type or namespace name '(\w+)' could not be found", error)
+            if raw_match:
+                raw_name = raw_match.group(1)
+                if raw_name not in cs0246_raw_types:
+                    cs0246_raw_types.append(raw_name)
 
         elif error_code == "CS0103":
             var_name = parse_cs0103_error(error, using_directives)
@@ -1103,6 +1745,26 @@ def apply_semantic_microfixes(
             parsed = parse_cs0104_error(error)
             if parsed and parsed not in cs0104_refs:
                 cs0104_refs.append(parsed)
+
+        elif error_code == "CS0117":
+            parsed = parse_cs0117_error(error)
+            if parsed and parsed not in cs0117_members:
+                cs0117_members.append(parsed)
+
+        elif error_code == "CS1061":
+            parsed = parse_cs1061_error(error)
+            if parsed and parsed not in cs1061_members:
+                cs1061_members.append(parsed)
+
+        elif error_code == "CS1503":
+            # Extract type name from CS1503 error for catalog-driven constructor fix
+            # Error format: "Argument N: cannot convert from 'X' to 'Y'"
+            type_match = re.search(r"cannot convert from '(\w+)' to '([\w.]+)'", error)
+            if type_match:
+                target_type = type_match.group(2).split(".")[-1]  # Get simple name
+                if target_type not in cs1503_types:
+                    cs1503_types.append(target_type)
+                cs1503_raw_errors.append(error)
 
     # Apply fixes in order: CS0104 -> CS0246 -> CS0103 -> CS7036
 
@@ -1128,6 +1790,81 @@ def apply_semantic_microfixes(
     for param_name in cs7036_params:
         fixed_code, fix_desc = fix_cs7036_missing_argument(fixed_code, param_name)
         if fix_desc:
+            applied_fixes.append(fix_desc)
+
+    # 4. Fix CS0117: Invalid Member (catalog-driven enum fuzzy match)
+    for type_name, member_name in cs0117_members:
+        result = fix_cs0117_invalid_member(fixed_code, type_name, member_name, catalog=catalog)
+        if result is not None:
+            fixed_code = result
+            applied_fixes.append(
+                f"CS0117: Replaced '{type_name}.{member_name}' with catalog-matched valid member"
+            )
+        else:
+            logger.debug(
+                f"CS0117: No catalog match for '{type_name}.{member_name}' "
+                f"(catalog {'available' if catalog else 'not available'})"
+            )
+
+    # 5. Fix CS1503: Wrong Argument Type (catalog-driven constructor suggestion)
+    for target_type in cs1503_types:
+        result = fix_cs1503_constructor_type(fixed_code, target_type, catalog=catalog)
+        if result is not None:
+            fixed_code = result
+            applied_fixes.append(
+                f"CS1503: Applied catalog-driven constructor fix for '{target_type}'"
+            )
+        else:
+            logger.debug(
+                f"CS1503: No catalog constructor fix for '{target_type}' "
+                f"(catalog {'available' if catalog else 'not available'})"
+            )
+
+    # 6. Fix CS1061: Member Not Found (catalog-driven property/method fuzzy match)
+    for type_name, member_name in cs1061_members:
+        result = fix_cs1061_member_not_found(fixed_code, type_name, member_name, catalog=catalog)
+        if result is not None:
+            fixed_code = result
+            applied_fixes.append(
+                f"CS1061: Fuzzy-matched '{type_name}.{member_name}' to catalog member"
+            )
+        else:
+            logger.debug(
+                f"CS1061: No catalog match for '{type_name}.{member_name}' "
+                f"(catalog {'available' if catalog else 'not available'})"
+            )
+
+    # 7. Fix CS0246: Fuzzy Type Matching + Namespace Redirect (catalog-driven)
+    # Only for types that weren't handled by the standard CS0246 using-directive fix
+    already_fixed_types = set(cs0246_types)
+    for raw_type in cs0246_raw_types:
+        if raw_type in already_fixed_types:
+            continue  # Already fixed by standard CS0246 handler
+
+        # 7a. Try namespace redirect first (System.Drawing -> Aspose.Drawing)
+        result = fix_namespace_redirect(fixed_code, raw_type, catalog=catalog)
+        if result is not None:
+            fixed_code, fix_desc = result
+            applied_fixes.append(fix_desc)
+            continue
+
+        # 7b. Try fuzzy type matching (BarCodeGenerator -> BarcodeGenerator)
+        result = fix_cs0246_fuzzy_type(fixed_code, raw_type, catalog=catalog)
+        if result is not None:
+            fixed_code, fix_desc = result
+            applied_fixes.append(fix_desc)
+        else:
+            logger.debug(
+                f"CS0246: No fuzzy type match for '{raw_type}' "
+                f"(catalog {'available' if catalog else 'not available'})"
+            )
+
+    # 8. Fix CS1503: Generic Constructor Type Wrapping (catalog-driven)
+    # Only for errors not handled by the specialized CS1503 handler above
+    for raw_error in cs1503_raw_errors:
+        result = fix_cs1503_constructor_type_generic(fixed_code, raw_error, catalog=catalog)
+        if result is not None:
+            fixed_code, fix_desc = result
             applied_fixes.append(fix_desc)
 
     logger.info(f"Applied {len(applied_fixes)} semantic micro-fixes")

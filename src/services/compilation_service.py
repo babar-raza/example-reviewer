@@ -162,9 +162,9 @@ class CompilationService:
             
             # Wrap code in compilable structure
             wrapped_code = self._wrap_code(code, family_config, app_context=example.app_context)
-            
-            # Write project files (with app_context for Phase-2 Gate B)
-            self._write_project(work_dir, family_config, app_context=example.app_context)
+
+            # Write project files (with app_context for Phase-2 Gate B, wrapped_code for TASK-R8)
+            self._write_project(work_dir, family_config, app_context=example.app_context, wrapped_code=wrapped_code)
 
             # Write code file
             code_path = work_dir / "Program.cs"
@@ -441,7 +441,8 @@ class CompilationService:
         self,
         work_dir: Path,
         family_config: FamilyConfig,
-        app_context: Optional[str] = None
+        app_context: Optional[str] = None,
+        wrapped_code: Optional[str] = None
     ) -> None:
         """
         Write .csproj file for compilation.
@@ -450,6 +451,7 @@ class CompilationService:
             work_dir: Working directory
             family_config: Family configuration
             app_context: Application context (Phase-2 Gate B)
+            wrapped_code: The wrapped code for controller detection (TASK-R8)
         """
         nuget_config = family_config.nuget_config
 
@@ -475,7 +477,7 @@ class CompilationService:
 
         # Phase-2 Gate B: Use context harness for project template if available
         if self.context_harness is not None:
-            project_template = self.context_harness.get_project_template(app_context)
+            project_template = self.context_harness.get_project_template(app_context, code=wrapped_code)
             logger.debug(f"Using context-specific project template for app_context={app_context}")
         else:
             project_template = self.PROJECT_TEMPLATE
