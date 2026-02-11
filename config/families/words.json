@@ -1,7 +1,7 @@
 {
   "family": "words",
   "display_name": "Aspose.Words for .NET",
-  "auto_commit": false,
+  "auto_commit": true,
   "commit_message_template": "fix(words): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
     "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/words",
@@ -38,7 +38,8 @@
       "Aspose.Words.Tables",
       "Aspose.Words.Fields",
       "Aspose.Words.Drawing",
-      "Aspose.Words.Loading"
+      "Aspose.Words.Loading",
+      "Aspose.Words.Replacing"
     ]
   },
   "namespace_policy": {
@@ -111,7 +112,10 @@
       "enabled": false,
       "allowed_owners": ["aspose-com-gists", "aspose-words"],
       "blocked_owners": []
-    }
+    },
+    "require_code_indicators": [],
+    "min_line_count": 1,
+    "max_line_count": 500
   },
   "context_enforcement": {
     "enabled": true
@@ -123,25 +127,17 @@
     "Encrypted.ott": "p@s$"
   },
   "api_catalog": {
-    "enabled": false,
+    "enabled": true,
     "storage_type": "json",
     "path": "config/families/words_api_catalog.json",
-    "lazy_loading": true
+    "lazy_loading": true,
+    "assembly_verified": true,
+    "assembly_version": "26.1.0"
   },
-  "llm": {
-    "provider": "openai",
-    "model": "qwen2.5-coder:7b",
-    "base_url": "http://localhost:11434/v1",
-    "api_key_env_var": "OPENAI_API_KEY",
-    "temperature": 0.2,
-    "max_retries": 2,
-    "timeout_seconds": 120
-  },
-  "final_review": {
-    "provider": "openai",
-    "model": "qwen2.5-coder:7b",
-    "base_url": "http://localhost:11434/v1",
-    "timeout_seconds": 60
+  "fixture_resolver": {
+    "enabled": true,
+    "max_generations_per_run": 50,
+    "registry_path": "artifacts/backfill/words/fixture-registry.json"
   },
   "learned_patterns": {
     "enabled": true,
@@ -163,14 +159,5 @@
   "dependency_resolution": {
     "enabled": true,
     "confidence_threshold": 0.7
-  },
-  "api_reference": {
-    "git_repo": "https://github.com/aspose-words/Aspose.Words-API-References-Tutorials",
-    "git_ref": "main",
-    "git_subpath": "english/net",
-    "shallow_clone": true,
-    "auto_fetch": true,
-    "clone_timeout_seconds": 120,
-    "max_context_chars": 8000
   }
 }

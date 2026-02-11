@@ -84,7 +84,7 @@ def test_check_test_data_availability_with_dirs(tmp_path):
     """Test availability check with both files and directories."""
     # Setup
     db = Database(":memory:")
-    runtime_service = RuntimeService(db, workspace_dir=tmp_path / "workspace")
+    runtime_service = RuntimeService(db, family="zip", workspace_dir=tmp_path / "workspace")
 
     # Create test data
     test_data = tmp_path / "test-data"
@@ -115,7 +115,7 @@ def test_check_test_data_availability_missing_dir(tmp_path):
     """Test availability check with missing directory."""
     # Setup
     db = Database(":memory:")
-    runtime_service = RuntimeService(db, workspace_dir=tmp_path / "workspace")
+    runtime_service = RuntimeService(db, family="zip", workspace_dir=tmp_path / "workspace")
 
     # Create test data without the required directory
     test_data = tmp_path / "test-data"
@@ -144,7 +144,7 @@ def test_copy_test_data_with_dirs(tmp_path):
     """Test copying test data including directories."""
     # Setup
     db = Database(":memory:")
-    runtime_service = RuntimeService(db, workspace_dir=tmp_path / "workspace")
+    runtime_service = RuntimeService(db, family="zip", workspace_dir=tmp_path / "workspace")
 
     # Create test data
     source_dir = tmp_path / "test-data"
@@ -193,7 +193,7 @@ def test_copy_test_data_dir_with_aliases(tmp_path):
     """Test copying directories with alias support."""
     # Setup
     db = Database(":memory:")
-    runtime_service = RuntimeService(db, workspace_dir=tmp_path / "workspace")
+    runtime_service = RuntimeService(db, family="zip", workspace_dir=tmp_path / "workspace")
 
     # Create test data
     source_dir = tmp_path / "test-data"

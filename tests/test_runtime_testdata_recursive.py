@@ -122,7 +122,7 @@ def test_check_test_data_availability_recursive():
         (zip_dir / "sample.zip").write_text("fake zip")
 
         # Create runtime service (no DB needed for this test)
-        runtime = RuntimeService(db=None)
+        runtime = RuntimeService(db=None, family="zip")
 
         # Create config requiring files in nested dirs
         config = RuntimeValidationConfig(
@@ -151,7 +151,7 @@ def test_check_test_data_availability_missing_file():
         # Only create one file
         (test_data / "existing.zip").write_text("fake zip")
 
-        runtime = RuntimeService(db=None)
+        runtime = RuntimeService(db=None, family="zip")
 
         config = RuntimeValidationConfig(
             required_files=["existing.zip", "missing.rar"],
@@ -185,7 +185,7 @@ def test_copy_test_data_recursive():
         workspace = Path(tmpdir) / "workspace"
         workspace.mkdir()
 
-        runtime = RuntimeService(db=None)
+        runtime = RuntimeService(db=None, family="zip")
 
         config = RuntimeValidationConfig(
             required_files=["plrabn12.rar"],
@@ -219,7 +219,7 @@ def test_copy_test_data_with_alias_recursive():
         workspace = Path(tmpdir) / "workspace"
         workspace.mkdir()
 
-        runtime = RuntimeService(db=None)
+        runtime = RuntimeService(db=None, family="zip")
 
         config = RuntimeValidationConfig(
             required_files=["plrabn12.rar"],

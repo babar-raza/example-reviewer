@@ -145,10 +145,10 @@ def test_cache_hit_returns_same_instance(registry):
 def test_namespace_map_returns_catalog_data(registry):
     """Test that get_namespace_map returns data from APICatalogService."""
     with patch('src.pipeline.family_service_registry.APICatalogService') as mock_catalog_class:
-        # Create mock catalog instance with get_using_directive_map method
+        # Create mock catalog instance with get_namespace_map method
         mock_catalog = Mock(spec=APICatalogService)
-        expected_map = {'ZipArchive': 'using Aspose.Zip;', 'Archive': 'using Aspose.Zip;'}
-        mock_catalog.get_using_directive_map.return_value = expected_map
+        expected_map = {'ZipArchive': 'Aspose.Zip', 'Archive': 'Aspose.Zip'}
+        mock_catalog.get_namespace_map.return_value = expected_map
         mock_catalog_class.return_value = mock_catalog
 
         # Get namespace map
@@ -156,7 +156,7 @@ def test_namespace_map_returns_catalog_data(registry):
 
         # Verify it returns the catalog's data
         assert namespace_map == expected_map
-        mock_catalog.get_using_directive_map.assert_called_once()
+        mock_catalog.get_namespace_map.assert_called_once()
 
 
 def test_using_directives_returns_catalog_data(registry):

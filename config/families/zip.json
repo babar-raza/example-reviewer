@@ -1,7 +1,7 @@
 {
   "family": "zip",
   "display_name": "Aspose.ZIP for .NET",
-  "auto_commit": false,
+  "auto_commit": true,
   "commit_message_template": "fix(zip): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
     "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/zip",
@@ -64,7 +64,7 @@
       "plrabn12.rar": ["archive.rar", "input.rar", "example.rar", "sample.rar", "data.rar"],
       "encrypted.rar": ["encrypted_archive.rar", "password_protected.rar", "protected.rar"],
       "archive.7z": ["input.7z", "protected.7z", "example.7z"],
-      "encrypted_password.zip": ["encrypted.zip"],
+      "encrypted_password.zip": ["encrypted.zip", "protected.zip"],
       "different_password.zip": ["password_protected.zip", "secure.zip"],
       "sample_dir": ["input", "data", "sourceDir", "files", "input_folder"],
       "alice29.txt": ["file.txt", "source.txt", "input.txt", "file1.txt", "file2.txt"],
@@ -89,15 +89,6 @@
   "gist": {
     "enabled": true,
     "pat_env_var": "GITHUB_PAT"
-  },
-  "api_reference": {
-    "git_repo": "",
-    "git_ref": "main",
-    "git_subpath": "",
-    "shallow_clone": true,
-    "auto_fetch": false,
-    "max_context_chars": 8000,
-    "clone_timeout_seconds": 120
   },
   "discovery_patterns": {
     "fence_patterns": [
@@ -132,20 +123,10 @@
     "path": "config/families/zip_api_catalog.json",
     "lazy_loading": false
   },
-  "llm": {
-    "provider": "openai",
-    "model": "qwen2.5-coder:7b",
-    "base_url": "http://localhost:11434/v1",
-    "api_key_env_var": "OPENAI_API_KEY",
-    "temperature": 0.2,
-    "max_retries": 2,
-    "timeout_seconds": 120
-  },
-  "final_review": {
-    "provider": "openai",
-    "model": "qwen2.5-coder:7b",
-    "base_url": "http://localhost:11434/v1",
-    "timeout_seconds": 60
+  "fixture_resolver": {
+    "enabled": true,
+    "max_generations_per_run": 50,
+    "registry_path": "artifacts/backfill/zip/fixture-registry.json"
   },
   "learned_patterns": {
     "enabled": true,

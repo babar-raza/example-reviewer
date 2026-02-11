@@ -474,10 +474,14 @@ class TestExtractErrorSignature:
         errors = ["File 'test.zip' was not found"]
         assert extract_error_signature(errors) == "MISSING_FILE"
 
-    def test_extract_unknown(self):
-        """Test unknown error signature."""
-        errors = ["Some random error"]
-        assert extract_error_signature(errors) == "UNKNOWN"
+    def test_extract_unclassified_runtime_error(self):
+        """Test unclassified runtime errors return RUNTIME_ERROR."""
+        errors = ["Some random error that doesn't match known patterns"]
+        signature = extract_error_signature(errors)
+
+        # Unclassified runtime errors (not CS codes, not exceptions, not known patterns)
+        # are correctly classified as RUNTIME_ERROR
+        assert signature == "RUNTIME_ERROR"
 
 
 if __name__ == "__main__":

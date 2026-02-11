@@ -27,7 +27,7 @@ class TestAgentDPreFlightCheck:
         """Set up test fixtures before each test."""
         # Create mock database (not used by check_test_data_availability)
         mock_db = Mock()
-        self.runtime_service = RuntimeService(db=mock_db)
+        self.runtime_service = RuntimeService(db=mock_db, family="zip")
         self.temp_dir = Path(tempfile.mkdtemp())
 
     def teardown_method(self):
