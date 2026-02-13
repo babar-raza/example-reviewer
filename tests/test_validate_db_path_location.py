@@ -97,8 +97,6 @@ def test_db_path_location_from_fingerprint():
 
             print("[PASS] Correctly returns None for non-existent run_id")
 
-            return True
-
         finally:
             os.chdir(original_cwd)
 
@@ -112,8 +110,6 @@ def test_validator_without_db_path_fails_gracefully():
         "Should return None when fingerprint.json is not found"
 
     print("[PASS] Validator correctly returns None when fingerprint not found")
-    return True
-
 
 if __name__ == "__main__":
     try:

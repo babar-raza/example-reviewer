@@ -183,8 +183,12 @@ def test_learned_patterns_with_family_config(registry):
         # Get learned patterns service
         service = registry.get_learned_patterns('zip')
 
-        # Verify LearnedPatternsService was called with family='zip'
-        mock_patterns.assert_called_once_with('zip')
+        # Verify LearnedPatternsService was called with family='zip' and catalog
+        # The catalog is passed as a kwarg since it's retrieved from the registry
+        assert mock_patterns.call_count == 1
+        call_args = mock_patterns.call_args
+        assert call_args[0][0] == 'zip'  # First positional arg is family
+        assert 'catalog' in call_args[1]  # catalog is passed as kwarg
         assert service is mock_instance
 
 

@@ -95,7 +95,6 @@ def test_validator_no_examples():
             f"Expected 0 examples, got {results['summary']['example_count']}"
 
         print("[PASS] Test passed: Validator correctly handles no examples case")
-        return True
 
     finally:
         # Cleanup
@@ -104,8 +103,8 @@ def test_validator_no_examples():
 
 if __name__ == "__main__":
     try:
-        success = test_validator_no_examples()
-        sys.exit(0 if success else 1)
+        test_validator_no_examples()
+        sys.exit(0)
     except Exception as e:
         print(f"[FAIL] Test failed: {e}")
         import traceback
