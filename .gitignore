@@ -124,3 +124,12 @@ test-content/
 NUL
 /report
 node_modules
+/.claude
+
+# Local scratch and backup artifacts
+/backups/
+/temp/
+/catalog-types/
+*.backup
+*.markdown_backup
+*.backup_*
