@@ -147,47 +147,166 @@ class LLMPatternExtractor:
     instead of simple text descriptions.
     """
 
+    # Known code transformers (from semantic_microfixes.py)
+    KNOWN_TRANSFORMERS = {
+        "fix_stream_disposal",
+        "fix_rar_password",
+        "fix_entries_string_index",
+        "fix_placeholder_archives",
+        "fix_placeholder_dirs",
+        "fix_placeholder_passwords",
+    }
+
     EXTRACTION_PROMPT = """Analyze these {count} failed C# code examples with error signature: {signature}
 
 ## Failed Examples:
 {examples}
 
-## Task:
-Generate a reusable, executable fix pattern that could automatically fix similar errors.
+{catalog_context}
 
-## IMPORTANT: Return ONLY valid JSON (no markdown, no explanation):
+## Task:
+Generate an EXECUTABLE fix pattern (not just a description).
+
+## Fix Type Decision Tree:
+1. IF error is CS0246/CS0103/CS0234 AND type exists in available namespaces:
+   → Use fix_type="using_directive"
+2. ELIF fix is simple text replacement (enum value, constant, method name):
+   → Use fix_type="regex_replace"
+3. ELIF fix requires known multi-step transformation:
+   → Use fix_type="code_transform" (only if transformer exists)
+4. ELSE (complex logic that needs LLM):
+   → Use fix_type="llm_prompt"
+
+## Output Schema (RETURN ONLY VALID JSON):
 {{
-    "fix_type": "regex_replace|using_directive|code_transform|llm_prompt",
+    "fix_type": "using_directive|regex_replace|code_transform|llm_prompt",
     "fix_code": {{
-        "pattern": "regex pattern if fix_type is regex_replace",
-        "replacement": "replacement string with $1, $2 for groups",
-        "directive": "using Namespace; if fix_type is using_directive",
-        "trigger_type": "TypeName that should trigger this directive",
-        "transformer": "function_name if fix_type is code_transform",
-        "prompt": "prompt template if fix_type is llm_prompt"
+        // SCHEMA VARIES BY FIX_TYPE - choose ONE:
+
+        // For using_directive (missing type/namespace):
+        "directive": "using Aspose.Words.Drawing;",
+        "trigger_type": "Shape"
+
+        // For regex_replace (text substitution):
+        "pattern": "CompressionLevel\\.Normal",
+        "replacement": "CompressionLevel.Optimal"
+
+        // For code_transform (known transformation):
+        "transformer": "fix_stream_disposal",
+        "params": {{}}
+
+        // For llm_prompt (complex fix):
+        "prompt": "Fix {{error}} by {{description}}. Code: {{code}}",
+        "system_prompt": "You are a C# code fixer."
     }},
-    "confidence": 0.5,
-    "fix_template": "Human-readable description of what this fix does",
-    "example_before": "Short code snippet showing the error pattern",
-    "example_after": "Short code snippet showing the fixed version"
+    "confidence": 0.7,
+    "fix_template": "Human-readable description",
+    "example_before": "var level = CompressionLevel.Normal;",
+    "example_after": "var level = CompressionLevel.Optimal;"
 }}
 
-## Guidelines:
-- For CS0246 (missing type), use fix_type="using_directive" with the correct namespace
-- For simple text replacements, use fix_type="regex_replace"
-- For complex multi-step fixes, use fix_type="llm_prompt"
-- Confidence should reflect how generalizable the fix is (0.3-0.9)
-- Keep examples short (3-5 lines max)
+## EXAMPLES:
+
+### Example 1: using_directive (CS0246 - missing type)
+{{
+    "fix_type": "using_directive",
+    "fix_code": {{
+        "directive": "using Aspose.Zip.Saving;",
+        "trigger_type": "ParallelOptions"
+    }},
+    "confidence": 0.9,
+    "fix_template": "Add using directive for Aspose.Zip.Saving namespace",
+    "example_before": "var opts = new ParallelOptions();",
+    "example_after": "using Aspose.Zip.Saving;\\nvar opts = new ParallelOptions();"
+}}
+
+### Example 2: regex_replace (enum value correction)
+{{
+    "fix_type": "regex_replace",
+    "fix_code": {{
+        "pattern": "CompressionLevel\\.Normal",
+        "replacement": "CompressionLevel.Optimal"
+    }},
+    "confidence": 0.85,
+    "fix_template": "Replace CompressionLevel.Normal with CompressionLevel.Optimal",
+    "example_before": "var level = CompressionLevel.Normal;",
+    "example_after": "var level = CompressionLevel.Optimal;"
+}}
+
+### Example 3: code_transform (stream disposal)
+{{
+    "fix_type": "code_transform",
+    "fix_code": {{
+        "transformer": "fix_stream_disposal",
+        "params": {{}}
+    }},
+    "confidence": 0.9,
+    "fix_template": "Wrap stream in using statement",
+    "example_before": "var ms = new MemoryStream();",
+    "example_after": "using (var ms = new MemoryStream()) {{ ... }}"
+}}
+
+### Example 4: llm_prompt (complex logic fix)
+{{
+    "fix_type": "llm_prompt",
+    "fix_code": {{
+        "prompt": "Fix the null reference error in: {{code}}\\nError: {{error}}",
+        "system_prompt": "Fix C# code. Return ONLY fixed code."
+    }},
+    "confidence": 0.5,
+    "fix_template": "Fix null reference by adding null check",
+    "example_before": "var x = obj.Property;",
+    "example_after": "var x = obj?.Property ?? default;"
+}}
+
+## CRITICAL RULES:
+1. ALWAYS choose the MOST SPECIFIC fix_type (prefer using_directive > regex_replace > code_transform > llm_prompt)
+2. For CS0246/CS0103, ALWAYS use using_directive if type is in catalog
+3. For regex_replace, ensure pattern is valid regex (escape special chars like \\.()[]{{}}+*?)
+4. For code_transform, ONLY use transformers from: {transformers}
+5. Keep confidence realistic: using_directive=0.8-0.9, regex_replace=0.7-0.9, code_transform=0.8-0.9, llm_prompt=0.3-0.6
+6. Return ONLY the JSON object, no markdown fences, no explanations
 """
 
-    def __init__(self, llm_service: Any):
+    def __init__(self, llm_service: Any, catalog=None):
         """
         Initialize with an LLM service instance.
 
         Args:
             llm_service: Instance of LLMService from src.services.llm_service
+            catalog: Optional API catalog service for LLM context
         """
         self.llm_service = llm_service
+        self.catalog = catalog
+
+    def _build_catalog_context_for_extraction(self, error_signature: str) -> str:
+        """Build compact catalog context for pattern extraction."""
+        if not self.catalog or not self.catalog.is_loaded:
+            return ""
+
+        parts = []
+        error_code = error_signature.split('_')[0]
+
+        # For missing type errors: provide namespace list with sample types
+        if error_code in ("CS0246", "CS0103", "CS0234"):
+            namespaces = self.catalog.get_all_namespaces()
+            if namespaces:
+                parts.append("## Available API Namespaces (for using_directive):")
+                # Limit to 15 namespaces to avoid token overflow
+                for ns in namespaces[:15]:
+                    # Try to get sample types from namespace
+                    try:
+                        types = self.catalog.get_types_in_namespace(ns)
+                        if types:
+                            sample_types = ", ".join(types[:5])  # Show up to 5 types
+                            parts.append(f"  - {ns}: {sample_types}")
+                        else:
+                            parts.append(f"  - {ns}")
+                    except Exception:
+                        # If get_types_in_namespace doesn't exist, just show namespace
+                        parts.append(f"  - {ns}")
+
+        return "\n".join(parts) if parts else ""
 
     def extract_patterns_with_llm(
         self,
@@ -210,10 +329,16 @@ Generate a reusable, executable fix pattern that could automatically fix similar
         # Format examples for the prompt
         examples_text = self._format_examples(examples)
 
+        # Build catalog context if available
+        catalog_context = self._build_catalog_context_for_extraction(signature)
+
+        # Build base prompt with context
         prompt = self.EXTRACTION_PROMPT.format(
             count=len(examples),
             signature=signature,
             examples=examples_text,
+            catalog_context=catalog_context,
+            transformers=", ".join(sorted(self.KNOWN_TRANSFORMERS)),
         )
 
         try:
@@ -250,13 +375,57 @@ Generate a reusable, executable fix pattern that could automatically fix similar
             formatted.append(f"### Example {i}\n**Error**: {error}\n**Code**:\n```csharp\n{code}\n```")
         return "\n\n".join(formatted)
 
+    def _create_fallback_llm_prompt(
+        self,
+        data: Dict[str, Any],
+        signature: str,
+    ) -> Dict[str, Any]:
+        """
+        Create fallback llm_prompt fix_code from incomplete executable pattern.
+
+        When LLM returns an invalid executable pattern, fall back to a generic
+        llm_prompt that can still be useful.
+        """
+        description = data.get("fix_template", f"Fix {signature} error")
+        example_before = data.get("example_before", "")
+        example_after = data.get("example_after", "")
+
+        # Build a reasonable prompt template
+        prompt = f"""Fix the following C# code error: {signature}
+
+Error context: {{error}}
+
+Code with error:
+```csharp
+{{code}}
+```
+
+Expected fix: {description}
+"""
+
+        # Add examples if available
+        if example_before and example_after:
+            prompt += f"""
+Example transformation:
+BEFORE:
+{example_before}
+
+AFTER:
+{example_after}
+"""
+
+        return {
+            "prompt": prompt,
+            "system_prompt": "You are a C# code fixer. Return ONLY the fixed code, no explanations.",
+        }
+
     def _parse_llm_response(
         self,
         content: str,
         signature: str,
         family: str,
     ) -> Optional[Dict]:
-        """Parse and validate the LLM response."""
+        """Parse and validate the LLM response with executable pattern validation."""
         # Try to extract JSON from the response
         content = content.strip()
 
@@ -273,24 +442,67 @@ Generate a reusable, executable fix pattern that could automatically fix similar
             return None
 
         # Validate required fields
-        fix_type = data.get("fix_type", "template")
-        if fix_type not in ("regex_replace", "using_directive", "code_transform", "llm_prompt", "template"):
-            logger.warning(f"Invalid fix_type: {fix_type}")
-            fix_type = "template"
-
+        fix_type = data.get("fix_type", "llm_prompt")
         fix_code = data.get("fix_code", {})
         confidence = float(data.get("confidence", 0.5))
 
-        # Validate fix_code based on fix_type
-        if fix_type == "regex_replace" and not fix_code.get("pattern"):
-            logger.warning("regex_replace requires 'pattern' in fix_code")
-            fix_type = "template"
-            fix_code = {}
+        # Validate fix_type is one of the allowed types
+        if fix_type not in ("regex_replace", "using_directive", "code_transform", "llm_prompt", "template"):
+            logger.warning(f"Invalid fix_type '{fix_type}', falling back to llm_prompt")
+            fix_type = "llm_prompt"
+            fix_code = self._create_fallback_llm_prompt(data, signature)
 
-        if fix_type == "using_directive" and not fix_code.get("directive"):
-            logger.warning("using_directive requires 'directive' in fix_code")
-            fix_type = "template"
-            fix_code = {}
+        # Validate fix_code structure based on fix_type
+        elif fix_type == "using_directive":
+            if not fix_code.get("directive"):
+                logger.warning("using_directive missing 'directive', falling back to llm_prompt")
+                fix_type = "llm_prompt"
+                fix_code = self._create_fallback_llm_prompt(data, signature)
+            else:
+                # Valid using_directive - ensure directive has proper format
+                directive = fix_code["directive"].strip()
+                if not directive.startswith("using ") or not directive.endswith(";"):
+                    logger.warning(f"Invalid directive format '{directive}', falling back")
+                    fix_type = "llm_prompt"
+                    fix_code = self._create_fallback_llm_prompt(data, signature)
+
+        elif fix_type == "regex_replace":
+            if not fix_code.get("pattern") or "replacement" not in fix_code:
+                logger.warning("regex_replace missing 'pattern' or 'replacement', falling back")
+                fix_type = "llm_prompt"
+                fix_code = self._create_fallback_llm_prompt(data, signature)
+            else:
+                # Validate regex pattern is compilable
+                try:
+                    re.compile(fix_code["pattern"])
+                except re.error as e:
+                    logger.warning(f"Invalid regex pattern '{fix_code['pattern']}': {e}, falling back")
+                    fix_type = "llm_prompt"
+                    fix_code = self._create_fallback_llm_prompt(data, signature)
+
+        elif fix_type == "code_transform":
+            transformer = fix_code.get("transformer")
+            if not transformer:
+                logger.warning("code_transform missing 'transformer', falling back")
+                fix_type = "llm_prompt"
+                fix_code = self._create_fallback_llm_prompt(data, signature)
+            elif transformer not in self.KNOWN_TRANSFORMERS:
+                logger.warning(f"Unknown transformer '{transformer}', falling back to llm_prompt")
+                logger.info(f"Known transformers: {', '.join(sorted(self.KNOWN_TRANSFORMERS))}")
+                fix_type = "llm_prompt"
+                fix_code = self._create_fallback_llm_prompt(data, signature)
+
+        elif fix_type == "llm_prompt":
+            # llm_prompt should have prompt in fix_code
+            if not fix_code.get("prompt"):
+                logger.warning("llm_prompt missing 'prompt', creating fallback")
+                fix_code = self._create_fallback_llm_prompt(data, signature)
+
+        elif fix_type == "template":
+            # Template is legacy type - convert to llm_prompt
+            logger.info("Converting template fix_type to llm_prompt")
+            fix_type = "llm_prompt"
+            fix_code = self._create_fallback_llm_prompt(data, signature)
 
         # Determine pattern_type from signature
         if signature.startswith("CS"):
@@ -300,6 +512,14 @@ Generate a reusable, executable fix pattern that could automatically fix similar
         else:
             pattern_type = "runtime_error"
 
+        # Adjust auto_approved based on fix_type and confidence
+        # Executable patterns get higher approval threshold
+        if fix_type in ("using_directive", "regex_replace", "code_transform"):
+            auto_approved = confidence >= 0.8
+        else:
+            # llm_prompt patterns require higher confidence for auto-approval
+            auto_approved = confidence >= 0.85
+
         return {
             "family": family,
             "error_signature": signature,
@@ -308,7 +528,7 @@ Generate a reusable, executable fix pattern that could automatically fix similar
             "fix_code": fix_code if fix_code else None,
             "fix_template": data.get("fix_template", f"LLM-generated fix for {signature}"),
             "confidence": min(0.9, max(0.1, confidence)),  # Clamp to 0.1-0.9
-            "auto_approved": confidence >= 0.8,
+            "auto_approved": auto_approved,
             "priority": 50,
             "requires_llm": fix_type == "llm_prompt",
             "example_before": data.get("example_before"),
@@ -321,6 +541,7 @@ def extract_patterns_with_llm(
     clusters: Dict[str, List[Dict]],
     family: str,
     llm_service: Any,
+    catalog=None,
 ) -> List[Dict]:
     """
     Extract patterns from all clusters using LLM.
@@ -329,11 +550,12 @@ def extract_patterns_with_llm(
         clusters: Dict mapping signature -> list of failed examples
         family: Product family
         llm_service: LLM service instance
+        catalog: Optional API catalog for LLM context
 
     Returns:
         List of patterns with executable fix_code
     """
-    extractor = LLMPatternExtractor(llm_service)
+    extractor = LLMPatternExtractor(llm_service, catalog=catalog)
     patterns = []
 
     for signature, examples in clusters.items():
@@ -469,15 +691,36 @@ def _get_llm_service():
         # Add project root to path for imports
         sys.path.insert(0, str(PROJECT_ROOT))
         from src.services.llm_service import LLMService
+        from src.core.config import ConfigurationManager
 
-        # Check for API key
-        api_key = os.getenv("OPENAI_API_KEY")
+        # Load config to get API key env var name
+        config_mgr = ConfigurationManager(
+            config_dir=PROJECT_ROOT / "config" / "families",
+            global_config_path=PROJECT_ROOT / "config" / "global.json"
+        )
+        global_config = config_mgr.load_global_config()
+        llm_config = global_config.llm
+
+        # Check for API key using the configured env var name
+        api_key_env_var = llm_config.api_key_env_var
+        api_key = os.getenv(api_key_env_var)
         if not api_key:
-            logger.warning("OPENAI_API_KEY not set, LLM extraction unavailable")
+            logger.warning(f"{api_key_env_var} not set, LLM extraction unavailable")
             return None
 
-        service = LLMService()
+        # Initialize service with config parameters
+        service = LLMService(
+            provider=llm_config.provider,
+            model=llm_config.model,
+            api_key=api_key,
+            base_url=llm_config.base_url,
+            temperature=llm_config.temperature,
+            max_retries=llm_config.max_retries,
+            retry_backoff_seconds=llm_config.retry_backoff_seconds,
+            timeout_seconds=llm_config.timeout_seconds,
+        )
         if service.is_available():
+            logger.info(f"LLM service initialized: {llm_config.provider}/{llm_config.model} at {llm_config.base_url}")
             return service
         logger.warning("LLM service not available")
         return None
@@ -494,12 +737,42 @@ def main():
     parser.add_argument("--family", required=True, help="Product family")
     parser.add_argument("--run-id", help="Specific run ID (default: latest)")
     parser.add_argument("--dry-run", action="store_true", help="Print patterns without storing")
-    parser.add_argument("--use-llm", action="store_true", help="Use LLM for intelligent pattern extraction")
+    parser.add_argument("--use-llm", action="store_true", help="Use LLM for intelligent pattern extraction (overrides config)")
+    parser.add_argument("--no-llm", action="store_true", help="Disable LLM extraction (overrides config)")
+    parser.add_argument("--retire-patterns", action="store_true", help="Force pattern retirement (overrides config enabled=false)")
+    parser.add_argument("--no-retire", action="store_true", help="Skip pattern retirement (overrides config)")
     args = parser.parse_args()
 
     if not MAIN_DB.exists():
         logger.error(f"Main database not found: {MAIN_DB}")
         sys.exit(1)
+
+    # Load global config to check auto_learn.use_llm
+    use_llm_from_config = False
+    try:
+        from src.core.config import ConfigurationManager
+        config_mgr = ConfigurationManager(
+            config_dir=PROJECT_ROOT / "config" / "families",
+            global_config_path=PROJECT_ROOT / "config" / "global.json"
+        )
+        global_config = config_mgr.load_global_config()
+        use_llm_from_config = global_config.auto_learn.use_llm
+        logger.info(f"Loaded config: auto_learn.use_llm = {use_llm_from_config}")
+    except Exception as e:
+        logger.warning(f"Could not load global config, defaulting to rule-based extraction: {e}")
+
+    # Determine LLM usage: CLI flag overrides config
+    if args.use_llm:
+        use_llm = True
+        llm_mode_source = "CLI override (--use-llm)"
+    elif args.no_llm:
+        use_llm = False
+        llm_mode_source = "CLI override (--no-llm)"
+    else:
+        use_llm = use_llm_from_config
+        llm_mode_source = "config (auto_learn.use_llm)"
+
+    logger.info(f"LLM extraction mode: {use_llm} (source: {llm_mode_source})")
 
     run_id = args.run_id or get_latest_run_id(args.family)
     if not run_id:
@@ -520,16 +793,26 @@ def main():
     clusters = cluster_by_error_signature(failures)
     logger.info(f"Clustered into {len(clusters)} error signatures")
 
+    # Load API catalog for LLM context
+    catalog = None
+    try:
+        from src.services.api_catalog_service import APICatalogService
+        catalog = APICatalogService(args.family)
+        logger.info(f"Loaded API catalog for {args.family}")
+    except Exception as e:
+        logger.warning(f"Could not load API catalog: {e}")
+
     # Choose extraction method
-    if args.use_llm:
+    if use_llm:
         llm_service = _get_llm_service()
         if llm_service:
             logger.info("Using LLM-powered pattern extraction")
-            patterns = extract_patterns_with_llm(clusters, args.family, llm_service)
+            patterns = extract_patterns_with_llm(clusters, args.family, llm_service, catalog=catalog)
         else:
             logger.warning("LLM unavailable, falling back to rule-based extraction")
             patterns = extract_patterns(clusters, args.family)
     else:
+        logger.info("Using rule-based pattern extraction")
         patterns = extract_patterns(clusters, args.family)
 
     # Store
@@ -541,11 +824,47 @@ def main():
     if not args.dry_run and CATALOG_DB.exists():
         update_performance(args.family)
 
+    # NEW: Retire old patterns (unless disabled by --no-retire)
+    retirement_stats = None
+    if not args.no_retire:
+        try:
+            # Load global config for retirement policy
+            from src.core.config import ConfigurationManager
+            from src.services.learned_patterns_service import LearnedPatternsService
+
+            config_mgr = ConfigurationManager(
+                config_dir=PROJECT_ROOT / "config" / "families",
+                global_config_path=PROJECT_ROOT / "config" / "global.json"
+            )
+            global_config = config_mgr.load_global_config()
+            retirement_policy = global_config.pattern_retirement
+
+            # Override enabled if --retire-patterns flag
+            if args.retire_patterns:
+                retirement_policy.enabled = True
+                logger.info("Retirement enabled by CLI flag (--retire-patterns)")
+
+            # Run retirement if enabled (or forced by CLI)
+            if retirement_policy.enabled:
+                logger.info(f"Running pattern retirement (dry_run={retirement_policy.dry_run})...")
+                learned_service = LearnedPatternsService(args.family, db_path=CATALOG_DB)
+                retirement_stats = learned_service.retire_patterns(retirement_policy)
+                logger.info(
+                    f"Retirement complete: {retirement_stats['retired_count']} patterns retired "
+                    f"({retirement_stats['candidates_evaluated']} candidates evaluated)"
+                )
+                learned_service.close()
+            else:
+                logger.debug("Pattern retirement disabled in config")
+
+        except Exception as e:
+            logger.warning(f"Pattern retirement failed: {e}")
+
     # Summary
     print(f"\nAuto-Learn Summary")
     print(f"{'='*40}")
     print(f"Run: {run_id}")
-    print(f"Extraction mode: {'LLM' if args.use_llm else 'Rule-based'}")
+    print(f"Extraction mode: {'LLM' if use_llm else 'Rule-based'} ({llm_mode_source})")
     print(f"Failures analyzed: {len(failures)}")
     print(f"Error clusters: {len(clusters)}")
     for sig, examples in clusters.items():
@@ -556,6 +875,20 @@ def main():
     print(f"  Auto-approved: {auto}")
     print(f"  Executable (has fix_code): {executable}")
     print(f"  Needs review: {len(patterns) - auto}")
+
+    # NEW: Retirement summary
+    if retirement_stats:
+        print(f"\nPattern Retirement:")
+        print(f"  Candidates evaluated: {retirement_stats['candidates_evaluated']}")
+        print(f"  Patterns retired: {retirement_stats['retired_count']}")
+        if retirement_stats['retired_count'] > 0:
+            for p in retirement_stats['retired_patterns']:
+                perf = p['performance']
+                print(
+                    f"    - Pattern {p['pattern_id']} ({p['error_signature']}): "
+                    f"{perf['success_rate']:.1%} success ({perf['times_succeeded']}/{perf['times_applied']}), "
+                    f"{perf['age_days']} days old"
+                )
 
 
 if __name__ == "__main__":

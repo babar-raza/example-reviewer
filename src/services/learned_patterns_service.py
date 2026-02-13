@@ -81,19 +81,23 @@ class LearnedPatternsService:
     # Registry of code transform functions (name -> callable)
     _transformers: Dict[str, Callable[[str], str]] = {}
 
-    def __init__(self, family: str, db_path: Optional[Path] = None):
+    def __init__(self, family: str, db_path: Optional[Path] = None, catalog=None):
         """
         Initialize the service for a specific family.
 
         Args:
             family: Product family (e.g., 'zip')
             db_path: Path to api_catalog.db (defaults to data/api_catalog.db)
+            catalog: Optional API catalog service for LLM context
         """
         self.family = family
         self.db_path = db_path or DEFAULT_DB_PATH
+        self._catalog = catalog  # NEW: Store catalog for LLM operations
         self._connection: Optional[sqlite3.Connection] = None
         # In-run cache: patterns that succeeded during this run get priority boost
         self._run_cache: Dict[str, List[int]] = {}  # error_signature -> [pattern_ids that succeeded]
+        # Preloaded patterns cache: error_signature -> List[LearnedPattern]
+        self._preloaded_cache: Dict[str, List[LearnedPattern]] = {}
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create database connection."""
@@ -109,6 +113,39 @@ class LearnedPatternsService:
         if self._connection:
             self._connection.close()
             self._connection = None
+
+    def preload_all_patterns(self) -> None:
+        """
+        Preload all patterns for this family into memory cache.
+
+        This is called once after Phase A (discovery) to avoid repeated
+        database queries during compilation/runtime loops.
+        """
+        try:
+            conn = self._get_connection()
+            query = """
+                SELECT * FROM learned_patterns
+                WHERE family = ?
+                  AND auto_approved = TRUE
+                ORDER BY error_signature, priority ASC, confidence DESC
+            """
+            cursor = conn.execute(query, [self.family])
+            rows = cursor.fetchall()
+
+            # Group by error_signature
+            for row in rows:
+                pattern = LearnedPattern.from_row(row)
+                sig = pattern.error_signature
+                if sig not in self._preloaded_cache:
+                    self._preloaded_cache[sig] = []
+                self._preloaded_cache[sig].append(pattern)
+
+            logger.info(
+                f"Preloaded {len(rows)} patterns for family '{self.family}' "
+                f"({len(self._preloaded_cache)} unique signatures)"
+            )
+        except sqlite3.Error as e:
+            logger.error(f"Error preloading patterns: {e}")
 
     def query_patterns(
         self,
@@ -129,6 +166,27 @@ class LearnedPatternsService:
         Returns:
             List of LearnedPattern, ordered by priority then confidence (desc)
         """
+        # Check preloaded cache first
+        if error_signature in self._preloaded_cache:
+            patterns = self._preloaded_cache[error_signature]
+            # Apply filters (cache is already auto_approved)
+            filtered = [p for p in patterns if p.confidence >= min_confidence]
+            filtered = filtered[:limit]
+
+            # Apply in-run cache boost
+            cached_ids = set(self._run_cache.get(error_signature, []))
+            if cached_ids:
+                boosted = [p for p in filtered if p.id in cached_ids]
+                rest = [p for p in filtered if p.id not in cached_ids]
+                filtered = boosted + rest
+                if boosted:
+                    logger.debug(
+                        f"In-run cache boost: {len(boosted)} patterns for '{error_signature}'"
+                    )
+
+            return filtered
+
+        # Fall back to database query if not preloaded
         conn = self._get_connection()
 
         query = """
@@ -350,6 +408,7 @@ class LearnedPatternsService:
                 code=code,
                 error_logs=error_context or "",
                 context_type="compile",
+                catalog=self._catalog,  # NEW: Pass catalog for LLM context
             )
             if response.success and response.content:
                 return response.content, True, "LLM fix applied via pattern prompt"
@@ -443,12 +502,173 @@ class LearnedPatternsService:
         except sqlite3.Error as e:
             logger.error(f"Error recording pattern application: {e}")
 
+    def retire_patterns(self, policy) -> Dict[str, Any]:
+        """
+        Retire patterns based on retirement policy criteria.
+
+        Evaluates patterns against multiple retirement criteria:
+        1. Success rate below threshold (after min_attempts)
+        2. Age exceeding max_age_days
+
+        Args:
+            policy: RetirementPolicyConfig instance with retirement criteria
+
+        Returns:
+            Dict with:
+            - candidates_evaluated: Number of patterns evaluated
+            - retired_count: Number of patterns retired
+            - retired_patterns: List of retired pattern details
+        """
+        # Gate: Check if retirement enabled
+        if not policy.enabled:
+            logger.debug("Pattern retirement disabled in config")
+            return {
+                'candidates_evaluated': 0,
+                'retired_count': 0,
+                'retired_patterns': []
+            }
+
+        conn = self._get_connection()
+        now = datetime.now(timezone.utc)
+
+        # Query patterns eligible for retirement
+        # Only consider auto_approved patterns with sufficient attempts
+        query = """
+            SELECT
+                lp.id,
+                lp.error_signature,
+                lp.created_at,
+                lp.source,
+                pp.times_applied,
+                pp.times_succeeded,
+                pp.success_rate,
+                pp.last_used
+            FROM learned_patterns lp
+            JOIN pattern_performance pp ON lp.id = pp.pattern_id
+            WHERE lp.family = ?
+              AND lp.auto_approved = TRUE
+              AND pp.times_applied >= ?
+        """
+
+        try:
+            candidates = conn.execute(query, [self.family, policy.min_attempts]).fetchall()
+        except sqlite3.Error as e:
+            logger.error(f"Error querying retirement candidates: {e}")
+            return {
+                'candidates_evaluated': 0,
+                'retired_count': 0,
+                'retired_patterns': []
+            }
+
+        retired_patterns = []
+
+        for row in candidates:
+            pattern_id = row[0]
+            error_signature = row[1]
+            created_at_str = row[2]
+            source = row[3]
+            times_applied = row[4]
+            times_succeeded = row[5]
+            success_rate = row[6]
+
+            # Calculate age
+            try:
+                # Parse ISO format datetime
+                if created_at_str:
+                    # Handle both ISO format and SQLite datetime format
+                    if 'T' in created_at_str:
+                        created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                    else:
+                        # SQLite datetime() format: "YYYY-MM-DD HH:MM:SS"
+                        created_at = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                    age_days = (now - created_at).days
+                else:
+                    # No creation date, skip age check
+                    age_days = 0
+            except (ValueError, AttributeError) as e:
+                logger.warning(f"Failed to parse created_at for pattern {pattern_id}: {e}")
+                age_days = 0
+
+            # Evaluate retirement criteria (OR logic)
+            reasons = []
+
+            # Criterion 1: Low success rate
+            if success_rate <= policy.max_success_rate:
+                reasons.append(
+                    f"Low success rate: {success_rate:.1%} <= {policy.max_success_rate:.1%} "
+                    f"({times_succeeded}/{times_applied} successes)"
+                )
+
+            # Criterion 2: Exceeded max age
+            if age_days > policy.max_age_days:
+                reasons.append(
+                    f"Exceeded max age: {age_days} days > {policy.max_age_days} days"
+                )
+
+            # Retire if any criterion met
+            if reasons:
+                reason_str = "; ".join(reasons)
+
+                if policy.dry_run:
+                    logger.info(
+                        f"[DRY-RUN] Would retire pattern {pattern_id} "
+                        f"({error_signature}): {reason_str}"
+                    )
+                else:
+                    # Soft delete: set auto_approved=FALSE, mark source as retired
+                    try:
+                        conn.execute(
+                            """
+                            UPDATE learned_patterns
+                            SET auto_approved = FALSE,
+                                source = 'retired_' || COALESCE(source, 'unknown'),
+                                updated_at = datetime('now')
+                            WHERE id = ?
+                            """,
+                            (pattern_id,),
+                        )
+                        logger.info(
+                            f"Retired pattern {pattern_id} ({error_signature}): {reason_str}"
+                        )
+                    except sqlite3.Error as e:
+                        logger.error(f"Error retiring pattern {pattern_id}: {e}")
+                        continue
+
+                retired_patterns.append({
+                    'pattern_id': pattern_id,
+                    'error_signature': error_signature,
+                    'reason': reason_str,
+                    'performance': {
+                        'success_rate': success_rate,
+                        'times_applied': times_applied,
+                        'times_succeeded': times_succeeded,
+                        'age_days': age_days
+                    }
+                })
+
+        # Commit changes if not dry-run
+        if not policy.dry_run and retired_patterns:
+            try:
+                conn.commit()
+                logger.info(f"Committed retirement of {len(retired_patterns)} patterns")
+            except sqlite3.Error as e:
+                logger.error(f"Error committing retirements: {e}")
+                conn.rollback()
+
+        return {
+            'candidates_evaluated': len(candidates),
+            'retired_count': len(retired_patterns),
+            'retired_patterns': retired_patterns
+        }
+
     def retire_low_performers(
         self,
         max_success_rate: float = 0.3,
         min_applications: int = 10,
     ) -> int:
         """
+        DEPRECATED: Use retire_patterns() with RetirementPolicyConfig instead.
+
         Deactivate patterns below performance threshold.
 
         Args:
@@ -458,6 +678,11 @@ class LearnedPatternsService:
         Returns:
             Number of patterns retired
         """
+        logger.warning(
+            "retire_low_performers() is deprecated. "
+            "Use retire_patterns() with RetirementPolicyConfig instead."
+        )
+
         conn = self._get_connection()
 
         # Find low performers
