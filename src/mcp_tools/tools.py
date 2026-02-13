@@ -40,6 +40,7 @@ class ExampleReviewerTools:
         self,
         config_dir: Optional[Path] = None,
         db_path: Optional[Path] = None,
+        prod_db_path: Optional[Path] = None,
         workspace_dir: Optional[Path] = None,
         cli_overrides: Optional[Dict[str, Any]] = None,
         use_workspace_copy: bool = False,
@@ -51,6 +52,7 @@ class ExampleReviewerTools:
         Args:
             config_dir: Directory containing family configs
             db_path: Path to database
+            prod_db_path: Path to production database (optional, enables dual-database mode)
             workspace_dir: Working directory
             cli_overrides: CLI override dictionary for config hash computation
             use_workspace_copy: Enable workspace copy mode (for test-content/ writes)
@@ -58,6 +60,7 @@ class ExampleReviewerTools:
         """
         self.config_dir = config_dir or Path("config/families")
         self.db_path = db_path or Path("data/example_reviewer.db")
+        self.prod_db_path = prod_db_path  # None by default
         self.workspace_dir = workspace_dir or Path("workspace")
         self.cli_overrides = cli_overrides or {}
         self.use_workspace_copy = use_workspace_copy
@@ -74,6 +77,7 @@ class ExampleReviewerTools:
             self._orchestrator = PipelineOrchestrator(
                 config_dir=self.config_dir,
                 db_path=self.db_path,
+                prod_db_path=self.prod_db_path,
                 workspace_dir=self.workspace_dir,
                 cli_overrides=self.cli_overrides,
                 use_workspace_copy=self.use_workspace_copy,

@@ -646,6 +646,8 @@ def main() -> int:
                         help='Path to family config directory')
     parser.add_argument('--db-path', type=str, default='data/example_reviewer.db',
                         help='Path to database file')
+    parser.add_argument('--prod-db-path', type=str, default=None,
+                        help='Path to production database (enables dual-database mode)')
     parser.add_argument('--workspace-dir', type=str, default='workspace',
                         help='Path to workspace directory')
     parser.add_argument('--artifacts-dir', type=str, default='artifacts',
@@ -908,9 +910,11 @@ def main() -> int:
             cli_overrides['llm']['seed'] = args.seed
 
     # Initialize tools with CLI overrides
+    prod_db_path = Path(args.prod_db_path) if args.prod_db_path else None
     tools = ExampleReviewerTools(
         config_dir=Path(args.config_dir),
         db_path=db_path,
+        prod_db_path=prod_db_path,
         workspace_dir=workspace_dir,
         cli_overrides=cli_overrides,
         use_workspace_copy=getattr(args, 'use_workspace_copy', False),

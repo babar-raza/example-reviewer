@@ -115,25 +115,10 @@
     "default": "p@s$"
   },
   "api_catalog": {
-    "enabled": false,
+    "enabled": true,
     "storage_type": "json",
     "path": "config/families/cells_api_catalog.json",
     "lazy_loading": true
-  },
-  "llm": {
-    "provider": "openai",
-    "model": "qwen2.5-coder:7b",
-    "base_url": "http://localhost:11434/v1",
-    "api_key_env_var": "OPENAI_API_KEY",
-    "temperature": 0.2,
-    "max_retries": 2,
-    "timeout_seconds": 120
-  },
-  "final_review": {
-    "provider": "openai",
-    "model": "qwen2.5-coder:7b",
-    "base_url": "http://localhost:11434/v1",
-    "timeout_seconds": 60
   },
   "learned_patterns": {
     "enabled": true,
@@ -155,14 +140,5 @@
   "dependency_resolution": {
     "enabled": true,
     "confidence_threshold": 0.7
-  },
-  "api_reference": {
-    "git_repo": "https://github.com/aspose-cells/Aspose.Cells-API-References-Tutorials",
-    "git_ref": "main",
-    "git_subpath": "english/net",
-    "shallow_clone": true,
-    "auto_fetch": true,
-    "clone_timeout_seconds": 120,
-    "max_context_chars": 8000
   }
 }

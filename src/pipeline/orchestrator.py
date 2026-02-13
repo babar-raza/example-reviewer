@@ -109,6 +109,7 @@ class PipelineOrchestrator:
         self,
         config_dir: Optional[Path] = None,
         db_path: Optional[Path] = None,
+        prod_db_path: Optional[Path] = None,
         workspace_dir: Optional[Path] = None,
         artifacts_dir: Optional[Path] = None,
         cli_overrides: Optional[Dict[str, Any]] = None,
@@ -121,6 +122,7 @@ class PipelineOrchestrator:
         Args:
             config_dir: Directory containing family configs
             db_path: Path to SQLite database
+            prod_db_path: Path to production database (optional, enables dual-database mode)
             workspace_dir: Working directory for compilation/runtime
             artifacts_dir: Directory for storing artifacts
             cli_overrides: CLI override dictionary for config hash computation
@@ -142,13 +144,37 @@ class PipelineOrchestrator:
         # Initialize components
         self.config_manager = ConfigurationManager(self.config_dir)
 
+        # Load global config to check for production DB path
+        global_config = self.config_manager.load_global_config()
+
+        # Determine production DB path: CLI override takes precedence over config
+        production_db_path = prod_db_path
+        if production_db_path is None and hasattr(global_config, 'database') and global_config.database.production_path:
+            production_db_path = Path(global_config.database.production_path)
+
         # Initialize database with SQLite configuration (Task 2A, 2B)
         self.db = Database(
             db_path=self.db_path,
+            production_db_path=production_db_path,
             busy_timeout_ms=self.sqlite_config.get('busy_timeout_ms', 120000),
             wal_enabled=self.sqlite_config.get('wal_enabled', True),
         )
         self.db.initialize_schema()
+
+        # Initialize production DB schema if configured
+        if self.db.production_db_path:
+            try:
+                # Create a temporary Database instance pointing to production DB
+                # This allows us to reuse the initialize_schema() method
+                prod_db_temp = Database(
+                    db_path=self.db.production_db_path,
+                    busy_timeout_ms=self.sqlite_config.get('busy_timeout_ms', 120000),
+                    wal_enabled=self.sqlite_config.get('wal_enabled', True),
+                )
+                prod_db_temp.initialize_schema()
+                logger.info(f"Production database schema initialized: {self.db.production_db_path}")
+            except Exception as e:
+                logger.warning(f"Could not initialize production DB schema: {e}")
 
         # Initialize family service registry (WS-2 TASK-1C)
         self.registry = FamilyServiceRegistry(self.config_manager, self.artifacts_dir)
@@ -169,6 +195,9 @@ class PipelineOrchestrator:
 
         # Track examples that received LLM fixes (for final review filtering)
         self._llm_fixed_example_ids: set = set()
+
+        # Learned patterns service cache (per family)
+        self._learned_patterns_service_cache: Dict[str, Optional['LearnedPatternsService']] = {}
 
         # VectorDB and DriftDetector startup decision (Track 1: C.2)
         # Make a single decision at startup, never change mid-run
@@ -216,7 +245,7 @@ class PipelineOrchestrator:
                     llm_config_dict[key] = value
 
             # Resolve API key: config specifies which env var holds the key
-            _api_key_env = llm_config_dict.get('api_key_env_var', 'OPENAI_API_KEY')
+            _api_key_env = llm_config_dict.get('api_key_env_var')
             _api_key = os.getenv(_api_key_env) if _api_key_env else None
 
             self._llm_service = LLMService(
@@ -232,6 +261,10 @@ class PipelineOrchestrator:
                 deterministic_mode=llm_config_dict['deterministic_mode'],
                 enforce_timeout=llm_config_dict['enforce_timeout'],
             )
+            # Wire model routing for fallback support
+            if global_config.model_routing.enabled:
+                self._llm_service.set_routing_config(global_config.model_routing.model_dump())
+
             # Detect provider capabilities on startup (Track 1: Agent F)
             if self._llm_service.is_available():
                 capabilities = self._llm_service.get_provider_capabilities()
@@ -246,48 +279,60 @@ class PipelineOrchestrator:
     def final_review_llm_service(self) -> LLMService:
         """
         Get or initialize separate LLM service for final review.
-        Uses final_review.provider and final_review.model from config.
+        Uses final_review config fields first (self-contained), falls back to main LLM config.
+        Wires routing config for Ollama fallback support.
         """
         if self._final_review_llm_service is None:
             global_config = self.config_manager.load_global_config()
+            fr = global_config.final_review
+            provider = fr.provider
 
-            # Determine API key based on provider (C.6: separate provider)
-            provider = global_config.final_review.provider
-            if provider == 'anthropic':
+            # --- API key: use final_review's own field, fall back to main LLM ---
+            if provider == 'ollama':
+                api_key = 'ollama'
+            elif fr.api_key_env_var:
+                api_key = os.getenv(fr.api_key_env_var)
+            elif provider == 'anthropic':
                 api_key = os.getenv('ANTHROPIC_API_KEY')
-            elif provider == 'ollama':
-                api_key = 'ollama'  # Placeholder for Ollama
             else:
-                # Use configured api_key_env_var from main LLM config
                 _fr_key_env = global_config.llm.api_key_env_var or 'OPENAI_API_KEY'
                 api_key = os.getenv(_fr_key_env)
 
-            # Determine base_url — inherit from main LLM config for same provider
-            base_url = None
-            if provider == 'ollama':
-                base_url = global_config.llm.base_url or "http://localhost:11434/v1"
+            # --- Base URL: use final_review's own field, fall back to main LLM ---
+            if fr.base_url:
+                base_url = fr.base_url
+            elif provider == 'ollama':
+                base_url = "http://localhost:11434/v1"
             elif provider == 'anthropic':
-                base_url = None  # Use default Anthropic API
-            elif global_config.llm.base_url:
+                base_url = None
+            else:
                 base_url = global_config.llm.base_url
 
             self._final_review_llm_service = LLMService(
                 provider=provider,
-                model=global_config.final_review.model,
+                model=fr.model,
                 api_key=api_key,
                 base_url=base_url,
-                temperature=0.0,  # Final review should be deterministic
-                max_retries=1,  # Final review doesn't need retries
+                temperature=0.0,
+                max_retries=1,
                 retry_backoff_seconds=5,
-                timeout_seconds=global_config.final_review.timeout_seconds,
-                seed=None,  # Final review doesn't use seed
+                timeout_seconds=fr.timeout_seconds,
+                seed=None,
                 deterministic_mode=False,
                 enforce_timeout=True,
             )
+
+            # Wire routing config for Ollama fallback support
+            if global_config.model_routing.enabled:
+                self._final_review_llm_service.set_routing_config(
+                    global_config.model_routing.model_dump()
+                )
+
             logger.info(
                 f"Initialized final review LLM: provider={provider}, "
-                f"model={global_config.final_review.model}, "
-                f"timeout={global_config.final_review.timeout_seconds}s"
+                f"model={fr.model}, base_url={base_url}, "
+                f"timeout={fr.timeout_seconds}s, "
+                f"fallback={'enabled' if global_config.model_routing.enabled else 'disabled'}"
             )
         return self._final_review_llm_service
 
@@ -668,6 +713,162 @@ class PipelineOrchestrator:
             )
         return self._context_harness_service
 
+    def get_learned_patterns_service(self, family: str) -> Optional['LearnedPatternsService']:
+        """Get or create learned patterns service for a family."""
+        if family in self._learned_patterns_service_cache:
+            return self._learned_patterns_service_cache[family]
+
+        try:
+            family_config = self.config_manager.load_family_config(family)
+            lp_config = family_config.learned_patterns
+
+            if not lp_config or not lp_config.get('enabled', True):
+                self._learned_patterns_service_cache[family] = None
+                return None
+
+            service = self.registry.get_learned_patterns(family)
+            self._learned_patterns_service_cache[family] = service
+            return service
+        except Exception as e:
+            logger.error(f"Failed to initialize learned_patterns_service: {e}")
+            self._learned_patterns_service_cache[family] = None
+            return None
+
+    def _get_fix_strategy_config(self) -> Dict[str, Any]:
+        """Get fix strategy configuration from learned_patterns config."""
+        if not hasattr(self, '_current_family') or not self._current_family:
+            return {'enable_learned_patterns': False}
+
+        try:
+            family_config = self.config_manager.load_family_config(self._current_family)
+            lp_config = family_config.learned_patterns
+
+            return {
+                'enable_learned_patterns': lp_config.get('enabled', True),
+                'learned_patterns_min_confidence': lp_config.get('min_confidence', 0.6),
+                'learned_patterns_require_approval': lp_config.get('require_approval', True),
+            }
+        except Exception as e:
+            logger.warning(f"Failed to load learned_patterns config: {e}")
+            return {'enable_learned_patterns': False}
+
+    def _should_run_auto_learn(self, global_config: GlobalConfig, results: Dict[str, Any]) -> bool:
+        """Determine if auto-learn should run."""
+        run_id = results.get('run_id', 'unknown')
+        family = results.get('family', 'unknown')
+
+        # LOG: Entry point
+        logger.info(f"[Auto-Learn] Checking if auto-learn should run for run_id={run_id}, family={family}")
+
+        # LOG: Config check
+        auto_learn_config = getattr(global_config, 'auto_learn', None)
+        config_enabled = getattr(auto_learn_config, 'enabled', None) if auto_learn_config else None
+        logger.info(f"[Auto-Learn] Config check: auto_learn_config={'present' if auto_learn_config else 'missing'}, enabled={config_enabled}")
+
+        if not auto_learn_config or not auto_learn_config.enabled:
+            logger.warning(f"[Auto-Learn] SKIP: Config disabled or missing (run_id={run_id}, family={family})")
+            return False
+
+        # LOG: Success check
+        success_value = results.get('success', False)
+        logger.info(f"[Auto-Learn] Success check: results['success']={success_value} (run_id={run_id}, family={family})")
+
+        if not success_value:
+            logger.warning(f"[Auto-Learn] SKIP: Pipeline success=False (run_id={run_id}, family={family})")
+            return False
+
+        # LOG: Failure count calculation
+        compile_stats = results.get('phases', {}).get('compilation', {})
+        runtime_stats = results.get('phases', {}).get('runtime', {})
+        compile_failed = compile_stats.get('failed', 0)
+        runtime_failed = runtime_stats.get('failed', 0)
+        failed_count = compile_failed + runtime_failed
+
+        logger.info(f"[Auto-Learn] Failure count: compile_failed={compile_failed}, runtime_failed={runtime_failed}, total={failed_count} (run_id={run_id}, family={family})")
+
+        # LOG: Final decision
+        will_run = failed_count > 0
+        if will_run:
+            logger.info(f"[Auto-Learn] WILL RUN: {failed_count} failures detected (run_id={run_id}, family={family})")
+        else:
+            logger.warning(f"[Auto-Learn] SKIP: No failures detected (failed_count=0) (run_id={run_id}, family={family})")
+
+        return will_run
+
+    def _run_auto_learn_phase(self, run_id: str, family: str, global_config: GlobalConfig) -> Dict:
+        """Run auto-learn pattern extraction as subprocess."""
+        # LOG: Entry
+        logger.info(f"[Auto-Learn] Starting auto-learn phase for run_id={run_id}, family={family}")
+
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        auto_learn_config = global_config.auto_learn
+        use_llm = auto_learn_config.use_llm
+
+        # LOG: Command construction
+        script_path = Path(__file__).parent.parent.parent / "scripts" / "auto_learn.py"
+        cmd = [sys.executable, str(script_path), "--family", family, "--run-id", run_id]
+        if use_llm:
+            cmd.append("--use-llm")
+
+        logger.info(f"[Auto-Learn] Subprocess command: {' '.join(cmd)} (run_id={run_id}, family={family})")
+
+        # LOG: Execution
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            logger.info(f"[Auto-Learn] Subprocess completed: return_code={result.returncode} (run_id={run_id}, family={family})")
+        except subprocess.TimeoutExpired:
+            logger.error(f"[Auto-Learn] Subprocess timeout after 300s (run_id={run_id}, family={family})")
+            return {'success': False, 'error': 'Timeout after 300s'}
+        except Exception as e:
+            logger.error(f"[Auto-Learn] Subprocess exception: {e} (run_id={run_id}, family={family})")
+            return {'success': False, 'error': str(e)}
+
+        stats = {'success': result.returncode == 0}
+        if result.returncode != 0:
+            stats['error'] = result.stderr
+            logger.error(f"[Auto-Learn] Failed with stderr: {result.stderr[:500]} (run_id={run_id}, family={family})")
+        else:
+            # Parse output for metrics
+            patterns_stored = 0
+            for line in result.stdout.split('\n'):
+                if 'Stored' in line and 'patterns' in line:
+                    # Extract number from "Stored N new patterns"
+                    import re
+                    match = re.search(r'Stored\s+(\d+)', line)
+                    if match:
+                        patterns_stored = int(match.group(1))
+            stats['patterns_stored'] = patterns_stored
+            stats['stdout'] = result.stdout[:500]  # First 500 chars for logging
+            logger.info(f"[Auto-Learn] Success: patterns_stored={patterns_stored} (run_id={run_id}, family={family})")
+            logger.debug(f"[Auto-Learn] Stdout preview: {result.stdout[:500]} (run_id={run_id}, family={family})")
+
+        return stats
+
+    def _has_new_patterns_since_last_run(self, family: str, current_run_id: str) -> bool:
+        """Check if new learned patterns exist since last run."""
+        try:
+            prev_runs = self.db.get_recent_runs(family, limit=2)
+            if len(prev_runs) < 2:
+                return False
+
+            prev_run = prev_runs[1]
+
+            import sqlite3
+            conn = sqlite3.connect("data/api_catalog.db")
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM learned_patterns WHERE family = ? AND created_at > ?",
+                (family, prev_run.started_at)
+            )
+            count = cursor.fetchone()[0]
+            conn.close()
+
+            return count > 0
+        except Exception:
+            return False
+
     def _is_build_failure(self, stderr: Optional[str]) -> bool:
         """
         Check if the error is a build failure vs a runtime failure.
@@ -753,7 +954,10 @@ class PipelineOrchestrator:
             'phases': {},
             'success': True,
         }
-        
+
+        # Store current family for _get_fix_strategy_config()
+        self._current_family = family
+
         # Load family config
         try:
             family_config = self.config_manager.load_family_config(family)
@@ -761,7 +965,7 @@ class PipelineOrchestrator:
             results['success'] = False
             results['error'] = f"Family config not found: {family}"
             return results
-        
+
         # Create run record
         run_id = self.db.create_run(family, "full_pipeline")
         results['run_id'] = run_id
@@ -857,6 +1061,14 @@ class PipelineOrchestrator:
             except Exception as e:
                 logger.warning(f"Gist backfill failed (continuing): {e}")
 
+            # Phase A.6: Preload learned patterns for performance
+            learned_service = self.get_learned_patterns_service(family)
+            if learned_service:
+                try:
+                    learned_service.preload_all_patterns()
+                except Exception as e:
+                    logger.warning(f"Failed to preload patterns (continuing): {e}")
+
             # Phase B: Compilation
             logger.info(f"Phase B: Compilation verification for {family}")
             with track_phase_timing(self.db, run_id, family, "compilation"):
@@ -888,12 +1100,44 @@ class PipelineOrchestrator:
                 with track_phase_timing(self.db, run_id, family, "final_review"):
                     review_stats = self._run_final_review_phase(run_id, family)
                 results['phases']['final_review'] = review_stats
+            else:
+                # Auto-promote MD_UPDATED -> FINAL_REVIEW_PASSED when Phase E is skipped
+                md_updated = self.db.get_examples_by_family(family, ExampleStatus.MD_UPDATED, run_id=run_id)
+                auto_promoted = 0
+                if md_updated:
+                    for ex in md_updated:
+                        self.db.update_example_status(ex.example_id, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
+                        auto_promoted += 1
+                    logger.info(f"Auto-promoted {auto_promoted} examples to FINAL_REVIEW_PASSED (Phase E skipped)")
+                results['phases']['final_review'] = {'skipped': True, 'auto_promoted': auto_promoted}
 
             # Phase F: Telemetry and Commit
             logger.info(f"Phase F: Finalization for {family}")
             with track_phase_timing(self.db, run_id, family, "finalization"):
                 final_stats = self._run_finalization_phase(family, run_id, dry_run, allow_commit=allow_commit)
             results['phases']['finalization'] = final_stats
+
+            # Phase F.5: Auto-Learn (extract patterns from failures)
+            logger.info(f"[Auto-Learn] Phase F.5 checkpoint reached for run_id={run_id}, family={family}")
+            logger.info(f"[Auto-Learn] Current results['success']={results.get('success')}, phases={list(results.get('phases', {}).keys())}")
+
+            if self._should_run_auto_learn(global_config, results):
+                logger.info(f"Phase F.5: Running auto-learn for {family}")
+                try:
+                    auto_learn_stats = self._run_auto_learn_phase(run_id, family, global_config)
+                    results['phases']['auto_learn'] = auto_learn_stats
+                    logger.info(f"[Auto-Learn] Phase F.5 completed: {auto_learn_stats}")
+
+                    # Invalidate cache to pick up new patterns
+                    if auto_learn_stats.get('patterns_stored', 0) > 0:
+                        if family in self._learned_patterns_service_cache:
+                            del self._learned_patterns_service_cache[family]
+                            self.registry.clear_cache(family)
+                            logger.info(f"[Auto-Learn] Invalidated cache for {family}")
+                except Exception as e:
+                    logger.error(f"[Auto-Learn] Auto-learn failed (non-fatal): {e}", exc_info=True)
+            else:
+                logger.info(f"[Auto-Learn] Phase F.5 skipped (decision=False)")
 
             # Export run artifacts (fingerprint.json, results_summary.json)
             logger.info(f"Exporting run artifacts for {run_id}")
@@ -922,6 +1166,15 @@ class PipelineOrchestrator:
                             datetime.now(),
                             commit_source="llm",
                         )
+
+                        # Copy to production database (after telemetry has commit_hash)
+                        if self.db.production_db_path:
+                            logger.info(f"Copying run {run_id} to production database...")
+                            success = self.db.copy_run_to_production(run_id, commit_hash)
+                            if success:
+                                logger.info(f"Production database updated for run {run_id}")
+                            else:
+                                logger.warning(f"Failed to update production database for run {run_id}")
 
                     # C1: Post-run gap analysis — identify catalog fix gaps
                     try:
@@ -1093,10 +1346,29 @@ class PipelineOrchestrator:
             return stats
         
         stats['dotnet_version'] = dotnet_version
-        
+
         # Get examples to process
-        examples = self.db.get_examples_by_family(family, ExampleStatus.DISCOVERED, max_examples, run_id=run_id)
-        
+        # If new patterns exist since last run, re-process failed examples too
+        if self._has_new_patterns_since_last_run(family, run_id):
+            logger.info(f"New patterns detected - re-processing failed examples")
+            # Include RUNTIME_FAILED to allow learned patterns to fix runtime issues
+            # (e.g., missing using directives causing runtime type resolution failures,
+            # or fixture path issues that can be resolved with learned substitutions)
+            examples = self.db.get_examples_with_applicable_patterns(
+                family=family,
+                status=[ExampleStatus.DISCOVERED, ExampleStatus.COMPILE_FAILED, ExampleStatus.RUNTIME_FAILED],
+                max_examples=max_examples,
+                run_id=run_id
+            )
+            # Log breakdown of statuses being re-processed
+            status_breakdown = {}
+            for ex in examples:
+                status = ex.status
+                status_breakdown[status.value] = status_breakdown.get(status.value, 0) + 1
+            logger.info(f"Re-processing {len(examples)} examples by status: {status_breakdown}")
+        else:
+            examples = self.db.get_examples_by_family(family, ExampleStatus.DISCOVERED, max_examples, run_id=run_id)
+
         global_config = self.config_manager.load_global_config()
         max_retries = global_config.llm.max_retries
 
@@ -1477,7 +1749,7 @@ class PipelineOrchestrator:
                 if not success and strategy_config.get('enable_learned_patterns', False):
                     if LearnedPatternsService is not None and extract_error_signature is not None:
                         try:
-                            learned_service = LearnedPatternsService(family)
+                            learned_service = self.get_learned_patterns_service(family)
                             error_sigs = extract_all_error_signatures(result.errors) if extract_all_error_signatures is not None else [extract_error_signature(result.errors)]
                             min_conf = strategy_config.get('learned_patterns_min_confidence', 0.6)
                             max_patterns = strategy_config.get('learned_patterns_max_per_error', 3)
@@ -1853,6 +2125,75 @@ class PipelineOrchestrator:
                     fixed_code = llm_response.content.strip()
                     if not fixed_code:
                         continue
+
+                    # DRIFT-06 Gate 1: Semantic signature validation
+                    if getattr(global_config.final_review, 'enable_signature_validation', False):
+                        try:
+                            sig_service = self.registry.get_semantic_signature_service(family)
+                            from ..services.semantic_signature_service import CRITICAL_ENUM_FAMILIES
+                            orig_sig = sig_service.extract_signature(example.original_code)
+                            fixed_sig = sig_service.extract_signature(fixed_code)
+                            critical_enums = CRITICAL_ENUM_FAMILIES.get(family, [])
+                            sig_drift = sig_service.compare_signatures(orig_sig, fixed_sig, critical_enums)
+
+                            # Store original signature in DB
+                            self.db.save_semantic_signature(
+                                example_id=example.example_id,
+                                run_id=run_id,
+                                attempt_type='compile_attempt',
+                                signature_data={
+                                    'enum_values': orig_sig.enum_values,
+                                    'method_calls': orig_sig.method_calls,
+                                    'constructor_types': orig_sig.constructor_types,
+                                    'property_assignments': orig_sig.property_assignments,
+                                },
+                                attempt_id=f"compile_{attempt}",
+                            )
+
+                            if sig_drift.critical and getattr(global_config.final_review, 'reject_critical_enum_changes', True):
+                                logger.warning(
+                                    f"GATE-1 Signature drift rejected for {example.example_id}: "
+                                    f"{sig_drift.critical_reason}"
+                                )
+                                self.db.save_drift_rejection(
+                                    example_id=example.example_id,
+                                    run_id=run_id,
+                                    attempt_id=f"compile_{attempt}",
+                                    phase='compilation',
+                                    rejection_reason=sig_drift.critical_reason or 'Critical enum change',
+                                    drift_score=sig_drift.drift_score,
+                                    signature_drift=sig_drift.to_dict(),
+                                    critical_enum_changes=sig_drift.enum_changes,
+                                )
+                                continue  # Skip this fix, try next attempt
+                        except Exception as e:
+                            logger.debug(f"Signature validation error (non-fatal): {e}")
+
+                    # DRIFT-06 Gate 2: Family-specific drift validation
+                    if getattr(global_config.final_review, 'enable_family_drift_validation', False):
+                        try:
+                            family_validator = self.registry.get_drift_validator(family)
+                            if family_validator:
+                                fv_result = family_validator.validate(
+                                    example.original_code, fixed_code, {}
+                                )
+                                if not fv_result.valid:
+                                    reasons = [i.message for i in fv_result.issues]
+                                    logger.warning(
+                                        f"GATE-2 Family drift rejected for {example.example_id}: "
+                                        f"{reasons}"
+                                    )
+                                    self.db.save_drift_rejection(
+                                        example_id=example.example_id,
+                                        run_id=run_id,
+                                        attempt_id=f"compile_{attempt}",
+                                        phase='compilation',
+                                        rejection_reason=f"Family validation: {'; '.join(reasons)}",
+                                        drift_score=fv_result.drift_score,
+                                    )
+                                    continue  # Skip this fix, try next attempt
+                        except Exception as e:
+                            logger.debug(f"Family drift validation error (non-fatal): {e}")
 
                     # Phase-2 Gate B: Validate context drift if enabled
                     if self.context_drift_validator is not None:
@@ -2801,9 +3142,8 @@ class PipelineOrchestrator:
                         runtime_pattern_fixed = False
                         strategy_config = self._get_fix_strategy_config()
 
-                        if (strategy_config.get('enable_learned_patterns', False) and
-                                hasattr(self, 'learned_patterns_service') and
-                                self.learned_patterns_service):
+                        learned_service = self.get_learned_patterns_service(self._current_family)
+                        if strategy_config.get('enable_learned_patterns', False) and learned_service:
 
                             # Extract error signatures from runtime result
                             error_messages = []
@@ -2820,7 +3160,7 @@ class PipelineOrchestrator:
 
                                 # Try patterns for each error signature
                                 for error_sig in error_signatures:
-                                    patterns = self.learned_patterns_service.query_patterns(
+                                    patterns = learned_service.query_patterns(
                                         error_sig,
                                         min_confidence=strategy_config.get('learned_patterns_min_confidence', 0.6),
                                         approved_only=strategy_config.get('learned_patterns_require_approval', True),
@@ -2831,7 +3171,7 @@ class PipelineOrchestrator:
                                         logger.info(f"Trying learned pattern {pattern.id} ({pattern.error_signature}) on {example.example_id}")
 
                                         # Apply pattern
-                                        fixed_code, success, description = self.learned_patterns_service.apply_pattern(
+                                        fixed_code, success, description = learned_service.apply_pattern(
                                             pattern,
                                             current_code,
                                             result.stderr or result.exception_message,
@@ -2854,7 +3194,7 @@ class PipelineOrchestrator:
 
                                                     # Record success
                                                     if strategy_config.get('learned_patterns_feedback_tracking', True):
-                                                        self.learned_patterns_service.record_application(
+                                                        learned_service.record_application(
                                                             pattern.id, example.example_id, run_id, success=True
                                                         )
 
@@ -2874,26 +3214,15 @@ class PipelineOrchestrator:
                                                 else:
                                                     # Pattern didn't fix runtime
                                                     if strategy_config.get('learned_patterns_feedback_tracking', True):
-                                                        self.learned_patterns_service.record_application(
+                                                        learned_service.record_application(
                                                             pattern.id, example.example_id, run_id, success=False
                                                         )
 
                                     if runtime_pattern_fixed:
                                         break  # Exit error signature loop
 
-                        # If no pattern fixed it, mark as RUNTIME_FAILED
-                        if not runtime_pattern_fixed:
-                            self.db.update_example_status(
-                                example.example_id,
-                                ExampleStatus.RUNTIME_FAILED,
-                                failure_reason=failure_reason,
-                                run_id=run_id,
-                            )
-                            logger.info(f"Example {example.example_id}: RUNTIME_FAILED (no LLM fixes, deterministic fix didn't work, patterns didn't help)")
-                            stats['failed'] += 1
-
-                    if not runtime_pattern_fixed:
-                        continue
+                    if runtime_pattern_fixed:
+                        continue  # Patterns fixed it, move to next example
 
                 # Task 5: Limit runtime LLM fixes to 1 iteration
                 runtime_max_retries = min(max_retries, 1)
@@ -3061,6 +3390,74 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             break
 
                         fixed_code = llm_response.content
+
+                        # DRIFT-06 Gate 1: Semantic signature validation (runtime)
+                        if getattr(global_config.final_review, 'enable_signature_validation', False):
+                            try:
+                                sig_service = self.registry.get_semantic_signature_service(family)
+                                from ..services.semantic_signature_service import CRITICAL_ENUM_FAMILIES
+                                orig_sig = sig_service.extract_signature(example.original_code)
+                                fixed_sig = sig_service.extract_signature(fixed_code)
+                                critical_enums = CRITICAL_ENUM_FAMILIES.get(family, [])
+                                sig_drift = sig_service.compare_signatures(orig_sig, fixed_sig, critical_enums)
+
+                                self.db.save_semantic_signature(
+                                    example_id=example.example_id,
+                                    run_id=run_id,
+                                    attempt_type='runtime_attempt',
+                                    signature_data={
+                                        'enum_values': orig_sig.enum_values,
+                                        'method_calls': orig_sig.method_calls,
+                                        'constructor_types': orig_sig.constructor_types,
+                                        'property_assignments': orig_sig.property_assignments,
+                                    },
+                                    attempt_id=f"runtime_{attempt}",
+                                )
+
+                                if sig_drift.critical and getattr(global_config.final_review, 'reject_critical_enum_changes', True):
+                                    logger.warning(
+                                        f"GATE-1 Signature drift rejected (runtime) for {example.example_id}: "
+                                        f"{sig_drift.critical_reason}"
+                                    )
+                                    self.db.save_drift_rejection(
+                                        example_id=example.example_id,
+                                        run_id=run_id,
+                                        attempt_id=f"runtime_{attempt}",
+                                        phase='runtime',
+                                        rejection_reason=sig_drift.critical_reason or 'Critical enum change',
+                                        drift_score=sig_drift.drift_score,
+                                        signature_drift=sig_drift.to_dict(),
+                                        critical_enum_changes=sig_drift.enum_changes,
+                                    )
+                                    continue
+                            except Exception as e:
+                                logger.debug(f"Signature validation error (runtime, non-fatal): {e}")
+
+                        # DRIFT-06 Gate 2: Family-specific drift validation (runtime)
+                        if getattr(global_config.final_review, 'enable_family_drift_validation', False):
+                            try:
+                                family_validator = self.registry.get_drift_validator(family)
+                                if family_validator:
+                                    fv_result = family_validator.validate(
+                                        example.original_code, fixed_code, {}
+                                    )
+                                    if not fv_result.valid:
+                                        reasons = [i.message for i in fv_result.issues]
+                                        logger.warning(
+                                            f"GATE-2 Family drift rejected (runtime) for {example.example_id}: "
+                                            f"{reasons}"
+                                        )
+                                        self.db.save_drift_rejection(
+                                            example_id=example.example_id,
+                                            run_id=run_id,
+                                            attempt_id=f"runtime_{attempt}",
+                                            phase='runtime',
+                                            rejection_reason=f"Family validation: {'; '.join(reasons)}",
+                                            drift_score=fv_result.drift_score,
+                                        )
+                                        continue
+                            except Exception as e:
+                                logger.debug(f"Family drift validation error (runtime, non-fatal): {e}")
 
                         # Phase-2 Gate B: Validate context drift if enabled
                         if self.context_drift_validator is not None:
@@ -3472,6 +3869,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         num_passes: int = 2,
         run_id: Optional[str] = None,
         family: Optional[str] = None,
+        catalog=None,
     ) -> Dict[str, Any]:
         """
         Run multiple review passes and require consensus for approval.
@@ -3490,7 +3888,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
         for pass_num in range(num_passes):
             # Use dedicated final_review LLM service (C.6)
-            result = self.final_review_llm_service.review_markdown_structured(content, snippets)
+            result = self.final_review_llm_service.review_markdown_structured(content, snippets, catalog=catalog)
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
                     run_id=run_id, family=family,
@@ -3536,7 +3934,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             # Split decision - run tiebreaker
             logger.info("Consensus review: split decision, running tiebreaker")
             # Use dedicated final_review LLM service (C.6)
-            tiebreaker = self.final_review_llm_service.review_markdown_structured(content, snippets)
+            tiebreaker = self.final_review_llm_service.review_markdown_structured(content, snippets, catalog=catalog)
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
                     run_id=run_id, family=family,
@@ -3652,9 +4050,12 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 for attempt in range(1, max_attempts + 1):
                     stats['review_attempts'] += 1
 
+                    # Get catalog for this family
+                    catalog = self.registry.get_api_catalog(family)
+
                     # Call consensus review (2 passes for reliability)
                     review_result = self._consensus_review(
-                        content, snippets, run_id=run_id, family=family
+                        content, snippets, run_id=run_id, family=family, catalog=catalog
                     )
 
                     # Create ReviewResult model

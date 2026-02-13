@@ -6,14 +6,12 @@
   "content_roots": [
     "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/words",
     "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/words/en",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/words/en",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/products.aspose.net/words/en"
+    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/words/en"
   ],
   "content_pattern": {
     "blog": "**/index.md",
     "docs": "**/*.md",
-    "kb": "**/*.md",
-    "products": "**/*.md"
+    "kb": "**/*.md"
   },
   "file_exclude_patterns": [
     "index\\.[a-z]{2}\\.md$",

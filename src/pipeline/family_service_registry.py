@@ -21,6 +21,8 @@ from src.services.api_catalog_service import APICatalogService
 from src.services.fixture_resolver_service import FixtureResolverService
 from src.services.learned_patterns_service import LearnedPatternsService
 from src.services.example_substitution_service import ExampleSubstitutionService
+from src.services.semantic_signature_service import SemanticSignatureService
+from src.services.family_drift_validators.base import FamilyDriftValidator
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +223,9 @@ class FamilyServiceRegistry:
 
         # LearnedPatternsService uses default db_path (data/api_catalog.db)
         # Will raise FileNotFoundError if db doesn't exist (expected behavior)
-        return LearnedPatternsService(family)
+        # Pass API catalog for LLM context
+        catalog = self.get_api_catalog(family)
+        return LearnedPatternsService(family, catalog=catalog)
 
     def _create_substitution(self, family: str) -> ExampleSubstitutionService:
         """
@@ -284,6 +288,54 @@ class FamilyServiceRegistry:
             registry_path=registry_path,
             skip_output_patterns=fr_config.skip_output_patterns if fr_config else None,
         )
+
+    def get_semantic_signature_service(self, family: str) -> SemanticSignatureService:
+        """
+        Get semantic signature service for family.
+
+        Args:
+            family: Product family identifier
+
+        Returns:
+            SemanticSignatureService instance for the family
+        """
+        return self._get_cached('semantic_signature', family, self._create_semantic_signature)
+
+    def get_drift_validator(self, family: str) -> Optional[FamilyDriftValidator]:
+        """
+        Get family-specific drift validator if one exists.
+
+        Args:
+            family: Product family identifier
+
+        Returns:
+            FamilyDriftValidator instance, or None if no validator for this family
+        """
+        try:
+            return self._get_cached('drift_validator', family, self._create_drift_validator)
+        except ValueError:
+            return None
+
+    def _create_semantic_signature(self, family: str) -> SemanticSignatureService:
+        """Factory: Create SemanticSignatureService for family."""
+        catalog = self.get_api_catalog(family)
+        return SemanticSignatureService(family=family, api_catalog=catalog)
+
+    def _create_drift_validator(self, family: str) -> FamilyDriftValidator:
+        """Factory: Create family-specific drift validator."""
+        validator_map = {
+            'barcode': 'src.services.family_drift_validators.barcode_validator.BarCodeDriftValidator',
+        }
+        fqn = validator_map.get(family)
+        if not fqn:
+            raise ValueError(f"No drift validator for family '{family}'")
+
+        module_path, class_name = fqn.rsplit('.', 1)
+        import importlib
+        mod = importlib.import_module(module_path)
+        cls = getattr(mod, class_name)
+        catalog = self.get_api_catalog(family)
+        return cls(catalog=catalog)
 
     def clear_cache(self, family: Optional[str] = None) -> None:
         """

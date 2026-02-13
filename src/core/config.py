@@ -6,10 +6,13 @@ Uses Pydantic for validation and supports multi-family configurations.
 import os
 import json
 import hashlib
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Set
 from pydantic import BaseModel, Field, ConfigDict
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigAccessTracker:
@@ -122,6 +125,30 @@ class GitConfig(BaseModel):
     commit_message_template: str = "chore({family}): verify {count} examples"
     commit_description_template: str = "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}"
     only_commit_touched_files: bool = True
+
+
+class DatabaseConfig(BaseModel):
+    """Database configuration for dev and production."""
+    model_config = ConfigDict(extra="forbid")
+
+    # Development database (always active)
+    path: str = Field(
+        default="./data/example_reviewer.db",
+        description="Primary development database"
+    )
+
+    # Production database (optional, enables dual-DB mode)
+    production_path: Optional[str] = Field(
+        default=None,
+        description="Production database path. If set, enables dual-database mode."
+    )
+
+    # How to identify production runs
+    production_criteria: str = Field(
+        default="git_commit",
+        pattern="^(git_commit)$",
+        description="Criteria for production runs (currently only git_commit supported)"
+    )
 
 
 class GistConfig(BaseModel):
@@ -428,7 +455,7 @@ class FinalReviewConfig(BaseModel):
     model: str = Field(default="claude-3-5-sonnet-latest", description="Model for final review")
     timeout_seconds: int = Field(default=30, ge=1, description="Timeout for final review calls")
     enforce_model: bool = Field(default=True, description="Enforce specific model usage")
-    confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="Confidence threshold")
+    confidence_threshold: float = Field(default=0.85, ge=0.0, le=1.0, description="Confidence threshold for intent drift rejection")
     auto_remediation_enabled: bool = Field(
         default=False,
         description="Enable automatic remediation of review issues (future feature)"
@@ -450,6 +477,26 @@ class FinalReviewConfig(BaseModel):
     only_review_llm_fixed: bool = Field(
         default=True,
         description="Only review examples that were fixed by LLM"
+    )
+    enable_signature_validation: bool = Field(
+        default=True,
+        description="Enable API signature-based drift detection (Gate 1: semantic signatures)"
+    )
+    enable_family_drift_validation: bool = Field(
+        default=True,
+        description="Enable family-specific drift validation (Gate 2: barcode type/mode/property checks)"
+    )
+    reject_critical_enum_changes: bool = Field(
+        default=True,
+        description="Auto-reject changes to critical enum values (DecodeType, EncodeTypes, etc.)"
+    )
+    base_url: Optional[str] = Field(
+        default=None,
+        description="Base URL for final review LLM provider (if None, inherits from main LLM config)"
+    )
+    api_key_env_var: Optional[str] = Field(
+        default=None,
+        description="Env var name holding API key for final review (if None, inherits from main LLM config)"
     )
 
 
@@ -549,6 +596,49 @@ class ContextHarnessConfig(BaseModel):
     )
 
 
+class AutoLearnConfig(BaseModel):
+    """Auto-learn configuration for pattern extraction from failures."""
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, description="Enable automatic pattern extraction after each pipeline run")
+    use_llm: bool = Field(default=False, description="Use LLM for pattern extraction (vs regex-only)")
+    timeout_seconds: int = Field(default=300, ge=30, le=600, description="Timeout for auto-learn subprocess")
+
+
+class RetirementPolicyConfig(BaseModel):
+    """Pattern retirement policy configuration."""
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, description="Enable automatic pattern retirement")
+    min_attempts: int = Field(default=10, ge=1, description="Minimum attempts before considering retirement")
+    max_success_rate: float = Field(default=0.1, ge=0.0, le=1.0, description="Retire if success rate <= this threshold")
+    max_age_days: int = Field(default=90, ge=1, description="Retire if older than N days")
+    dry_run: bool = Field(default=True, description="Log retirements without deleting (safety mode)")
+
+
+class ProviderConfig(BaseModel):
+    """Configuration for a single LLM provider."""
+    model_config = ConfigDict(extra="forbid")
+    base_url: str
+    api_key_env: Optional[str] = None
+    model: str = "gpt-oss"
+    fallback_to: Optional[str] = None
+    timeout_seconds: int = 120
+
+
+class ModelRoutingConfig(BaseModel):
+    """Model routing and fallback configuration."""
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    providers: Dict[str, ProviderConfig] = Field(default_factory=dict)
+    model_tiers: Dict[str, str] = Field(default_factory=dict)
+    routing_rules: Dict[str, str] = Field(default_factory=dict)
+    fallback_enabled: bool = True
+    track_cost: bool = False
+    fallback_on_timeout: bool = True
+    fallback_on_error: bool = True
+
+
 class GlobalConfig(BaseModel):
     """Global configuration settings."""
     model_config = ConfigDict(extra="forbid")
@@ -569,10 +659,17 @@ class GlobalConfig(BaseModel):
     substitution: SubstitutionConfig = Field(default_factory=SubstitutionConfig)
     context_enforcement: ContextEnforcementConfig = Field(default_factory=ContextEnforcementConfig)
     context_harness: ContextHarnessConfig = Field(default_factory=ContextHarnessConfig)
+    auto_learn: AutoLearnConfig = Field(default_factory=AutoLearnConfig)
+    pattern_retirement: RetirementPolicyConfig = Field(default_factory=RetirementPolicyConfig)
+    model_routing: ModelRoutingConfig = Field(default_factory=ModelRoutingConfig)
 
     # Paths
     artifact_store_path: str = Field(default="./artifacts")
-    database_path: str = Field(default="./data/example_reviewer.db")
+
+    # Database configuration
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    # Keep for backward compatibility (deprecated)
+    database_path: Optional[str] = Field(default=None, description="DEPRECATED: Use database.path instead")
 
 
 class NuGetPackage(BaseModel):
@@ -782,10 +879,34 @@ class ConfigurationManager:
         if 'context_harness' in data:
             parsed['context_harness'] = ContextHarnessConfig(**data['context_harness'])
 
+        if 'auto_learn' in data:
+            parsed['auto_learn'] = AutoLearnConfig(**data['auto_learn'])
+
+        if 'pattern_retirement' in data:
+            parsed['pattern_retirement'] = RetirementPolicyConfig(**data['pattern_retirement'])
+
+        if 'model_routing' in data:
+            routing_data = data['model_routing'].copy()
+            if 'providers' in routing_data:
+                routing_data['providers'] = {
+                    k: ProviderConfig(**v) for k, v in routing_data['providers'].items()
+                }
+            parsed['model_routing'] = ModelRoutingConfig(**routing_data)
+
         if 'artifact_store_path' in data:
             parsed['artifact_store_path'] = data['artifact_store_path']
 
-        if 'database_path' in data:
+        # Database configuration with backward compatibility
+        if 'database' in data:
+            parsed['database'] = DatabaseConfig(**data['database'])
+        elif 'database_path' in data:
+            # Backward compatibility: old database_path field
+            logger.warning("Config field 'database_path' is deprecated. Use 'database.path' instead.")
+            parsed['database'] = DatabaseConfig(path=data['database_path'])
+            parsed['database_path'] = data['database_path']  # Keep for legacy code
+
+        # Keep database_path for backward compatibility if set separately
+        if 'database_path' in data and 'database' not in data:
             parsed['database_path'] = data['database_path']
 
         return GlobalConfig(**parsed)
@@ -795,10 +916,26 @@ class ConfigurationManager:
         # Create mutable copies
         llm = config.llm.model_copy()
         git = config.git.model_copy()
-        
-        # LLM overrides
-        if os.getenv('LLM_PROVIDER'):
-            llm.provider = os.getenv('LLM_PROVIDER')
+
+        # LLM overrides - resolve coherent provider profiles
+        env_provider = os.getenv('LLM_PROVIDER')
+        if env_provider:
+            llm.provider = env_provider
+            # Look up full provider profile from model_routing
+            provider_profile = config.model_routing.providers.get(env_provider)
+            if provider_profile:
+                llm.base_url = provider_profile.base_url
+                llm.api_key_env_var = provider_profile.api_key_env
+                llm.model = provider_profile.model
+                logger.info(f"Resolved provider profile '{env_provider}': "
+                           f"base_url={provider_profile.base_url}, model={provider_profile.model}")
+            elif env_provider == "ollama":
+                # Hardcoded fallback for ollama even without routing config
+                llm.base_url = "http://localhost:11434/v1"
+                llm.api_key_env_var = None
+                llm.model = os.getenv('LLM_MODEL') or "qwen2.5-coder:7b"
+
+        # Explicit env overrides still take precedence over profile
         if os.getenv('LLM_MODEL'):
             llm.model = os.getenv('LLM_MODEL')
         if os.getenv('LLM_BASE_URL'):
@@ -809,8 +946,15 @@ class ConfigurationManager:
         # Git overrides
         if os.getenv('GIT_ENABLED'):
             git.enabled = os.getenv('GIT_ENABLED', '').lower() == 'true'
-        
-        return config.model_copy(update={'llm': llm, 'git': git})
+
+        # Database overrides
+        database = config.database.model_copy()
+        if os.getenv('EXAMPLE_REVIEWER_DATABASE_PATH'):
+            database.path = os.getenv('EXAMPLE_REVIEWER_DATABASE_PATH')
+        if os.getenv('EXAMPLE_REVIEWER_PROD_DB_PATH'):
+            database.production_path = os.getenv('EXAMPLE_REVIEWER_PROD_DB_PATH')
+
+        return config.model_copy(update={'llm': llm, 'git': git, 'database': database})
     
     def load_family_config(self, family: str) -> FamilyConfig:
         """Load family-specific configuration."""

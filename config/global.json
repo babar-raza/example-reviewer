@@ -3,7 +3,7 @@
     "provider": "openai",
     "model": "gpt-oss",
     "temperature": 0.2,
-    "max_retries": 5,
+    "max_retries": 2,
     "retry_backoff_seconds": 5,
     "api_key_env_var": "litellm_key",
     "base_url": "https://llm.professionalize.com/v1",
@@ -30,7 +30,7 @@
     "only_commit_touched_files": true
   },
   "markdown_write": {
-    "allow_markdown_write": false
+    "allow_markdown_write": true
   },
   "gist": {
     "enabled": true,
@@ -138,17 +138,22 @@
     }
   },
   "final_review": {
-    "enabled": true,
+    "enabled": false,
     "confidence_threshold": 0.7,
-    "provider": "openai",
+    "provider": "company",
     "model": "gpt-oss",
+    "base_url": "https://llm.professionalize.com/v1",
+    "api_key_env_var": "litellm_key",
     "timeout_seconds": 60,
     "enforce_model": true,
     "auto_remediation_enabled": false,
     "max_review_attempts": 2,
     "strict_mode": false,
     "fail_on_critical": true,
-    "only_review_llm_fixed": true
+    "only_review_llm_fixed": true,
+    "enable_signature_validation": true,
+    "enable_family_drift_validation": true,
+    "reject_critical_enum_changes": true
   },
   "drift": {
     "enabled": true,
@@ -190,12 +195,14 @@
       "company": {
         "base_url": "https://llm.professionalize.com/v1",
         "api_key_env": "litellm_key",
+        "model": "gpt-oss",
         "fallback_to": "ollama",
         "timeout_seconds": 120
       },
       "ollama": {
         "base_url": "http://localhost:11434/v1",
         "api_key_env": null,
+        "model": "qwen2.5-coder:7b",
         "timeout_seconds": 120
       }
     },
@@ -217,6 +224,18 @@
     "track_cost": true,
     "fallback_on_timeout": true,
     "fallback_on_error": true
+  },
+  "auto_learn": {
+    "enabled": true,
+    "use_llm": true,
+    "timeout_seconds": 300
+  },
+  "pattern_retirement": {
+    "enabled": false,
+    "min_attempts": 10,
+    "max_success_rate": 0.1,
+    "max_age_days": 90,
+    "dry_run": true
   },
   "artifact_store_path": "./artifacts",
   "database_path": "./data/example_reviewer.db",

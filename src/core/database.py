@@ -403,24 +403,72 @@ class Database:
 
     CREATE INDEX IF NOT EXISTS idx_fingerprints_config_hash ON run_fingerprints(config_hash);
     CREATE INDEX IF NOT EXISTS idx_fingerprints_selection_hash ON run_fingerprints(selection_hash);
+
+    -- Semantic signatures table (DRIFT-02: API-level fingerprinting)
+    CREATE TABLE IF NOT EXISTS semantic_signatures (
+        signature_id TEXT PRIMARY KEY,
+        example_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        attempt_type TEXT NOT NULL,
+        attempt_id TEXT,
+        enum_values TEXT,
+        method_calls TEXT,
+        constructor_types TEXT,
+        property_assignments TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (example_id) REFERENCES example_records(example_id),
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sig_example ON semantic_signatures(example_id);
+    CREATE INDEX IF NOT EXISTS idx_sig_run ON semantic_signatures(run_id);
+    CREATE INDEX IF NOT EXISTS idx_sig_type ON semantic_signatures(attempt_type);
+
+    -- Drift rejections table (DRIFT-02: tracks rejected fixes)
+    CREATE TABLE IF NOT EXISTS drift_rejections (
+        rejection_id TEXT PRIMARY KEY,
+        example_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        attempt_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        rejection_reason TEXT NOT NULL,
+        drift_score REAL NOT NULL,
+        signature_drift TEXT,
+        critical_enum_changes TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (example_id) REFERENCES example_records(example_id),
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rejection_example ON drift_rejections(example_id);
+    CREATE INDEX IF NOT EXISTS idx_rejection_run ON drift_rejections(run_id);
+    CREATE INDEX IF NOT EXISTS idx_rejection_phase ON drift_rejections(phase);
     """
     
     def __init__(
         self,
         db_path: Optional[Path] = None,
+        production_db_path: Optional[Path] = None,
         busy_timeout_ms: int = 120000,
         wal_enabled: bool = True
     ):
         """
-        Initialize database connection.
+        Initialize database connection(s).
 
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to development SQLite database file
+            production_db_path: Optional path to production database (enables dual-DB mode)
             busy_timeout_ms: SQLite busy timeout in milliseconds (default: 120000)
             wal_enabled: Enable WAL mode (default: True)
         """
         self.db_path = Path(db_path) if db_path else Path("data/example_reviewer.db")
+        self.production_db_path = Path(production_db_path) if production_db_path else None
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if self.production_db_path:
+            self.production_db_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Dual-database mode enabled: prod_db={self.production_db_path}")
+
         self._conn: Optional[sqlite3.Connection] = None
         self.busy_timeout_ms = busy_timeout_ms
         self.wal_enabled = wal_enabled
@@ -462,7 +510,39 @@ class Database:
             raise
         finally:
             conn.close()
-    
+
+    @contextmanager
+    def get_production_connection(self):
+        """
+        Get production database connection with same pragmas as dev DB.
+
+        Raises:
+            RuntimeError: If production database not configured
+        """
+        if not self.production_db_path:
+            raise RuntimeError("Production database not configured")
+
+        timeout_seconds = self.busy_timeout_ms / 1000.0
+        conn = sqlite3.connect(str(self.production_db_path), timeout=timeout_seconds)
+        conn.row_factory = sqlite3.Row
+
+        # Same pragmas as dev DB
+        if self.wal_enabled:
+            conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
+        conn.execute("PRAGMA foreign_keys=ON")
+
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     @property
     def conn(self) -> sqlite3.Connection:
         """Get persistent connection (for backward compatibility)."""
@@ -553,6 +633,8 @@ class Database:
                 logger.info(f"Applying migration: {migration_id}")
                 try:
                     migration_sql = migration_file.read_text(encoding='utf-8')
+                    if migration_id == "008_run_scoping":
+                        migration_sql = self._prepare_migration_008_sql(conn, migration_sql)
                     conn.executescript(migration_sql)
 
                     # Record migration in schema_migrations (engine records it, not the SQL)
@@ -566,6 +648,36 @@ class Database:
                 except Exception as e:
                     logger.error(f"Failed to apply migration {migration_id}: {e}")
                     raise
+
+    def _column_exists(self, conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+        """Check whether a column exists in the specified table."""
+        try:
+            cursor = conn.execute(f"PRAGMA table_info({table_name})")
+            return any(row[1] == column_name for row in cursor.fetchall())
+        except sqlite3.OperationalError:
+            return False
+
+    def _prepare_migration_008_sql(self, conn: sqlite3.Connection, migration_sql: str) -> str:
+        """
+        Make migration 008 safe on databases where run_id columns already exist.
+
+        SQLite does not support `ADD COLUMN IF NOT EXISTS`, so we strip only the
+        duplicate-prone ALTER statements when the target column is already present.
+        """
+        run_id_targets = [
+            "compile_attempts",
+            "runtime_attempts",
+            "markdown_edits",
+        ]
+        prepared_sql = migration_sql
+        for table_name in run_id_targets:
+            if self._column_exists(conn, table_name, "run_id"):
+                stmt = f"ALTER TABLE {table_name} ADD COLUMN run_id TEXT;"
+                prepared_sql = prepared_sql.replace(
+                    stmt,
+                    f"-- Skipped by migration engine: {table_name}.run_id already exists",
+                )
+        return prepared_sql
 
     def _is_fresh_database(self, conn: sqlite3.Connection) -> bool:
         """
@@ -603,6 +715,8 @@ class Database:
                 'review_issues',
                 'gist_publications',
                 'run_fingerprints',
+                'semantic_signatures',
+                'drift_rejections',
             }
 
             # Check if we have the base schema tables (or subset)
@@ -878,7 +992,47 @@ class Database:
 
                 rows = conn.execute(query, params).fetchall()
                 return [self._row_to_example(row) for row in rows]
-    
+
+    def get_examples_with_applicable_patterns(
+        self, family: str, status: List[ExampleStatus], max_examples: Optional[int] = None, run_id: Optional[str] = None
+    ) -> List[ExampleRecord]:
+        """Get examples that could benefit from pattern-based fixes."""
+        with self.get_connection() as conn:
+            if run_id:
+                status_placeholders = ','.join('?' * len(status))
+                query = f"""
+                    SELECT
+                        er.*,
+                        ers.status as run_status,
+                        ers.failure_reason as run_failure_reason,
+                        ers.escalation_reason as run_escalation_reason,
+                        ers.compilable_code as run_compilable_code,
+                        ers.verified_code as run_verified_code
+                    FROM example_records er
+                    INNER JOIN example_run_state ers ON er.example_id = ers.example_id
+                    WHERE er.family = ? AND ers.run_id = ?
+                      AND ers.status IN ({status_placeholders})
+                    ORDER BY er.example_key ASC
+                """
+                params = [family, run_id] + [s.value for s in status]
+                if max_examples:
+                    query += " LIMIT ?"
+                    params.append(max_examples)
+
+                rows = conn.execute(query, params).fetchall()
+                return [self._row_to_example_with_run_state(row) for row in rows]
+            return []
+
+    def get_recent_runs(self, family: str, limit: int = 5) -> List['RunRecord']:
+        """Get recent runs for a family."""
+        with self.get_connection() as conn:
+            query = """
+                SELECT * FROM run_records
+                WHERE family = ? ORDER BY started_at DESC LIMIT ?
+            """
+            rows = conn.execute(query, (family, limit)).fetchall()
+            return [self._row_to_run_record(row) for row in rows]
+
     def get_examples_by_file(self, file_path: str, run_id: Optional[str] = None) -> List[ExampleRecord]:
         """
         Get all examples from a specific file.
@@ -1474,7 +1628,25 @@ class Database:
             code_block_signature=code_block_signature,
             extraction_warning=extraction_warning,
         )
-    
+
+    def _row_to_run_record(self, row: sqlite3.Row) -> 'RunRecord':
+        """Convert database row to RunRecord."""
+        from .models import RunRecord
+
+        return RunRecord(
+            run_id=row['run_id'],
+            family=row['family'],
+            started_at=datetime.fromisoformat(row['started_at']),
+            completed_at=datetime.fromisoformat(row['completed_at']) if row['completed_at'] else None,
+            status=row['status'],
+            phases_completed=json.loads(row['phases_completed']) if row['phases_completed'] else [],
+            current_phase=row['current_phase'] or '',
+            examples_processed=row['examples_processed'] or 0,
+            examples_successful=row['examples_successful'] or 0,
+            examples_failed=row['examples_failed'] or 0,
+            error=row['error'],
+        )
+
     # =========================================================================
     # COMPILE ATTEMPTS
     # =========================================================================
@@ -1846,7 +2018,7 @@ class Database:
                 counts = conn.execute("""
                     SELECT
                         COUNT(*) as total,
-                        SUM(CASE WHEN ers.status = 'VERIFIED' OR ers.status = 'MD_UPDATED' OR ers.status = 'FINAL_REVIEW_PASSED' THEN 1 ELSE 0 END) as verified,
+                        SUM(CASE WHEN ers.status = 'VERIFIED' OR ers.status = 'MD_UPDATED' OR ers.status = 'FINAL_REVIEW_PASSED' OR ers.status = 'COMMITTED' THEN 1 ELSE 0 END) as verified,
                         SUM(CASE WHEN ers.status LIKE '%FAILED%' THEN 1 ELSE 0 END) as failed
                     FROM example_records er
                     JOIN example_run_state ers ON er.example_id = ers.example_id
@@ -1857,7 +2029,7 @@ class Database:
                 counts = conn.execute("""
                     SELECT
                         COUNT(*) as total,
-                        SUM(CASE WHEN ers.status = 'VERIFIED' OR ers.status = 'MD_UPDATED' OR ers.status = 'FINAL_REVIEW_PASSED' THEN 1 ELSE 0 END) as verified,
+                        SUM(CASE WHEN ers.status = 'VERIFIED' OR ers.status = 'MD_UPDATED' OR ers.status = 'FINAL_REVIEW_PASSED' OR ers.status = 'COMMITTED' THEN 1 ELSE 0 END) as verified,
                         SUM(CASE WHEN ers.status LIKE '%FAILED%' THEN 1 ELSE 0 END) as failed
                     FROM example_records er
                     JOIN example_run_state ers ON er.example_id = ers.example_id
@@ -3334,6 +3506,168 @@ class Database:
             )
             return conn.total_changes > 0
 
+    def copy_run_to_production(self, run_id: str, commit_hash: str) -> bool:
+        """
+        Copy entire run to production database after successful commit.
+
+        This includes:
+        - run_records
+        - example_records (canonical)
+        - example_run_state (run-scoped)
+        - compile_attempts, runtime_attempts, markdown_edits
+        - telemetry_runs
+        - failure_details, review_results
+
+        Args:
+            run_id: Run identifier
+            commit_hash: Git commit hash (for verification)
+
+        Returns:
+            True if copy succeeded, False otherwise
+        """
+        if not self.production_db_path:
+            return False  # Production DB not configured
+
+        try:
+            with self._write_lock:
+                # 1. Query all data for this run from dev DB
+                with self.get_connection() as dev_conn:
+                    # Get run record
+                    run = dev_conn.execute(
+                        "SELECT * FROM run_records WHERE run_id = ?", (run_id,)
+                    ).fetchone()
+
+                    # Get telemetry (verify commit_hash)
+                    telemetry = dev_conn.execute(
+                        "SELECT * FROM telemetry_runs WHERE run_id = ? AND git_commit_hash = ?",
+                        (run_id, commit_hash)
+                    ).fetchone()
+
+                    if not telemetry:
+                        logger.warning(f"No telemetry with commit_hash for run {run_id}")
+                        return False
+
+                    # Get all example_ids for this run
+                    example_ids = [
+                        row['example_id'] for row in dev_conn.execute(
+                            "SELECT DISTINCT example_id FROM example_run_state WHERE run_id = ?",
+                            (run_id,)
+                        ).fetchall()
+                    ]
+
+                    # Collect all related data
+                    examples = []
+                    for eid in example_ids:
+                        ex = dev_conn.execute(
+                            "SELECT * FROM example_records WHERE example_id = ?", (eid,)
+                        ).fetchone()
+                        if ex:
+                            examples.append(ex)
+
+                    run_states = dev_conn.execute(
+                        "SELECT * FROM example_run_state WHERE run_id = ?", (run_id,)
+                    ).fetchall()
+
+                    compile_attempts = dev_conn.execute(
+                        "SELECT * FROM compile_attempts WHERE run_id = ?", (run_id,)
+                    ).fetchall()
+
+                    runtime_attempts = dev_conn.execute(
+                        "SELECT * FROM runtime_attempts WHERE run_id = ?", (run_id,)
+                    ).fetchall()
+
+                    markdown_edits = dev_conn.execute(
+                        "SELECT * FROM markdown_edits WHERE run_id = ?", (run_id,)
+                    ).fetchall()
+
+                    failure_details = dev_conn.execute(
+                        "SELECT * FROM failure_details WHERE run_id = ?", (run_id,)
+                    ).fetchall()
+
+                    review_results = dev_conn.execute(
+                        "SELECT * FROM review_results WHERE run_id = ?", (run_id,)
+                    ).fetchall()
+
+                # 2. Write to production DB in transaction
+                with self.get_production_connection() as prod_conn:
+                    # Insert run_records
+                    if run:
+                        placeholders = ','.join(['?' for _ in run])
+                        prod_conn.execute(
+                            f"INSERT OR REPLACE INTO run_records VALUES ({placeholders})",
+                            tuple(run)
+                        )
+
+                    # Insert example_records (may already exist, use INSERT OR IGNORE)
+                    for example in examples:
+                        placeholders = ','.join(['?' for _ in example])
+                        prod_conn.execute(
+                            f"INSERT OR IGNORE INTO example_records VALUES ({placeholders})",
+                            tuple(example)
+                        )
+
+                    # Insert example_run_state
+                    for state in run_states:
+                        placeholders = ','.join(['?' for _ in state])
+                        prod_conn.execute(
+                            f"INSERT OR REPLACE INTO example_run_state VALUES ({placeholders})",
+                            tuple(state)
+                        )
+
+                    # Insert compile_attempts
+                    for attempt in compile_attempts:
+                        placeholders = ','.join(['?' for _ in attempt])
+                        prod_conn.execute(
+                            f"INSERT OR IGNORE INTO compile_attempts VALUES ({placeholders})",
+                            tuple(attempt)
+                        )
+
+                    # Insert runtime_attempts
+                    for attempt in runtime_attempts:
+                        placeholders = ','.join(['?' for _ in attempt])
+                        prod_conn.execute(
+                            f"INSERT OR IGNORE INTO runtime_attempts VALUES ({placeholders})",
+                            tuple(attempt)
+                        )
+
+                    # Insert markdown_edits
+                    for edit in markdown_edits:
+                        placeholders = ','.join(['?' for _ in edit])
+                        prod_conn.execute(
+                            f"INSERT OR IGNORE INTO markdown_edits VALUES ({placeholders})",
+                            tuple(edit)
+                        )
+
+                    # Insert telemetry_runs
+                    placeholders = ','.join(['?' for _ in telemetry])
+                    prod_conn.execute(
+                        f"INSERT OR REPLACE INTO telemetry_runs VALUES ({placeholders})",
+                        tuple(telemetry)
+                    )
+
+                    # Insert failure_details
+                    for detail in failure_details:
+                        placeholders = ','.join(['?' for _ in detail])
+                        prod_conn.execute(
+                            f"INSERT OR IGNORE INTO failure_details VALUES ({placeholders})",
+                            tuple(detail)
+                        )
+
+                    # Insert review_results
+                    for result in review_results:
+                        placeholders = ','.join(['?' for _ in result])
+                        prod_conn.execute(
+                            f"INSERT OR IGNORE INTO review_results VALUES ({placeholders})",
+                            tuple(result)
+                        )
+
+            logger.info(f"Successfully copied run {run_id} to production database")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to copy run {run_id} to production DB: {e}")
+            return False
+
     def _row_to_failure_detail(self, row: sqlite3.Row) -> 'FailureDetail':
         """Convert database row to FailureDetail."""
         from .models import FailureDetail, FailureCategory, FailureResolution
@@ -3350,3 +3684,199 @@ class Database:
             metadata=json.loads(row['metadata']) if row['metadata'] else {},
             timestamp=datetime.fromisoformat(row['timestamp']),
         )
+
+    # =========================================================================
+    # SEMANTIC SIGNATURES & DRIFT REJECTIONS (DRIFT-02)
+    # =========================================================================
+
+    def save_semantic_signature(
+        self,
+        example_id: str,
+        run_id: str,
+        attempt_type: str,
+        signature_data: Dict[str, Any],
+        attempt_id: Optional[str] = None,
+    ) -> str:
+        """
+        Save a semantic signature for an example at a given attempt.
+
+        Args:
+            example_id: Example identifier
+            run_id: Pipeline run ID
+            attempt_type: 'original', 'compile_attempt', or 'runtime_attempt'
+            signature_data: Dict with enum_values, method_calls, constructor_types, property_assignments
+            attempt_id: Optional compile/runtime attempt ID
+
+        Returns:
+            signature_id
+        """
+        sig_id = hashlib.sha256(
+            f"{example_id}:{run_id}:{attempt_type}:{attempt_id or ''}".encode()
+        ).hexdigest()[:16]
+
+        with self._write_lock:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO semantic_signatures (
+                        signature_id, example_id, run_id, attempt_type, attempt_id,
+                        enum_values, method_calls, constructor_types,
+                        property_assignments, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    sig_id,
+                    example_id,
+                    run_id,
+                    attempt_type,
+                    attempt_id,
+                    json.dumps(signature_data.get('enum_values', {})),
+                    json.dumps(signature_data.get('method_calls', [])),
+                    json.dumps(signature_data.get('constructor_types', [])),
+                    json.dumps(signature_data.get('property_assignments', {})),
+                    datetime.utcnow().isoformat(),
+                ))
+        return sig_id
+
+    def save_drift_rejection(
+        self,
+        example_id: str,
+        run_id: str,
+        attempt_id: str,
+        phase: str,
+        rejection_reason: str,
+        drift_score: float,
+        signature_drift: Optional[Dict[str, Any]] = None,
+        critical_enum_changes: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Save a drift rejection record.
+
+        Args:
+            example_id: Example identifier
+            run_id: Pipeline run ID
+            attempt_id: Compile/runtime attempt ID
+            phase: 'compilation' or 'runtime'
+            rejection_reason: Human-readable reason for rejection
+            drift_score: Computed drift score
+            signature_drift: Full signature drift details (JSON)
+            critical_enum_changes: Critical enum changes detected (JSON)
+
+        Returns:
+            rejection_id
+        """
+        rej_id = hashlib.sha256(
+            f"{example_id}:{run_id}:{attempt_id}:{phase}".encode()
+        ).hexdigest()[:16]
+
+        with self._write_lock:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO drift_rejections (
+                        rejection_id, example_id, run_id, attempt_id, phase,
+                        rejection_reason, drift_score, signature_drift,
+                        critical_enum_changes, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    rej_id,
+                    example_id,
+                    run_id,
+                    attempt_id,
+                    phase,
+                    rejection_reason,
+                    drift_score,
+                    json.dumps(signature_drift) if signature_drift else None,
+                    json.dumps(critical_enum_changes) if critical_enum_changes else None,
+                    datetime.utcnow().isoformat(),
+                ))
+        return rej_id
+
+    def get_drift_rejections(
+        self,
+        run_id: str,
+        phase: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all drift rejections for a run, optionally filtered by phase.
+
+        Args:
+            run_id: Pipeline run ID
+            phase: Optional filter ('compilation' or 'runtime')
+
+        Returns:
+            List of rejection records as dicts
+        """
+        with self.get_connection() as conn:
+            if phase:
+                rows = conn.execute(
+                    "SELECT * FROM drift_rejections WHERE run_id = ? AND phase = ? ORDER BY created_at",
+                    (run_id, phase),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM drift_rejections WHERE run_id = ? ORDER BY created_at",
+                    (run_id,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_semantic_signatures(
+        self,
+        example_id: str,
+        run_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get semantic signatures for an example, optionally filtered by run.
+
+        Args:
+            example_id: Example identifier
+            run_id: Optional pipeline run ID filter
+
+        Returns:
+            List of signature records as dicts
+        """
+        with self.get_connection() as conn:
+            if run_id:
+                rows = conn.execute(
+                    "SELECT * FROM semantic_signatures WHERE example_id = ? AND run_id = ? ORDER BY created_at",
+                    (example_id, run_id),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM semantic_signatures WHERE example_id = ? ORDER BY created_at",
+                    (example_id,),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_drift_rejection_rate(self, run_id: str) -> Dict[str, Any]:
+        """
+        Compute drift rejection statistics for a run.
+
+        Args:
+            run_id: Pipeline run ID
+
+        Returns:
+            Dict with total, by_phase, by_reason counts
+        """
+        with self.get_connection() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM drift_rejections WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+
+            by_phase = {}
+            for row in conn.execute(
+                "SELECT phase, COUNT(*) as cnt FROM drift_rejections WHERE run_id = ? GROUP BY phase",
+                (run_id,),
+            ).fetchall():
+                by_phase[row[0]] = row[1]
+
+            by_reason = {}
+            for row in conn.execute(
+                "SELECT rejection_reason, COUNT(*) as cnt FROM drift_rejections WHERE run_id = ? GROUP BY rejection_reason ORDER BY cnt DESC LIMIT 10",
+                (run_id,),
+            ).fetchall():
+                by_reason[row[0]] = row[1]
+
+            return {
+                "total": total,
+                "by_phase": by_phase,
+                "by_reason": by_reason,
+            }

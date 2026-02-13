@@ -203,32 +203,31 @@ using (var archive = new Archive(settings))
             logger.warning("OpenAI library not available. LLM features disabled.")
             return
 
-        if self.provider in ("openai", "azure", "ollama", "openrouter", "anthropic"):
-            client_kwargs = {}
+        client_kwargs = {}
 
-            # Add client-level timeout (C.5: client timeout)
-            if self.enforce_timeout:
-                client_kwargs["timeout"] = self.timeout_seconds
+        # Add client-level timeout (C.5: client timeout)
+        if self.enforce_timeout:
+            client_kwargs["timeout"] = self.timeout_seconds
 
-            if self.provider == "ollama":
-                # Ollama doesn't require a real API key
-                client_kwargs["base_url"] = self.base_url or "http://localhost:11434/v1"
-                client_kwargs["api_key"] = "ollama"  # Ollama requires a placeholder
-            else:
-                # Other providers require API key
-                if not self.api_key:
-                    logger.warning(f"No API key provided for {self.provider}. LLM features disabled.")
-                    return
-                client_kwargs["api_key"] = self.api_key
-                if self.base_url:
-                    client_kwargs["base_url"] = self.base_url
+        if self.provider == "ollama":
+            # Ollama doesn't require a real API key
+            client_kwargs["base_url"] = self.base_url or "http://localhost:11434/v1"
+            client_kwargs["api_key"] = "ollama"  # Ollama requires a placeholder
+        else:
+            # All other providers use OpenAI-compatible API (openai, azure, company, etc.)
+            if not self.api_key:
+                logger.warning(f"No API key provided for {self.provider}. LLM features disabled.")
+                return
+            client_kwargs["api_key"] = self.api_key
+            if self.base_url:
+                client_kwargs["base_url"] = self.base_url
 
-            try:
-                self._client = OpenAI(**client_kwargs)
-                logger.debug(f"Initialized LLM client for {self.provider} with timeout={self.timeout_seconds}s")
-            except Exception as e:
-                logger.warning(f"Failed to initialize OpenAI client: {e}. LLM features disabled.")
-                self._client = None
+        try:
+            self._client = OpenAI(**client_kwargs)
+            logger.debug(f"Initialized LLM client for {self.provider} with timeout={self.timeout_seconds}s")
+        except Exception as e:
+            logger.warning(f"Failed to initialize OpenAI client: {e}. LLM features disabled.")
+            self._client = None
     
     def is_available(self) -> bool:
         """Check if LLM service is available and properly configured."""
@@ -289,6 +288,14 @@ using (var archive = new Archive(settings))
             logger.error(f"Failed to initialize fallback Ollama client: {e}")
             return None
 
+    def _get_fallback_model(self) -> str:
+        """Get the model name for the fallback provider."""
+        if self.routing_config:
+            providers = self.routing_config.get("providers", {})
+            ollama_config = providers.get("ollama", {})
+            return ollama_config.get("model", "qwen2.5-coder:7b")
+        return "qwen2.5-coder:7b"
+
     def _call_with_fallback(self, model: str, messages: List[Dict], **kwargs) -> Optional[Any]:
         """
         Try calling company LLM, fallback to Ollama if unavailable.
@@ -319,11 +326,12 @@ using (var archive = new Archive(settings))
                 logger.warning(f"Primary provider unavailable ({type(e).__name__}): {e}. Attempting fallback to Ollama.")
 
                 try:
-                    # Try fallback client
+                    # Try fallback client with fallback-specific model
                     fallback_client = self._get_fallback_client()
                     if fallback_client:
-                        logger.info(f"Falling back to Ollama with model {model}")
-                        return fallback_client.chat.completions.create(model=model, messages=messages, **kwargs)
+                        fallback_model = self._get_fallback_model()
+                        logger.info(f"Falling back to Ollama with model {fallback_model}")
+                        return fallback_client.chat.completions.create(model=fallback_model, messages=messages, **kwargs)
                 except Exception as fallback_e:
                     logger.error(f"Fallback client also failed: {fallback_e}")
 
@@ -1011,14 +1019,18 @@ If you cannot fix the code without major changes, return the original code uncha
             "4. **Teaching Clarity**: A reader should understand the same lesson from your fix",
         ])
 
-        # Add BAD fixes examples
+        # Add BAD fixes examples (including semantic drift prevention)
         prompt_parts.extend([
             "",
-            "## Examples of BAD fixes (scope creep):",
-            "❌ Adding try-catch blocks when original had none",
-            "❌ Adding File.Exists() checks when original assumed file exists",
-            "❌ Adding complex error messages when original used simple code",
-            "❌ Restructuring code into methods when original was inline",
+            "## Examples of BAD fixes (scope creep and semantic drift):",
+            "- Adding try-catch blocks when original had none",
+            "- Adding File.Exists() checks when original assumed file exists",
+            "- Adding complex error messages when original used simple code",
+            "- Restructuring code into methods when original was inline",
+            "- Changing enum values (e.g., DecodeType.Code39 to DecodeType.DataMatrix)",
+            "- Removing property customizations (e.g., deleting BarColor, BackColor assignments)",
+            "- Changing constructor types (e.g., BarcodeGenerator to BarCodeReader)",
+            "- Switching API modes (e.g., generation to recognition, save to load)",
         ])
 
         # Add GOOD fixes examples
@@ -1254,14 +1266,18 @@ If you cannot fix the code without major changes, return the original code uncha
             "4. **Teaching Clarity**: A reader should understand the same lesson from your fix",
         ])
 
-        # Add BAD fixes examples
+        # Add BAD fixes examples (including semantic drift prevention)
         prompt_parts.extend([
             "",
-            "## Examples of BAD fixes (scope creep):",
-            "❌ Adding try-catch blocks when original had none",
-            "❌ Adding File.Exists() checks when original assumed file exists",
-            "❌ Adding complex error messages when original used simple code",
-            "❌ Restructuring code into methods when original was inline",
+            "## Examples of BAD fixes (scope creep and semantic drift):",
+            "- Adding try-catch blocks when original had none",
+            "- Adding File.Exists() checks when original assumed file exists",
+            "- Adding complex error messages when original used simple code",
+            "- Restructuring code into methods when original was inline",
+            "- Changing enum values (e.g., DecodeType.Code39 to DecodeType.DataMatrix)",
+            "- Removing property customizations (e.g., deleting BarColor, BackColor assignments)",
+            "- Changing constructor types (e.g., BarcodeGenerator to BarCodeReader)",
+            "- Switching API modes (e.g., generation to recognition, save to load)",
         ])
 
         # Add GOOD fixes examples
@@ -1714,6 +1730,7 @@ Return a JSON object with the following structure:
         self,
         markdown_content: str,
         code_snippets: List[Dict[str, Any]],
+        catalog=None,
     ) -> Dict[str, Any]:
         """
         Review markdown with GUARANTEED structured output using Instructor.
@@ -1745,15 +1762,16 @@ Return a JSON object with the following structure:
 
         # Use Instructor if available for guaranteed schema compliance
         if INSTRUCTOR_AVAILABLE:
-            return self._review_with_instructor(markdown_content, code_snippets)
+            return self._review_with_instructor(markdown_content, code_snippets, catalog=catalog)
         else:
             logger.warning("Instructor not available, falling back to manual JSON parsing")
-            return self._review_with_manual_parsing(markdown_content, code_snippets)
+            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog)
 
     def _review_with_instructor(
         self,
         markdown_content: str,
         code_snippets: List[Dict[str, Any]],
+        catalog=None,
     ) -> Dict[str, Any]:
         """
         Review using Instructor for guaranteed schema compliance.
@@ -1805,6 +1823,16 @@ ONLY report actual issues. If the code is fine, set approved=true with empty iss
             ])
 
         prompt_parts.append("")
+
+        # Add catalog context if available
+        if catalog:
+            catalog_context = self._build_catalog_context_for_review(catalog)
+            if catalog_context:
+                prompt_parts.append("")
+                prompt_parts.append("## API Catalog Context:")
+                prompt_parts.append(catalog_context)
+                prompt_parts.append("")
+
         prompt_parts.append("Review these snippets and provide your assessment:")
 
         try:
@@ -1860,12 +1888,13 @@ ONLY report actual issues. If the code is fine, set approved=true with empty iss
         except Exception as e:
             logger.warning(f"Instructor-based review failed: {e}, falling back to manual parsing")
             # Fall back to manual parsing on error
-            return self._review_with_manual_parsing(markdown_content, code_snippets)
+            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog)
 
     def _review_with_manual_parsing(
         self,
         markdown_content: str,
         code_snippets: List[Dict[str, Any]],
+        catalog=None,
     ) -> Dict[str, Any]:
         """
         Fallback review method with manual JSON parsing.
@@ -1991,10 +2020,28 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
 
         return result
 
+    def _build_catalog_context_for_review(self, catalog) -> str:
+        """Build compact catalog context for final review."""
+        if not catalog or not catalog.is_loaded:
+            return ""
+
+        parts = []
+        namespaces = catalog.get_all_namespaces()
+        if namespaces:
+            parts.append("Documented API Namespaces:")
+            for ns in namespaces[:25]:
+                parts.append(f"  - {ns}")
+
+        parts.append("")
+        parts.append("VALIDATION: Flag 'api_mismatch' if code uses types/namespaces NOT in this list.")
+        return "\n".join(parts)
+
     def final_review(
         self,
         original_code: str,
         fixed_code: str,
+        signature_drift: Optional[Dict[str, Any]] = None,
+        catalog=None,
     ) -> Dict[str, Any]:
         """
         Review fixed code to verify it preserves the original intent.
@@ -2005,6 +2052,7 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
         Args:
             original_code: The original code (intent source)
             fixed_code: The code after LLM fixes
+            signature_drift: Optional semantic signature drift data from Gate 1
 
         Returns:
             Dictionary with:
@@ -2039,8 +2087,29 @@ Examples of FORBIDDEN changes (intent_preserved=false):
 - Changing API method calls
 - Changing file paths or resources in significant ways
 - Removing core logic or features
+- Changing enum values (e.g., DecodeType.Code39 to DataMatrix, CompressionLevel change)
+- Removing property customizations (e.g., BarColor, BackColor, Resolution assignments removed)
+- Changing constructor types (e.g., BarcodeGenerator to BarCodeReader)
+- Switching between generation and recognition APIs
 
 Return ONLY valid JSON, no markdown formatting."""
+
+        sig_context = ""
+        if signature_drift:
+            enum_changes = signature_drift.get('enum_changes', {})
+            method_changes = signature_drift.get('method_changes', {})
+            type_changes = signature_drift.get('type_changes', [])
+            property_changes = signature_drift.get('property_changes', {})
+            if enum_changes or type_changes or method_changes.get('removed') or property_changes.get('removed'):
+                sig_context = f"""
+## DETECTED SIGNATURE CHANGES (from automated analysis):
+- Enum changes: {enum_changes if enum_changes else 'None'}
+- Method changes: {method_changes if method_changes.get('added') or method_changes.get('removed') else 'None'}
+- Type changes: {type_changes if type_changes else 'None'}
+- Property changes: {property_changes if property_changes.get('removed') or property_changes.get('changed') else 'None'}
+
+Pay special attention to these detected changes when assessing intent preservation.
+"""
 
         prompt = f"""Analyze whether the FIXED CODE preserves the intent of the ORIGINAL CODE.
 
@@ -2053,7 +2122,7 @@ Return ONLY valid JSON, no markdown formatting."""
 ```csharp
 {fixed_code}
 ```
-
+{sig_context}
 Respond with JSON in this exact format:
 {{
   "intent_preserved": true or false,
