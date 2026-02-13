@@ -1,4 +1,4 @@
-# Known Gaps and Repo Health Checklist
+﻿# Known Gaps and Repo Health Checklist
 
 This documentation is derived from the current archive contents. There are several structural gaps that may prevent the project from running end-to-end as-is.
 
@@ -98,3 +98,27 @@ PYTHONPATH=. python -m src.cli.main backfill --family zip --force
 - Remove `workspace/` if you want a clean build workspace.
 - Keep `artifacts/` for debugging failed attempts.
 - Use the DB run records to compare statistics and drift trends.
+## Update — 2026-02-12 17:55 PKT
+
+### What Changed
+- DEPRECATED: Prior assumption that migration 008 failures are an active repo-wide blocker.
+- Current state from verification logs:
+  - Full test suite passes: `449 passed, 3 warnings`.
+  - Migration bootstrap no longer fails on duplicate `run_id` for migration 008.
+
+### Why
+Migration reliability hardening was implemented in `src/core/database.py` to:
+1. Skip duplicate-prone `ALTER TABLE ... ADD COLUMN run_id` statements in migration 008 when columns already exist.
+2. Correct fresh DB baseline detection by aligning `_is_fresh_database()` base table inventory with current schema tables.
+
+### Evidence
+- `reports/agents/agent_c/MIG-008-TEST/run_20260212_175551/artifacts/pytest_full.log`
+- `reports/agents/agent_a/MIG-008-ARCH/run_20260212_175551/artifacts/database_migration_points.txt`
+- `reports/agents/agent_a/MIG-008-ARCH/run_20260212_175551/artifacts/migration_008_run_id_alter.txt`
+
+### Remaining Known Gaps
+- `PytestReturnNotNoneWarning` appears in:
+  - `tests/test_validate_db_path_location.py`
+  - `tests/test_validate_strict_context_no_examples.py`
+- `pytest_asyncio` warning about `asyncio_default_fixture_loop_scope` not explicitly set.
+

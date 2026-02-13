@@ -1,205 +1,30 @@
-# Telemetry API HTTP Reference
+# Local Telemetry API Client Guide
 
-**Quick Start:** This document is the complete reference for integrating with the Local Telemetry Platform HTTP API. Use this when implementing agents or services that need to track telemetry data.
+**Purpose:** This guide shows you how to integrate with Local Telemetry to track agent runs, job executions, and automated tasks through HTTP endpoints.
 
 **Version:** 3.0.0
 **Last Updated:** 2026-02-07
-**Detailed Specs:** See [specs/features/](../../specs/features/) for endpoint-specific implementation details
+**Base URL:** http://localhost:8765 (default, configurable via `TELEMETRY_API_URL`)
 
-## Service
+---
 
-- **Name:** local-telemetry-api
-- **Version:** 3.0.0
-- **Container:** local-telemetry-api
-- **Image:** local-telemetry-api:3.0.0
-- **Base URL:** http://localhost:8765 (configurable via `TELEMETRY_API_URL`)
-- **OpenAPI:** /openapi.json
-- **Interactive Docs:** /docs (Swagger UI), /redoc (ReDoc)
+## Table of Contents
 
-## Authentication
+1. [Quick Start](#quick-start)
+2. [Understanding the Event Lifecycle](#understanding-the-event-lifecycle)
+3. [How to Fill Fields](#how-to-fill-fields)
+4. [Best Practices](#best-practices)
+5. [Common Integration Patterns](#common-integration-patterns)
+6. [Endpoint Reference](#endpoint-reference)
+7. [Troubleshooting](#troubleshooting)
 
-- Optional and disabled by default.
-- Enable with `TELEMETRY_API_AUTH_ENABLED=true`.
-- When enabled, send `Authorization: Bearer <token>` where `<token>` matches `TELEMETRY_API_AUTH_TOKEN`.
-- Missing/invalid auth returns `401` with `WWW-Authenticate: Bearer`.
+---
 
-## Rate Limiting
+## Quick Start
 
-- Optional and disabled by default.
-- Enable with `TELEMETRY_RATE_LIMIT_ENABLED=true`.
-- Limit configured by `TELEMETRY_RATE_LIMIT_RPM` (requests per minute per client IP).
-- Exceeded limit returns `429` with headers:
-  - `Retry-After: 60`
-  - `X-RateLimit-Limit: <rpm>`
-  - `X-RateLimit-Remaining: 0`
+### Your First Telemetry Event
 
-## Common Headers
-
-- `Content-Type: application/json` for all request bodies.
-- `Authorization: Bearer <token>` required only when auth is enabled on endpoints that enforce auth.
-
-## Error Format
-
-- Most errors use FastAPI standard shape:
-  - `{"detail": "<message>"}`
-- Validation errors (422) use:
-  - `{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`
-
-## Key Concepts for Implementation
-
-### Status Values and Normalization
-
-**Canonical Statuses** (stored in database):
-- `running` - Run is in progress
-- `success` - Run completed successfully
-- `failure` - Run failed
-- `partial` - Run completed with partial success
-- `timeout` - Run exceeded time limit
-- `cancelled` - Run was cancelled
-
-**Status Aliases** (automatically normalized on POST and GET queries):
-- `failed` → `failure`
-- `completed` → `success`
-- `succeeded` → `success`
-
-**Validation Differences:**
-- **POST /api/v1/runs:** Accepts aliases (`failed`, `completed`, `succeeded`) and normalizes them. Any string is accepted by the Pydantic model; normalization maps known aliases to canonical values.
-- **PATCH /api/v1/runs/{event_id}:** Strict validation — only the 6 canonical values are accepted. Aliases and unknown values return 422.
-- **GET /api/v1/runs (query filter):** Accepts aliases in the `status` query parameter and normalizes before querying. Invalid values return 400.
-
-### Idempotency via event_id
-
-**Critical:** Always generate unique `event_id` values (UUIDs recommended). The API uses `event_id` as the idempotency key:
-- Duplicate `event_id` POST requests return **201 Created** with `"status": "duplicate"` in the response body (not an error)
-- Distinguish new vs duplicate by checking the response body `status` field: `"created"` or `"duplicate"`
-- This enables safe retries after network failures
-- Use the same `event_id` for PATCH updates to the same run
-
-### Timestamp Formats
-
-**Always use ISO8601 with timezone:**
-- ✅ `2026-01-12T10:30:00Z` (UTC)
-- ✅ `2026-01-12T10:30:00.123456+00:00` (UTC with microseconds)
-- ✅ `2026-01-12T10:30:00-08:00` (with timezone offset)
-- ❌ `2026-01-12 10:30:00` (no timezone, will cause validation errors)
-
-### Git Commit Tracking
-
-**Two ways to associate commits:**
-
-1. **Include in POST /api/v1/runs** (if known at start):
-   ```json
-   {
-     "event_id": "...",
-     "git_repo": "https://github.com/owner/repo",
-     "git_commit_hash": "abc123",
-     "git_branch": "main"
-   }
-   ```
-   **Note:** `git_commit_source`, `git_commit_author`, and `git_commit_timestamp` are accepted in the POST body but are **NOT persisted** on initial creation. Use PATCH or associate-commit to set these fields.
-
-2. **Associate after run** (if commit created later):
-   ```bash
-   POST /api/v1/runs/{event_id}/associate-commit
-   {"commit_hash": "abc123", "commit_source": "llm"}
-   ```
-
-**commit_source values:**
-- `manual` - Human-created commit
-- `llm` - LLM-generated commit (e.g., Claude Code, Cursor, Copilot)
-- `ci` - CI/CD pipeline commit
-
-## Complete Field Reference
-
-### POST /api/v1/runs — Request Fields
-
-Every field accepted by the `POST /api/v1/runs` endpoint, with type, requirement, default, and constraints.
-
-| Field | Type | Required | Default | Constraints / Notes |
-|-------|------|----------|---------|---------------------|
-| `event_id` | string | **Yes** | — | Unique idempotency key. UUID recommended. |
-| `run_id` | string | **Yes** | — | Application-level run identifier. |
-| `agent_name` | string | **Yes** | — | Name of the agent/service. |
-| `job_type` | string | **Yes** | — | Type of job being executed. |
-| `start_time` | string | **Yes** | — | ISO8601 with timezone. |
-| `created_at` | string | No | Current UTC time | ISO8601. Auto-generated if omitted. |
-| `end_time` | string | No | `null` | ISO8601. Set on completion. |
-| `status` | string | No | `"running"` | Canonical or alias value. Normalized before storage. |
-| `product` | string | No | `null` | Product identifier. |
-| `product_family` | string | No | `null` | Product family grouping. |
-| `platform` | string | No | `null` | Platform identifier (e.g., `"web"`). |
-| `subdomain` | string | No | `null` | Site subdomain. |
-| `website` | string | No | `null` | Root domain (e.g., `"example.com"`). |
-| `website_section` | string | No | `null` | Section of the website (e.g., `"blog"`). |
-| `item_name` | string | No | `null` | Specific page/entity being tracked. |
-| `items_discovered` | integer | No | `0` | Must be ≥ 0. |
-| `items_succeeded` | integer | No | `0` | Must be ≥ 0. |
-| `items_failed` | integer | No | `0` | Must be ≥ 0. |
-| `items_skipped` | integer | No | `0` | Must be ≥ 0. |
-| `duration_ms` | integer\|null | No | `0` | `null` is auto-converted to `0`. Must be ≥ 0. |
-| `input_summary` | string | No | `null` | Description of input data. |
-| `output_summary` | string | No | `null` | Description of output/results. |
-| `source_ref` | string | No | `null` | Source reference (e.g., S3 path, URL). |
-| `target_ref` | string | No | `null` | Target/destination reference. |
-| `error_summary` | string | No | `null` | Short error description. |
-| `error_details` | string | No | `null` | Full error details/traceback. |
-| `git_repo` | string | No | `null` | Repository URL (HTTPS or SSH). Persisted on POST. |
-| `git_branch` | string | No | `null` | Git branch name. Persisted on POST. |
-| `git_commit_hash` | string | No | `null` | Commit SHA. Persisted on POST. |
-| `git_run_tag` | string | No | `null` | Run tag (e.g., `"nightly"`). Persisted on POST. |
-| `git_commit_source` | string | No | `null` | ⚠️ **Accepted but NOT persisted on POST.** Must be `manual`, `llm`, or `ci`. Use PATCH or associate-commit. |
-| `git_commit_author` | string | No | `null` | ⚠️ **Accepted but NOT persisted on POST.** Use PATCH or associate-commit. |
-| `git_commit_timestamp` | string | No | `null` | ⚠️ **Accepted but NOT persisted on POST.** ISO8601. Use PATCH or associate-commit. |
-| `host` | string | No | `null` | Hostname of the execution environment. |
-| `environment` | string | No | `null` | Environment name (e.g., `"prod"`, `"staging"`). |
-| `trigger_type` | string | No | `null` | What triggered the run (e.g., `"scheduler"`, `"manual"`). |
-| `metrics_json` | object | No | `null` | Any JSON structure for custom metrics. Stored as JSON text. |
-| `context_json` | object | No | `null` | Any JSON structure for custom context. Stored as JSON text. |
-| `api_posted` | boolean | No | `false` | Whether run was posted to external API. |
-| `api_posted_at` | string | No | `null` | ISO8601 timestamp of external API post. |
-| `api_retry_count` | integer | No | `0` | Number of external API retry attempts. |
-| `insight_id` | string | No | `null` | Links to an originating insight (SEO Intelligence integration). |
-| `parent_run_id` | string | No | `null` | Parent run's event_id for hierarchical runs. |
-
-### PATCH /api/v1/runs/{event_id} — Updatable Fields
-
-Only these fields can be updated via PATCH. At least one non-null field is required.
-
-| Field | Type | Constraints |
-|-------|------|-------------|
-| `status` | string | **Strict validation:** `running`, `success`, `failure`, `partial`, `timeout`, `cancelled` only. Aliases NOT accepted. |
-| `end_time` | string | ISO8601 with timezone. |
-| `duration_ms` | integer | Must be ≥ 0. |
-| `error_summary` | string | Short error description. |
-| `error_details` | string | Full error details/traceback. |
-| `output_summary` | string | Description of output/results. |
-| `items_succeeded` | integer | Must be ≥ 0. |
-| `items_failed` | integer | Must be ≥ 0. |
-| `items_skipped` | integer | Must be ≥ 0. |
-| `metrics_json` | object | Any JSON structure. |
-| `context_json` | object | Any JSON structure. |
-| `git_commit_source` | string | Must be `manual`, `llm`, or `ci`. |
-| `git_commit_author` | string | Author string (e.g., `"Name <email>"`). |
-| `git_commit_timestamp` | string | ISO8601 with timezone. |
-
-**Fields NOT updatable via PATCH:** `event_id`, `run_id`, `agent_name`, `job_type`, `start_time`, `created_at`, `product`, `platform`, `website`, `git_repo`, `git_branch`, `git_commit_hash`, `items_discovered`, `input_summary`, `source_ref`, `target_ref`, `host`, `environment`, `trigger_type`, `insight_id`, `parent_run_id`.
-
-**Important:** PATCH does **not** automatically update the `updated_at` timestamp. Only the `associate-commit` endpoint updates `updated_at`.
-
-### POST /api/v1/runs/{event_id}/associate-commit — Request Fields
-
-| Field | Type | Required | Constraints |
-|-------|------|----------|-------------|
-| `commit_hash` | string | **Yes** | 7-40 characters. Git commit SHA. |
-| `commit_source` | string | **Yes** | Must be `manual`, `llm`, or `ci`. |
-| `commit_author` | string | No | Author string (e.g., `"Name <email>"`). |
-| `commit_timestamp` | string | No | ISO8601 with timezone. |
-
-This endpoint updates `git_commit_hash`, `git_commit_source`, `git_commit_author`, `git_commit_timestamp`, and `updated_at` on the run record.
-
-## Typical Workflow for Agents
-
-### Basic Pattern: Start → Work → Complete
+Here's the minimal code to track a run:
 
 ```python
 import requests
@@ -209,384 +34,943 @@ from datetime import datetime, timezone
 api_url = "http://localhost:8765"
 event_id = str(uuid.uuid4())
 
-# 1. Start run
+# 1. Start the run
 requests.post(f"{api_url}/api/v1/runs", json={
     "event_id": event_id,
-    "run_id": f"{datetime.now(timezone.utc).isoformat()}-my-agent-{uuid.uuid4().hex[:8]}",
+    "run_id": "my-first-run-001",
     "agent_name": "my-agent",
     "job_type": "data-processing",
-    "status": "running",
-    "start_time": datetime.now(timezone.utc).isoformat(),
-    "git_repo": "https://github.com/owner/repo",
-    "git_branch": "main"
-})
-
-# 2. Do work
-try:
-    result = do_work()
-
-    # 3. Mark success
-    requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
-        "status": "success",
-        "end_time": datetime.now(timezone.utc).isoformat(),
-        "duration_ms": 5000,
-        "items_succeeded": result.count,
-        "output_summary": "Processed successfully"
-    })
-
-except Exception as e:
-    # 3. Mark failure
-    requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
-        "status": "failure",
-        "end_time": datetime.now(timezone.utc).isoformat(),
-        "error_summary": str(e),
-        "error_details": traceback.format_exc()
-    })
-```
-
-### Pattern with Commit Association
-
-```python
-# 1. Start run
-event_id = str(uuid.uuid4())
-requests.post(f"{api_url}/api/v1/runs", json={
-    "event_id": event_id,
-    "run_id": f"run-{event_id[:8]}",
-    "agent_name": "code-generator",
-    "job_type": "feature-implementation",
-    "status": "running",
     "start_time": datetime.now(timezone.utc).isoformat()
 })
 
-# 2. Do work and create commit
-result = generate_code()
-commit_sha = create_git_commit()
+# 2. Do your work
+result = do_work()
 
-# 3. Associate commit
-requests.post(f"{api_url}/api/v1/runs/{event_id}/associate-commit", json={
-    "commit_hash": commit_sha,
-    "commit_source": "llm",
-    "commit_author": "Claude Code <noreply@anthropic.com>",
-    "commit_timestamp": datetime.now(timezone.utc).isoformat()
-})
-
-# 4. Mark complete
+# 3. Mark complete
 requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
     "status": "success",
     "end_time": datetime.now(timezone.utc).isoformat()
 })
 ```
 
-### Pattern with Batch Upload
+### Prerequisites
+
+- **Service running:** Container `local-telemetry-api` on port 8765
+- **Authentication:** Disabled by default (no auth headers needed)
+- **Rate limiting:** Disabled by default
+- **Content-Type:** Always use `application/json`
+
+### Interactive Documentation
+
+- **Swagger UI:** http://localhost:8765/docs
+- **ReDoc:** http://localhost:8765/redoc
+- **OpenAPI Spec:** http://localhost:8765/openapi.json
+
+---
+
+## Understanding the Event Lifecycle
+
+Every telemetry event follows a **three-phase lifecycle**: **Start → Work → Complete**. Understanding this lifecycle is critical to using Local Telemetry effectively.
+
+### Phase 1: Start (`POST /api/v1/runs`)
+
+**When:** At the beginning of your job, before doing any work.
+**Purpose:** Create the run record with initial metadata.
+**Status:** Set to `"running"` (default) or omit the field entirely.
 
 ```python
-# Collect multiple events (e.g., from buffer/queue)
-events = [
-    {
-        "event_id": str(uuid.uuid4()),
-        "run_id": f"run-{i}",
-        "agent_name": "bulk-processor",
-        "job_type": "batch-job",
-        "status": "success",
-        "start_time": datetime.now(timezone.utc).isoformat()
-    }
-    for i in range(50)
-]
+event_id = str(uuid.uuid4())  # Generate ONCE per run
 
-# Upload in single request
-response = requests.post(f"{api_url}/api/v1/runs/batch", json=events)
-result = response.json()
-print(f"Inserted: {result['inserted']}, Duplicates: {result['duplicates']}")
+requests.post(f"{api_url}/api/v1/runs", json={
+    "event_id": event_id,
+    "run_id": f"run-{datetime.now(timezone.utc).isoformat()}",
+    "agent_name": "data-processor",
+    "job_type": "etl-pipeline",
+    "start_time": datetime.now(timezone.utc).isoformat(),
+    "status": "running",  # Optional, defaults to "running"
+
+    # Optional context
+    "environment": "production",
+    "git_repo": "https://github.com/myorg/myrepo",
+    "git_branch": "main"
+})
 ```
 
-## Implementation Best Practices
+**Key Requirements:**
+- **`event_id`**: Unique identifier (UUID recommended) - used for idempotency
+- **`run_id`**: Application-level identifier for your run
+- **`agent_name`**: Name of the agent/service executing the work
+- **`job_type`**: Type of job being performed
+- **`start_time`**: When the run started (ISO8601 with timezone)
 
-### 1. Always Use event_id for Idempotency
+### Phase 2: Work (Your Application Logic)
+
+**When:** Between start and completion.
+**Purpose:** Execute your actual work.
+**Telemetry:** No telemetry calls needed during work (unless updating progress).
+
 ```python
-# ✅ Good: Generate once, reuse for retries
+try:
+    # Do your work
+    items = fetch_data()
+    results = process_items(items)
+
+except Exception as e:
+    # Capture errors for Phase 3
+    error_summary = str(e)
+    error_details = traceback.format_exc()
+```
+
+**Optional Progress Updates:** Use `PATCH /api/v1/runs/{event_id}` to update progress during long-running jobs:
+
+```python
+# Update progress mid-run
+requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+    "items_succeeded": 50,
+    "items_failed": 2
+})
+```
+
+### Phase 3: Complete (`PATCH /api/v1/runs/{event_id}`)
+
+**When:** After work completes (success or failure).
+**Purpose:** Record final status, duration, counts, and errors.
+**Status:** Update to final status: `success`, `failure`, `partial`, `timeout`, or `cancelled`.
+
+**Success:**
+```python
+requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+    "status": "success",
+    "end_time": datetime.now(timezone.utc).isoformat(),
+    "duration_ms": 5000,
+    "items_succeeded": 100,
+    "output_summary": "Processed 100 items successfully"
+})
+```
+
+**Failure:**
+```python
+requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+    "status": "failure",
+    "end_time": datetime.now(timezone.utc).isoformat(),
+    "error_summary": "Database connection failed",
+    "error_details": traceback.format_exc()
+})
+```
+
+**Partial Success:**
+```python
+requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+    "status": "partial",
+    "end_time": datetime.now(timezone.utc).isoformat(),
+    "items_succeeded": 85,
+    "items_failed": 15,
+    "error_summary": "15 items failed validation"
+})
+```
+
+### Lifecycle Summary
+
+| Phase | Endpoint | HTTP Method | Required Fields | Purpose |
+|-------|----------|-------------|-----------------|---------|
+| **Start** | `/api/v1/runs` | POST | `event_id`, `run_id`, `agent_name`, `job_type`, `start_time` | Initialize run |
+| **Work** | *(your code)* | — | — | Execute task |
+| **Complete** | `/api/v1/runs/{event_id}` | PATCH | `status`, `end_time` | Finalize run |
+
+---
+
+## How to Fill Fields
+
+### Required Fields (Phase 1: Start)
+
+#### `event_id`
+- **Type:** String (UUID recommended)
+- **Purpose:** Unique identifier for idempotency (prevents duplicate entries)
+- **How to fill:** Generate once per run using `uuid.uuid4()`
+- **Example:** `"550e8400-e29b-41d4-a716-446655440000"`
+- **⚠️ Critical:** Never reuse `event_id` across different runs
+
+```python
+event_id = str(uuid.uuid4())  # Generate ONCE
+```
+
+#### `run_id`
+- **Type:** String
+- **Purpose:** Application-level identifier for your run (human-readable)
+- **How to fill:** Use a format that includes timestamp and context
+- **Example:** `"2026-01-12T10:30:00Z-my-agent-abc123"`
+- **Pattern:** `{timestamp}-{agent_name}-{unique_suffix}`
+
+```python
+run_id = f"{datetime.now(timezone.utc).isoformat()}-{agent_name}-{uuid.uuid4().hex[:8]}"
+```
+
+#### `agent_name`
+- **Type:** String
+- **Purpose:** Name of the agent/service executing the work
+- **How to fill:** Use dot notation for namespacing
+- **Examples:**
+  - `"seo_intelligence.insight_engine"`
+  - `"data_pipeline.etl_worker"`
+  - `"claude_agent.code_generator"`
+
+```python
+agent_name = "my_product.my_agent"
+```
+
+#### `job_type`
+- **Type:** String
+- **Purpose:** Category of work being performed
+- **How to fill:** Use descriptive, consistent values
+- **Examples:**
+  - `"insight_generation"`
+  - `"data_processing"`
+  - `"model_training"`
+  - `"feature_implementation"`
+
+```python
+job_type = "data_processing"
+```
+
+#### `start_time`
+- **Type:** String (ISO8601 with timezone)
+- **Purpose:** When the run started
+- **How to fill:** Always include timezone (use UTC)
+- **✅ Correct:** `"2026-01-12T10:30:00Z"` or `"2026-01-12T10:30:00+00:00"`
+- **❌ Wrong:** `"2026-01-12 10:30:00"` (no timezone → validation error)
+
+```python
+start_time = datetime.now(timezone.utc).isoformat()
+```
+
+### Status Field
+
+#### Valid Statuses (Canonical Values)
+
+| Status | When to Use | Typical Use Case |
+|--------|-------------|------------------|
+| `running` | Job in progress (default) | Initial state |
+| `success` | Job completed successfully | All work completed without errors |
+| `failure` | Job failed completely | Unhandled exception, critical error |
+| `partial` | Job completed with some failures | Some items succeeded, some failed |
+| `timeout` | Job exceeded time limit | External timeout, deadline exceeded |
+| `cancelled` | Job was cancelled | User cancellation, shutdown signal |
+
+#### Status Aliases (POST only)
+
+These aliases are **accepted on POST** and automatically normalized:
+- `failed` → `failure`
+- `completed` → `success`
+- `succeeded` → `success`
+
+**⚠️ Important:** PATCH endpoint does **NOT** accept aliases. Use only canonical values on PATCH.
+
+```python
+# ✅ OK on POST: alias normalized
+requests.post(..., json={"status": "failed"})  # Becomes "failure"
+
+# ✅ OK on PATCH: canonical value
+requests.patch(..., json={"status": "failure"})
+
+# ❌ ERROR on PATCH: alias rejected (422)
+requests.patch(..., json={"status": "failed"})
+```
+
+### Item Counters
+
+Track the number of items processed during your run:
+
+| Field | Purpose | When to Set | Must Be |
+|-------|---------|-------------|---------|
+| `items_discovered` | Total items found/available | Phase 1 (POST) | ≥ 0 |
+| `items_succeeded` | Items processed successfully | Phase 3 (PATCH) | ≥ 0 |
+| `items_failed` | Items that failed | Phase 3 (PATCH) | ≥ 0 |
+| `items_skipped` | Items skipped/ignored | Phase 3 (PATCH) | ≥ 0 |
+
+**Example:**
+```python
+# Phase 1: Start
+requests.post(..., json={
+    "items_discovered": 100  # Found 100 items to process
+})
+
+# Phase 3: Complete
+requests.patch(..., json={
+    "items_succeeded": 85,   # 85 processed successfully
+    "items_failed": 10,      # 10 failed
+    "items_skipped": 5       # 5 skipped
+})
+```
+
+### Duration Tracking
+
+Track how long your run took:
+
+```python
+import time
+
+start = time.time()
+
+# Do work
+do_work()
+
+duration_ms = int((time.time() - start) * 1000)
+
+requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+    "duration_ms": duration_ms  # In milliseconds
+})
+```
+
+### Error Fields
+
+Capture errors when jobs fail:
+
+| Field | Purpose | Max Length |
+|-------|---------|------------|
+| `error_summary` | Short error message | Use for UI display |
+| `error_details` | Full traceback/stack trace | Use for debugging |
+
+**Example:**
+```python
+import traceback
+
+try:
+    do_work()
+except Exception as e:
+    requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+        "status": "failure",
+        "error_summary": str(e),             # "Database connection failed"
+        "error_details": traceback.format_exc()  # Full stack trace
+    })
+```
+
+### Contextual Fields
+
+Add context about what's being processed:
+
+| Field | Purpose | Example |
+|-------|---------|---------|
+| `product` | Product identifier | `"seo-intelligence"` |
+| `product_family` | Product grouping | `"content"`, `"analytics"` |
+| `platform` | Platform/channel | `"web"`, `"mobile"`, `"api"` |
+| `website` | Root domain | `"example.com"` |
+| `subdomain` | Site subdomain | `"blog"`, `"docs"` |
+| `website_section` | Section of site | `"blog"`, `"products"` |
+| `item_name` | Specific item | `"how-to-optimize-seo"` |
+
+**Example:**
+```python
+requests.post(f"{api_url}/api/v1/runs", json={
+    "event_id": event_id,
+    "run_id": "run-001",
+    "agent_name": "content_analyzer",
+    "job_type": "seo_analysis",
+    "start_time": datetime.now(timezone.utc).isoformat(),
+
+    # Context
+    "product": "seo-intelligence",
+    "platform": "web",
+    "website": "example.com",
+    "website_section": "blog",
+    "item_name": "how-to-optimize-seo"
+})
+```
+
+### Git Tracking
+
+#### Option 1: Include Git Metadata on Start
+
+If you know the commit hash at the start of the run:
+
+```python
+requests.post(f"{api_url}/api/v1/runs", json={
+    "event_id": event_id,
+    "run_id": "run-001",
+    "agent_name": "my-agent",
+    "job_type": "deployment",
+    "start_time": datetime.now(timezone.utc).isoformat(),
+
+    # Git metadata (persisted)
+    "git_repo": "https://github.com/myorg/myrepo",
+    "git_branch": "main",
+    "git_commit_hash": "abc1234567890",
+    "git_run_tag": "v1.2.3"
+})
+```
+
+**⚠️ Important:** These git fields are **accepted but NOT persisted** on POST:
+- `git_commit_source`
+- `git_commit_author`
+- `git_commit_timestamp`
+
+To set these fields, use Option 2 below.
+
+#### Option 2: Associate Commit After Creation
+
+If the commit is created during the run (e.g., LLM code generation):
+
+```python
+# Phase 1: Start run
 event_id = str(uuid.uuid4())
+requests.post(f"{api_url}/api/v1/runs", json={
+    "event_id": event_id,
+    "run_id": "run-001",
+    "agent_name": "code-generator",
+    "job_type": "feature-implementation",
+    "start_time": datetime.now(timezone.utc).isoformat()
+})
+
+# Phase 2: Work and create commit
+result = generate_code()
+commit_sha = create_git_commit()
+
+# Phase 2b: Associate commit
+requests.post(f"{api_url}/api/v1/runs/{event_id}/associate-commit", json={
+    "commit_hash": commit_sha,
+    "commit_source": "llm",  # "manual", "llm", or "ci"
+    "commit_author": "Claude Code <noreply@anthropic.com>",
+    "commit_timestamp": datetime.now(timezone.utc).isoformat()
+})
+
+# Phase 3: Complete
+requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+    "status": "success",
+    "end_time": datetime.now(timezone.utc).isoformat()
+})
+```
+
+**`commit_source` Values:**
+- `manual` — Human-created commit
+- `llm` — LLM-generated commit (Claude Code, Cursor, Copilot, etc.)
+- `ci` — CI/CD pipeline commit
+
+### Custom Metadata (JSON Fields)
+
+Use `metrics_json` and `context_json` for custom structured data:
+
+```python
+requests.post(f"{api_url}/api/v1/runs", json={
+    "event_id": event_id,
+    "run_id": "run-001",
+    "agent_name": "llm-agent",
+    "job_type": "code-generation",
+    "start_time": datetime.now(timezone.utc).isoformat(),
+
+    # Custom metrics
+    "metrics_json": {
+        "input_tokens": 1500,
+        "output_tokens": 3000,
+        "api_cost_usd": 0.05
+    },
+
+    # Custom context
+    "context_json": {
+        "model": "claude-sonnet-4.5",
+        "temperature": 0.7,
+        "features_enabled": ["code_review", "testing"]
+    }
+})
+```
+
+**Storage:** These fields are stored as JSON strings in the database and parsed back to objects when retrieved.
+
+---
+
+## Best Practices
+
+### 1. Always Generate Unique `event_id` Values
+
+**✅ Correct:**
+```python
+event_id = str(uuid.uuid4())  # Generate once per run
+
+# Use same event_id for all operations on this run
+requests.post(f"{api_url}/api/v1/runs", json={"event_id": event_id, ...})
+requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={...})
+```
+
+**❌ Wrong:**
+```python
+# Don't generate new event_id for updates
+requests.patch(f"{api_url}/api/v1/runs/{str(uuid.uuid4())}", ...)
+```
+
+### 2. Use Idempotency for Safe Retries
+
+The `event_id` field enables idempotent POST requests. If you retry with the same `event_id`, you'll get HTTP 201 with `"status": "duplicate"` (not an error).
+
+```python
+event_id = str(uuid.uuid4())
+
 for attempt in range(3):
     try:
         response = requests.post(f"{api_url}/api/v1/runs", json={
-            "event_id": event_id,  # Same ID for retries
-            # ... other fields
+            "event_id": event_id,  # Same ID for all retries
+            "run_id": "run-001",
+            "agent_name": "my-agent",
+            "job_type": "processing",
+            "start_time": datetime.now(timezone.utc).isoformat()
         })
+
+        result = response.json()
+        if result["status"] == "created":
+            print("New run created")
+        elif result["status"] == "duplicate":
+            print("Run already exists (safe retry)")
         break
-    except requests.exceptions.RequestException:
+
+    except requests.exceptions.RequestException as e:
+        if attempt == 2:
+            print(f"Failed after 3 attempts: {e}")
         time.sleep(2 ** attempt)
 ```
 
-### 2. Use PATCH for Updates (Not POST)
+### 3. Always Include Timezone in Timestamps
+
+**✅ Correct:**
 ```python
-# ✅ Good: Update existing run
+# Explicit UTC timezone
+start_time = datetime.now(timezone.utc).isoformat()
+# Result: "2026-01-12T10:30:00.123456+00:00"
+```
+
+**❌ Wrong:**
+```python
+# No timezone → validation error
+start_time = datetime.now().isoformat()
+# Result: "2026-01-12T10:30:00.123456" (REJECTED)
+```
+
+### 4. Use PATCH for Updates (Not POST)
+
+**✅ Correct:**
+```python
+# Start run
+requests.post(f"{api_url}/api/v1/runs", json={...})
+
+# Update run
 requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
     "status": "success",
     "end_time": "..."
 })
-
-# ❌ Bad: Creating new run instead of updating
-# requests.post(...)
 ```
 
-### 3. Track Duration in Milliseconds
+**❌ Wrong:**
+```python
+# Don't create a new run instead of updating
+requests.post(f"{api_url}/api/v1/runs", json={
+    "event_id": event_id,  # Duplicate event_id
+    "status": "success"
+})
+```
+
+### 5. Track Duration in Milliseconds
+
 ```python
 import time
 
-start_time = time.time()
+start = time.time()
 do_work()
-duration_ms = int((time.time() - start_time) * 1000)
+duration_ms = int((time.time() - start) * 1000)
 
 requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
     "duration_ms": duration_ms
 })
 ```
 
-### 4. Always Include Timezone in Timestamps
+### 6. Use Canonical Statuses on PATCH
+
+**✅ Correct:**
 ```python
-from datetime import datetime, timezone
-
-# ✅ Good: Explicit UTC
-start_time = datetime.now(timezone.utc).isoformat()
-
-# ❌ Bad: No timezone (causes validation errors)
-# start_time = datetime.now().isoformat()
-```
-
-### 5. Handle API Failures Gracefully
-```python
-try:
-    requests.post(f"{api_url}/api/v1/runs", json=run_data)
-except requests.exceptions.RequestException as e:
-    # Don't crash your agent if telemetry fails
-    print(f"Telemetry failed (non-fatal): {e}")
-```
-
-### 6. Check Response Body for Created vs Duplicate
-```python
-response = requests.post(f"{api_url}/api/v1/runs", json=run_data)
-# Both created and duplicate return HTTP 201
-result = response.json()
-if result["status"] == "created":
-    print(f"New run created: {result['event_id']}")
-elif result["status"] == "duplicate":
-    print(f"Run already exists (safe retry): {result['event_id']}")
-```
-
-### 7. Use Canonical Statuses on PATCH
-```python
-# ✅ Good: Use canonical status values on PATCH
 requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
-    "status": "failure"  # canonical
-})
-
-# ❌ Bad: Aliases like "failed" are NOT accepted on PATCH (returns 422)
-# requests.patch(..., json={"status": "failed"})
-
-# ✅ OK on POST: Aliases ARE accepted on POST
-requests.post(f"{api_url}/api/v1/runs", json={
-    "status": "failed",  # normalized to "failure" automatically
-    ...
+    "status": "failure"  # Canonical value
 })
 ```
 
-## Schemas (Examples)
-
-### TelemetryRun (request body for POST /api/v1/runs and /api/v1/runs/batch)
-Required fields: `event_id`, `run_id`, `agent_name`, `job_type`, `start_time`
-
-```json
-{
-  "event_id": "550e8400-e29b-41d4-a716-446655440000",
-  "run_id": "2026-01-05T18:40:27Z-seo-intelligence-abc123",
-  "created_at": "2026-01-05T18:40:27.000000+00:00",
-  "start_time": "2026-01-05T18:40:27.000000+00:00",
-  "end_time": null,
-  "agent_name": "seo_intelligence.insight_engine",
-  "job_type": "insight_generation",
-  "status": "running",
-  "product": "seo-intelligence",
-  "product_family": "content",
-  "platform": "web",
-  "subdomain": "docs",
-  "website": "example.com",
-  "website_section": "blog",
-  "item_name": "how-to-optimize",
-  "items_discovered": 10,
-  "items_succeeded": 8,
-  "items_failed": 2,
-  "items_skipped": 0,
-  "duration_ms": 0,
-  "input_summary": "Indexed blog posts",
-  "output_summary": "Generated insights",
-  "source_ref": "s3://bucket/input.csv",
-  "target_ref": "s3://bucket/output.json",
-  "error_summary": null,
-  "error_details": null,
-  "git_repo": "https://github.com/example/repo",
-  "git_branch": "main",
-  "git_commit_hash": "abc1234567890",
-  "git_run_tag": "nightly",
-  "host": "worker-01",
-  "environment": "prod",
-  "trigger_type": "scheduler",
-  "metrics_json": {"token_count": 1234},
-  "context_json": {"pipeline": "seo-ingest"},
-  "api_posted": false,
-  "api_posted_at": null,
-  "api_retry_count": 0,
-  "insight_id": "insight-001",
-  "parent_run_id": "run-parent-123"
-}
+**❌ Wrong:**
+```python
+requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+    "status": "failed"  # Alias NOT accepted on PATCH (422 error)
+})
 ```
 
-Notes:
-- `duration_ms` accepts `null` and is converted to `0`.
-- `git_commit_source` must be one of `manual`, `llm`, `ci` (422 if invalid).
-- `git_commit_source`, `git_commit_author`, `git_commit_timestamp` are accepted in the request body but are **NOT written to the database** on POST. To set these fields, use PATCH or the associate-commit endpoint.
+### 7. Don't Crash Your Agent If Telemetry Fails
 
-### Minimum Viable POST Request
-The smallest valid request body for POST /api/v1/runs:
-```json
-{
-  "event_id": "550e8400-e29b-41d4-a716-446655440000",
-  "run_id": "my-run-001",
-  "agent_name": "my-agent",
-  "job_type": "my-job",
-  "start_time": "2026-01-05T18:40:27Z"
-}
-```
-All other fields use their defaults: `status` defaults to `"running"`, numeric counters default to `0`, everything else defaults to `null`.
+Telemetry is observability, not critical path. Handle failures gracefully:
 
-### RunUpdate (request body for PATCH /api/v1/runs/{event_id})
-All fields optional; at least one non-null field required.
+```python
+def safe_telemetry_post(api_url, data):
+    try:
+        response = requests.post(f"{api_url}/api/v1/runs", json=data, timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        # Log but don't crash
+        print(f"Telemetry failed (non-fatal): {e}")
+        return None
 
-```json
-{
-  "status": "success",
-  "end_time": "2026-01-05T18:45:10.000000+00:00",
-  "duration_ms": 275000,
-  "error_summary": null,
-  "error_details": null,
-  "output_summary": "Completed successfully",
-  "items_succeeded": 10,
-  "items_failed": 0,
-  "items_skipped": 0,
-  "metrics_json": {"token_count": 2500},
-  "context_json": {"stage": "final"},
-  "git_commit_source": "llm",
-  "git_commit_author": "Claude <noreply@anthropic.com>",
-  "git_commit_timestamp": "2026-01-05T18:45:10Z"
-}
+# Usage
+safe_telemetry_post(api_url, run_data)
+do_critical_work()  # Continues even if telemetry fails
 ```
 
-Notes:
-- `status` must be one of `running`, `success`, `failure`, `partial`, `timeout`, `cancelled`. **Aliases are NOT accepted on PATCH** (unlike POST).
-- `duration_ms`, `items_succeeded`, `items_failed`, `items_skipped` must be non-negative.
-- Fields explicitly set to `null` are ignored (cannot be cleared to null).
-- PATCH does **not** automatically update the `updated_at` database column.
+### 8. Use Batch Upload for High Volume
 
-### CommitAssociation (request body for POST /api/v1/runs/{event_id}/associate-commit)
-```json
-{
-  "commit_hash": "abc1234567890abcdef",
-  "commit_source": "llm",
-  "commit_author": "Claude Code <noreply@anthropic.com>",
-  "commit_timestamp": "2026-01-02T10:00:00Z"
-}
+If you're creating many events at once, use the batch endpoint:
+
+```python
+events = [
+    {
+        "event_id": str(uuid.uuid4()),
+        "run_id": f"run-{i}",
+        "agent_name": "bulk-processor",
+        "job_type": "batch-job",
+        "start_time": datetime.now(timezone.utc).isoformat(),
+        "status": "success"
+    }
+    for i in range(100)
+]
+
+response = requests.post(f"{api_url}/api/v1/runs/batch", json=events)
+result = response.json()
+print(f"Inserted: {result['inserted']}, Duplicates: {result['duplicates']}")
 ```
 
-Notes:
-- `commit_hash` length 7-40 characters.
-- `commit_source` must be one of `manual`, `llm`, `ci`.
-- This endpoint **does** update the `updated_at` database column.
+---
 
-### RunRecord (response item for GET /api/v1/runs and GET /api/v1/runs/{event_id})
-```json
-{
-  "id": 123,
-  "event_id": "550e8400-e29b-41d4-a716-446655440000",
-  "run_id": "2026-01-05T18:40:27Z-seo-intelligence-abc123",
-  "schema_version": 7,
-  "created_at": "2026-01-05T18:40:27.000000+00:00",
-  "updated_at": "2026-01-05T18:45:10.000000+00:00",
-  "start_time": "2026-01-05T18:40:27.000000+00:00",
-  "end_time": "2026-01-05T18:45:10.000000+00:00",
-  "agent_name": "seo_intelligence.insight_engine",
-  "agent_owner": null,
-  "job_type": "insight_generation",
-  "status": "success",
-  "product": "seo-intelligence",
-  "product_family": "content",
-  "platform": "web",
-  "subdomain": "docs",
-  "website": "example.com",
-  "website_section": "blog",
-  "item_name": "how-to-optimize",
-  "items_discovered": 10,
-  "items_succeeded": 10,
-  "items_failed": 0,
-  "items_skipped": 0,
-  "duration_ms": 275000,
-  "input_summary": "Indexed blog posts",
-  "output_summary": "Generated insights",
-  "source_ref": "s3://bucket/input.csv",
-  "target_ref": "s3://bucket/output.json",
-  "error_summary": null,
-  "error_details": null,
-  "git_repo": "https://github.com/example/repo",
-  "git_branch": "main",
-  "git_commit_hash": "abc1234567890",
-  "git_run_tag": "nightly",
-  "git_commit_source": "llm",
-  "git_commit_author": "Claude <noreply@anthropic.com>",
-  "git_commit_timestamp": "2026-01-05T18:45:10Z",
-  "host": "worker-01",
-  "environment": "prod",
-  "trigger_type": "scheduler",
-  "metrics_json": {"token_count": 2500},
-  "context_json": {"stage": "final"},
-  "api_posted": false,
-  "api_posted_at": null,
-  "api_retry_count": 0,
-  "insight_id": "insight-001",
-  "parent_run_id": "run-parent-123",
-  "commit_url": "https://github.com/example/repo/commit/abc1234567890",
-  "repo_url": "https://github.com/example/repo"
-}
+## Common Integration Patterns
+
+### Pattern 1: Context Manager for Auto-Tracking
+
+```python
+from contextlib import contextmanager
+import requests
+import uuid
+from datetime import datetime, timezone
+import time
+
+@contextmanager
+def telemetry_run(agent_name, job_type, api_url="http://localhost:8765", **kwargs):
+    """
+    Context manager that automatically tracks run lifecycle.
+
+    Usage:
+        with telemetry_run("my-agent", "processing") as event_id:
+            do_work()
+    """
+    event_id = str(uuid.uuid4())
+    start_time = datetime.now(timezone.utc)
+    start_ts = time.time()
+
+    # Phase 1: Start run
+    try:
+        requests.post(f"{api_url}/api/v1/runs", json={
+            "event_id": event_id,
+            "run_id": f"{start_time.isoformat()}-{agent_name}-{uuid.uuid4().hex[:8]}",
+            "agent_name": agent_name,
+            "job_type": job_type,
+            "status": "running",
+            "start_time": start_time.isoformat(),
+            **kwargs  # Additional fields
+        }, timeout=5)
+    except Exception as e:
+        print(f"Telemetry start failed: {e}")
+
+    # Phase 2: Yield to user code
+    try:
+        yield event_id
+
+        # Phase 3: Mark success
+        duration_ms = int((time.time() - start_ts) * 1000)
+        try:
+            requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+                "status": "success",
+                "end_time": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms
+            }, timeout=5)
+        except Exception as e:
+            print(f"Telemetry completion failed: {e}")
+
+    except Exception as e:
+        # Phase 3: Mark failure
+        duration_ms = int((time.time() - start_ts) * 1000)
+        try:
+            requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+                "status": "failure",
+                "end_time": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms,
+                "error_summary": str(e),
+                "error_details": traceback.format_exc()
+            }, timeout=5)
+        except Exception as te:
+            print(f"Telemetry error reporting failed: {te}")
+        raise  # Re-raise original exception
+
+# Usage
+with telemetry_run("my-agent", "processing", environment="prod") as event_id:
+    result = do_work()
+
+    # Optional: update progress mid-run
+    requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+        "items_succeeded": result.count
+    })
 ```
 
-Notes:
-- `metrics_json` and `context_json` are parsed from stored JSON strings.
-- If JSON parsing fails, the original string is preserved and an additional field is added:
-  - `metrics_json_parse_error` or `context_json_parse_error`
-- `commit_url` and `repo_url` are derived fields (not stored in database).
-- `id`, `schema_version`, `updated_at`, `agent_owner` are server-managed fields not set by the client.
-- `api_posted` is returned as a boolean (`true`/`false`), converted from SQLite integer storage.
-- `GET /api/v1/runs` returns an **array** of RunRecord objects.
-- `GET /api/v1/runs/{event_id}` returns a **single** RunRecord object (not an array).
+### Pattern 2: Decorator for Function Tracking
 
-### BatchResponse (response body for POST /api/v1/runs/batch)
-```json
-{
-  "inserted": 3,
-  "duplicates": 1,
-  "errors": [],
-  "total": 4
-}
+```python
+import functools
+import requests
+import uuid
+from datetime import datetime, timezone
+import time
+import traceback
+
+def track_telemetry(agent_name, job_type, api_url="http://localhost:8765"):
+    """
+    Decorator to automatically track function execution.
+
+    Usage:
+        @track_telemetry("my-agent", "processing")
+        def process_data():
+            return do_work()
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            event_id = str(uuid.uuid4())
+            start_time = datetime.now(timezone.utc)
+            start_ts = time.time()
+
+            # Start run
+            try:
+                requests.post(f"{api_url}/api/v1/runs", json={
+                    "event_id": event_id,
+                    "run_id": f"{start_time.isoformat()}-{agent_name}-{uuid.uuid4().hex[:8]}",
+                    "agent_name": agent_name,
+                    "job_type": job_type,
+                    "status": "running",
+                    "start_time": start_time.isoformat()
+                }, timeout=5)
+            except Exception as e:
+                print(f"Telemetry failed: {e}")
+
+            # Execute function
+            try:
+                result = func(*args, **kwargs)
+
+                # Mark success
+                duration_ms = int((time.time() - start_ts) * 1000)
+                try:
+                    requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+                        "status": "success",
+                        "end_time": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": duration_ms
+                    }, timeout=5)
+                except:
+                    pass
+
+                return result
+
+            except Exception as e:
+                # Mark failure
+                duration_ms = int((time.time() - start_ts) * 1000)
+                try:
+                    requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+                        "status": "failure",
+                        "end_time": datetime.now(timezone.utc).isoformat(),
+                        "duration_ms": duration_ms,
+                        "error_summary": str(e),
+                        "error_details": traceback.format_exc()
+                    }, timeout=5)
+                except:
+                    pass
+                raise
+
+        return wrapper
+    return decorator
+
+# Usage
+@track_telemetry("data-processor", "etl")
+def process_data():
+    return do_work()
 ```
 
-### POST /api/v1/runs — Response Bodies
+### Pattern 3: Buffered Telemetry Writer
 
-**New run created (HTTP 201):**
+For high-volume scenarios, buffer events and flush in batches:
+
+```python
+import queue
+import threading
+import requests
+import time
+
+class BufferedTelemetry:
+    """
+    Buffered telemetry client that batches events for efficiency.
+
+    Usage:
+        telemetry = BufferedTelemetry("http://localhost:8765")
+        telemetry.add({...run data...})
+        telemetry.flush()  # Optional manual flush
+    """
+    def __init__(self, api_url, flush_size=50, flush_interval=30):
+        self.api_url = api_url
+        self.buffer = queue.Queue()
+        self.flush_size = flush_size
+        self.flush_interval = flush_interval
+        self.running = True
+
+        # Start background flush worker
+        self.worker = threading.Thread(target=self._flush_worker, daemon=True)
+        self.worker.start()
+
+    def add(self, run_data):
+        """Add event to buffer. Flushes automatically when buffer is full."""
+        self.buffer.put(run_data)
+
+        if self.buffer.qsize() >= self.flush_size:
+            self._flush()
+
+    def flush(self):
+        """Manually flush all buffered events."""
+        self._flush()
+
+    def _flush(self):
+        """Internal flush implementation."""
+        events = []
+
+        # Drain buffer
+        while not self.buffer.empty() and len(events) < self.flush_size:
+            try:
+                events.append(self.buffer.get_nowait())
+            except queue.Empty:
+                break
+
+        if not events:
+            return
+
+        # Upload batch
+        try:
+            response = requests.post(
+                f"{self.api_url}/api/v1/runs/batch",
+                json=events,
+                timeout=10
+            )
+            response.raise_for_status()
+            print(f"Flushed {len(events)} events")
+        except Exception as e:
+            print(f"Batch upload failed: {e}")
+            # Re-queue failed events
+            for event in events:
+                self.buffer.put(event)
+
+    def _flush_worker(self):
+        """Background worker that flushes periodically."""
+        while self.running:
+            time.sleep(self.flush_interval)
+            self._flush()
+
+    def shutdown(self):
+        """Shutdown worker and flush remaining events."""
+        self.running = False
+        self.worker.join(timeout=5)
+        self._flush()
+
+# Usage
+telemetry = BufferedTelemetry("http://localhost:8765")
+
+for i in range(100):
+    telemetry.add({
+        "event_id": str(uuid.uuid4()),
+        "run_id": f"run-{i}",
+        "agent_name": "bulk-agent",
+        "job_type": "processing",
+        "start_time": datetime.now(timezone.utc).isoformat(),
+        "status": "success"
+    })
+
+telemetry.shutdown()  # Flush on exit
+```
+
+### Pattern 4: Progress Tracking for Long-Running Jobs
+
+```python
+import requests
+import uuid
+from datetime import datetime, timezone
+import time
+
+def process_with_progress(items, api_url="http://localhost:8765"):
+    event_id = str(uuid.uuid4())
+
+    # Phase 1: Start
+    requests.post(f"{api_url}/api/v1/runs", json={
+        "event_id": event_id,
+        "run_id": f"run-{event_id[:8]}",
+        "agent_name": "batch-processor",
+        "job_type": "data-processing",
+        "start_time": datetime.now(timezone.utc).isoformat(),
+        "items_discovered": len(items)
+    })
+
+    succeeded = 0
+    failed = 0
+
+    # Phase 2: Process with progress updates
+    for i, item in enumerate(items):
+        try:
+            process_item(item)
+            succeeded += 1
+        except Exception:
+            failed += 1
+
+        # Update progress every 10 items
+        if (i + 1) % 10 == 0:
+            requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+                "items_succeeded": succeeded,
+                "items_failed": failed
+            })
+
+    # Phase 3: Complete
+    requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+        "status": "success" if failed == 0 else "partial",
+        "end_time": datetime.now(timezone.utc).isoformat(),
+        "items_succeeded": succeeded,
+        "items_failed": failed
+    })
+```
+
+---
+
+## Endpoint Reference
+
+### Core Endpoints
+
+#### POST `/api/v1/runs` — Create Run
+
+**Purpose:** Start a new telemetry run (idempotent).
+**Auth:** Required if enabled
+**Rate Limit:** Enforced if enabled
+
+**Required Fields:**
+- `event_id` (string)
+- `run_id` (string)
+- `agent_name` (string)
+- `job_type` (string)
+- `start_time` (string, ISO8601 with timezone)
+
+**Response (HTTP 201):**
 ```json
 {
   "status": "created",
   "event_id": "550e8400-e29b-41d4-a716-446655440000",
-  "run_id": "2026-01-05T18:40:27Z-seo-intelligence-abc123"
+  "run_id": "run-001"
 }
 ```
 
-**Duplicate event_id (HTTP 201, idempotent):**
+**Response on Duplicate (HTTP 201):**
 ```json
 {
   "status": "duplicate",
@@ -594,11 +978,42 @@ Notes:
   "message": "Event already exists (idempotent)"
 }
 ```
-Note: Both created and duplicate return HTTP 201. Use the `status` field in the response body to distinguish them.
 
-### PATCH /api/v1/runs/{event_id} — Response Body
+**Example:**
+```bash
+curl -X POST http://localhost:8765/api/v1/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_id": "550e8400-e29b-41d4-a716-446655440000",
+    "run_id": "run-001",
+    "agent_name": "my-agent",
+    "job_type": "processing",
+    "start_time": "2026-01-12T10:30:00Z"
+  }'
+```
 
-**Update successful (HTTP 200):**
+---
+
+#### PATCH `/api/v1/runs/{event_id}` — Update Run
+
+**Purpose:** Update an existing run's status and metrics.
+**Auth:** Required if enabled
+**Rate Limit:** Enforced if enabled
+
+**Common Fields to Update:**
+- `status` (string) — Canonical values only: `running`, `success`, `failure`, `partial`, `timeout`, `cancelled`
+- `end_time` (string, ISO8601)
+- `duration_ms` (integer, ≥ 0)
+- `items_succeeded` (integer, ≥ 0)
+- `items_failed` (integer, ≥ 0)
+- `items_skipped` (integer, ≥ 0)
+- `error_summary` (string)
+- `error_details` (string)
+- `output_summary` (string)
+- `metrics_json` (object)
+- `context_json` (object)
+
+**Response (HTTP 200):**
 ```json
 {
   "event_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -607,19 +1022,152 @@ Note: Both created and duplicate return HTTP 201. Use the `status` field in the 
 }
 ```
 
-### POST /api/v1/runs/{event_id}/associate-commit — Response Body
+**Example:**
+```bash
+curl -X PATCH http://localhost:8765/api/v1/runs/550e8400-e29b-41d4-a716-446655440000 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "success",
+    "end_time": "2026-01-12T10:35:00Z",
+    "duration_ms": 300000,
+    "items_succeeded": 100
+  }'
+```
 
-**Association successful (HTTP 200):**
+---
+
+#### POST `/api/v1/runs/{event_id}/associate-commit` — Link Git Commit
+
+**Purpose:** Associate a git commit with a run (typically for LLM-generated code).
+**Auth:** Required if enabled
+**Rate Limit:** Enforced if enabled
+
+**Required Fields:**
+- `commit_hash` (string, 7-40 characters)
+- `commit_source` (string) — `manual`, `llm`, or `ci`
+
+**Optional Fields:**
+- `commit_author` (string)
+- `commit_timestamp` (string, ISO8601)
+
+**Response (HTTP 200):**
 ```json
 {
   "status": "success",
   "event_id": "550e8400-e29b-41d4-a716-446655440000",
-  "run_id": "2026-01-05T18:40:27Z-seo-intelligence-abc123",
-  "commit_hash": "abc1234567890abcdef"
+  "run_id": "run-001",
+  "commit_hash": "abc1234567890"
 }
 ```
 
-### HealthResponse (GET /health)
+**Example:**
+```bash
+curl -X POST http://localhost:8765/api/v1/runs/550e8400-e29b-41d4-a716-446655440000/associate-commit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "commit_hash": "abc1234567890",
+    "commit_source": "llm",
+    "commit_author": "Claude Code <noreply@anthropic.com>",
+    "commit_timestamp": "2026-01-12T10:35:00Z"
+  }'
+```
+
+---
+
+#### POST `/api/v1/runs/batch` — Create Multiple Runs
+
+**Purpose:** Create multiple runs in a single request.
+**Auth:** Required if enabled
+**Rate Limit:** Enforced if enabled
+
+**Request Body:** Array of run objects (no wrapper)
+
+**Response (HTTP 200):**
+```json
+{
+  "inserted": 98,
+  "duplicates": 2,
+  "errors": [],
+  "total": 100
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:8765/api/v1/runs/batch \
+  -H "Content-Type: application/json" \
+  -d '[
+    {
+      "event_id": "11111111-1111-1111-1111-111111111111",
+      "run_id": "run-1",
+      "agent_name": "agent-a",
+      "job_type": "job-a",
+      "start_time": "2026-01-12T10:30:00Z"
+    },
+    {
+      "event_id": "22222222-2222-2222-2222-222222222222",
+      "run_id": "run-2",
+      "agent_name": "agent-b",
+      "job_type": "job-b",
+      "start_time": "2026-01-12T10:31:00Z"
+    }
+  ]'
+```
+
+---
+
+### Query Endpoints
+
+#### GET `/api/v1/runs` — Query Runs
+
+**Purpose:** Retrieve runs with filters and pagination.
+**Auth:** Not required
+**Rate Limit:** Enforced if enabled
+
+**Query Parameters:**
+- `agent_name` (string) — Exact match
+- `job_type` (string) — Exact match
+- `status` (string) — Accepts canonical values and aliases
+- `created_before` (string, ISO8601) — Exclusive `<`
+- `created_after` (string, ISO8601) — Exclusive `>`
+- `start_time_from` (string, ISO8601) — Inclusive `>=`
+- `start_time_to` (string, ISO8601) — Inclusive `<=`
+- `limit` (integer, 1-1000, default 100)
+- `offset` (integer, ≥ 0, default 0)
+
+**Response:** Array of run objects, ordered by `created_at DESC`
+
+**Example:**
+```bash
+curl "http://localhost:8765/api/v1/runs?agent_name=my-agent&status=success&limit=50"
+```
+
+---
+
+#### GET `/api/v1/runs/{event_id}` — Get Single Run
+
+**Purpose:** Retrieve a specific run by `event_id`.
+**Auth:** Not required
+**Rate Limit:** Enforced if enabled
+
+**Response:** Single run object (not an array)
+
+**Example:**
+```bash
+curl http://localhost:8765/api/v1/runs/550e8400-e29b-41d4-a716-446655440000
+```
+
+---
+
+### Utility Endpoints
+
+#### GET `/health` — Health Check
+
+**Purpose:** Check if the service is running.
+**Auth:** Not required
+**Rate Limit:** Not enforced
+
+**Response (HTTP 200):**
 ```json
 {
   "status": "ok",
@@ -630,11 +1178,27 @@ Note: Both created and duplicate return HTTP 201. Use the `status` field in the 
 }
 ```
 
-### MetricsResponse (GET /metrics)
+**Example:**
+```bash
+curl http://localhost:8765/health
+```
+
+---
+
+#### GET `/metrics` — System Metrics
+
+**Purpose:** Get system-wide statistics.
+**Auth:** Not required
+**Rate Limit:** Not enforced
+
+**Response (HTTP 200):**
 ```json
 {
   "total_runs": 12345,
-  "agents": {"seo_intelligence.insight_engine": 8400},
+  "agents": {
+    "my-agent": 8400,
+    "other-agent": 3945
+  },
   "recent_24h": 120,
   "performance": {
     "db_path": "/data/telemetry.sqlite",
@@ -643,509 +1207,230 @@ Note: Both created and duplicate return HTTP 201. Use the `status` field in the 
 }
 ```
 
-### MetadataResponse (GET /api/v1/metadata)
-```json
-{
-  "agent_names": ["seo_intelligence.insight_engine", "seo_intelligence.scheduler"],
-  "job_types": ["insight_generation", "scheduling"],
-  "counts": {"agent_names": 2, "job_types": 2},
-  "cache_hit": false
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| agent_names | string[] | Distinct agent names in the database |
-| job_types | string[] | Distinct job types in the database |
-| counts | object | Count of unique agent_names and job_types |
-| cache_hit | boolean | `true` if result was served from cache, `false` if freshly queried |
-
-## Endpoints
-
-### GET /health
-Health check for the service.
-
-Auth: not required
-Rate limit: not enforced
-
-Status codes:
-- 200 OK: returns HealthResponse
-
-Example:
-```bash
-curl http://localhost:8765/health
-```
-
-### GET /metrics
-Returns system-level metrics (counts by agent, total runs, recent runs).
-
-Auth: not required
-Rate limit: not enforced
-
-Status codes:
-- 200 OK: returns MetricsResponse
-- 500 Internal Server Error: database errors
-
-Example:
+**Example:**
 ```bash
 curl http://localhost:8765/metrics
 ```
 
-### GET /api/v1/metadata
-Returns distinct agent names and job types seen in the database.
+---
 
-Auth: not required
-Rate limit: enforced if enabled
+#### GET `/api/v1/metadata` — Get Distinct Values
 
-**Caching**: Results are cached in-memory for 300 seconds (5 minutes) to improve performance on large datasets. The `cache_hit` field in the response indicates whether the result was served from cache. Cache is automatically invalidated when new runs are created via POST or PATCH endpoints.
+**Purpose:** Get all distinct agent names and job types.
+**Auth:** Not required
+**Rate Limit:** Enforced if enabled
 
-Status codes:
-- 200 OK: returns MetadataResponse
-- 429 Too Many Requests: rate limit exceeded
-- 500 Internal Server Error: database errors
-
-Example:
-```bash
-curl http://localhost:8765/api/v1/metadata
-```
-
-Response:
+**Response (HTTP 200):**
 ```json
 {
   "agent_names": ["agent1", "agent2"],
   "job_types": ["job1", "job2"],
-  "counts": {"agent_names": 2, "job_types": 2},
+  "counts": {
+    "agent_names": 2,
+    "job_types": 2
+  },
   "cache_hit": true
 }
 ```
 
-### POST /api/v1/runs
-Create a single telemetry run (idempotent by `event_id`).
+**Note:** Results are cached for 5 minutes.
 
-Auth: required if enabled
-Rate limit: enforced if enabled
-
-Request body: TelemetryRun
-
-Status codes:
-- 201 Created: new run created (response body `status: "created"`)
-- 201 Created: duplicate `event_id` (response body `status: "duplicate"`, idempotent)
-- 400 Bad Request: database integrity error (e.g., constraint failure)
-- 401 Unauthorized: auth required/invalid
-- 422 Unprocessable Entity: validation error
-- 429 Too Many Requests: rate limit exceeded
-- 500 Internal Server Error: unexpected database error
-
-**Important:** Both new and duplicate runs return HTTP 201. Check the response body's `status` field to distinguish `"created"` from `"duplicate"`.
-
-Example:
+**Example:**
 ```bash
-curl -X POST http://localhost:8765/api/v1/runs \
-  -H "Content-Type: application/json" \
-  -d '{"event_id":"550e8400-e29b-41d4-a716-446655440000","run_id":"2026-01-05T18:40:27Z-seo-intelligence-abc123","agent_name":"seo_intelligence.insight_engine","job_type":"insight_generation","start_time":"2026-01-05T18:40:27Z","status":"running"}'
+curl http://localhost:8765/api/v1/metadata
 ```
 
-Response (new):
-```json
-{"status": "created", "event_id": "550e8400-e29b-41d4-a716-446655440000", "run_id": "2026-01-05T18:40:27Z-seo-intelligence-abc123"}
+---
+
+## Troubleshooting
+
+### Error: 422 "field required"
+
+**Problem:** Missing required fields in POST request.
+
+**Solution:** Ensure these fields are present:
+- `event_id`
+- `run_id`
+- `agent_name`
+- `job_type`
+- `start_time`
+
+**Example:**
+```python
+# ✅ Correct
+requests.post(..., json={
+    "event_id": "...",
+    "run_id": "...",
+    "agent_name": "...",
+    "job_type": "...",
+    "start_time": "2026-01-12T10:30:00Z"
+})
 ```
 
-Response (duplicate):
-```json
-{"status": "duplicate", "event_id": "550e8400-e29b-41d4-a716-446655440000", "message": "Event already exists (idempotent)"}
+---
+
+### Error: 422 "Status must be one of..."
+
+**Problem:** Invalid status value on PATCH endpoint.
+
+**Solution:** Use only canonical values on PATCH:
+- `running`
+- `success`
+- `failure`
+- `partial`
+- `timeout`
+- `cancelled`
+
+**❌ Wrong:**
+```python
+requests.patch(..., json={"status": "failed"})  # Alias not allowed
 ```
 
-### POST /api/v1/runs/batch
-Create multiple telemetry runs in one request.
-
-Auth: required if enabled
-Rate limit: enforced if enabled
-
-Request body: JSON array of TelemetryRun (no wrapper object)
-
-Status codes:
-- 200 OK: returns BatchResponse
-- 401 Unauthorized: auth required/invalid
-- 422 Unprocessable Entity: validation error
-- 429 Too Many Requests: rate limit exceeded
-- 500 Internal Server Error: unexpected database error
-
-Example:
-```bash
-curl -X POST http://localhost:8765/api/v1/runs/batch \
-  -H "Content-Type: application/json" \
-  -d '[{"event_id":"11111111-1111-1111-1111-111111111111","run_id":"run-1","agent_name":"agent-a","job_type":"job-a","start_time":"2026-01-05T18:40:27Z"},{"event_id":"22222222-2222-2222-2222-222222222222","run_id":"run-2","agent_name":"agent-b","job_type":"job-b","start_time":"2026-01-05T18:41:00Z"}]'
+**✅ Correct:**
+```python
+requests.patch(..., json={"status": "failure"})  # Canonical value
 ```
 
-Response:
-```json
-{"inserted": 2, "duplicates": 0, "errors": [], "total": 2}
+**Note:** Aliases are accepted on POST but **NOT on PATCH**.
+
+---
+
+### Error: 422 "ensure this value has at least 1 characters"
+
+**Problem:** Timestamp missing timezone.
+
+**Solution:** Always include timezone in ISO8601 timestamps:
+
+**❌ Wrong:**
+```python
+"start_time": "2026-01-12 10:30:00"  # No timezone
 ```
 
-### GET /api/v1/runs
-Query telemetry runs with filters and pagination.
-
-Auth: not required
-Rate limit: enforced if enabled
-
-Query parameters:
-- `agent_name` (string, optional): exact match
-- `status` (string, optional): one of `running`, `success`, `failure`, `partial`, `timeout`, `cancelled` (aliases also accepted and normalized)
-- `job_type` (string, optional): exact match
-- `created_before` (string, optional): ISO8601 timestamp (exclusive: `<`)
-- `created_after` (string, optional): ISO8601 timestamp (exclusive: `>`)
-- `start_time_from` (string, optional): ISO8601 timestamp (inclusive: `>=`)
-- `start_time_to` (string, optional): ISO8601 timestamp (inclusive: `<=`)
-- `limit` (int, optional): 1-1000, default 100
-- `offset` (int, optional): >= 0, default 0
-
-Results are ordered by `created_at DESC` (most recent first).
-
-Status codes:
-- 200 OK: returns array of RunRecord
-- 400 Bad Request: invalid status or timestamp format
-- 422 Unprocessable Entity: invalid limit/offset
-- 429 Too Many Requests: rate limit exceeded
-- 500 Internal Server Error: database errors
-
-Example:
-```bash
-curl "http://localhost:8765/api/v1/runs?agent_name=seo_intelligence.scheduler&status=running&limit=50"
+**✅ Correct:**
+```python
+"start_time": "2026-01-12T10:30:00Z"  # UTC
+"start_time": "2026-01-12T10:30:00+00:00"  # UTC with offset
 ```
 
-### GET /api/v1/runs/{event_id}
-Fetch a single telemetry run by its event_id (direct lookup).
+---
 
-Auth: not required
-Rate limit: enforced if enabled
+### Error: 404 Not Found
 
-Path parameters:
-- `event_id` (string, required): event identifier
+**Problem:** `event_id` doesn't exist in database.
 
-Response: Single RunRecord object (not an array)
-
-Status codes:
-- 200 OK: returns RunRecord
-- 404 Not Found: event_id not found
-- 429 Too Many Requests: rate limit exceeded
-- 500 Internal Server Error: database errors
-
-**Important:** This endpoint returns a single object, not an array. Use this for direct lookups when you know the event_id. Use `GET /api/v1/runs` for queries/filtering.
-
-Example:
-```bash
-curl http://localhost:8765/api/v1/runs/550e8400-e29b-41d4-a716-446655440000
-```
-
-Response:
-```json
-{
-  "id": 123,
-  "event_id": "550e8400-e29b-41d4-a716-446655440000",
-  "run_id": "2026-01-05T18:40:27Z-seo-intelligence-abc123",
-  "agent_name": "seo_intelligence.insight_engine",
-  "status": "success",
-  "commit_url": "https://github.com/example/repo/commit/abc1234567890",
-  "repo_url": "https://github.com/example/repo",
-  ...
-}
-```
-
-### PATCH /api/v1/runs/{event_id}
-Update selected fields of an existing run.
-
-Auth: required if enabled
-Rate limit: enforced if enabled
-
-Path parameters:
-- `event_id` (string, required): event identifier
-
-Request body: RunUpdate
-
-Status codes:
-- 200 OK: update applied
-- 400 Bad Request: no valid fields to update
-- 401 Unauthorized: auth required/invalid
-- 404 Not Found: event_id not found
-- 422 Unprocessable Entity: validation error (e.g., invalid status, negative numbers)
-- 429 Too Many Requests: rate limit exceeded
-- 500 Internal Server Error: database errors
-
-Example:
-```bash
-curl -X PATCH http://localhost:8765/api/v1/runs/550e8400-e29b-41d4-a716-446655440000 \
-  -H "Content-Type: application/json" \
-  -d '{"status":"success","end_time":"2026-01-05T18:45:10Z","duration_ms":275000}'
-```
-
-Response:
-```json
-{"event_id": "550e8400-e29b-41d4-a716-446655440000", "updated": true, "fields_updated": ["status", "end_time", "duration_ms"]}
-```
-
-### GET /api/v1/runs/{event_id}/commit-url
-Returns a normalized commit URL for the run (GitHub/GitLab/Bitbucket).
-
-Auth: required if enabled
-Rate limit: enforced if enabled
-
-Path parameters:
-- `event_id` (string, required): event identifier
-
-Status codes:
-- 200 OK: returns `{"commit_url": "<url or null>"}`
-- 401 Unauthorized: auth required/invalid
-- 404 Not Found: event_id not found
-- 429 Too Many Requests: rate limit exceeded
-- 500 Internal Server Error: database errors
-
-Example:
-```bash
-curl http://localhost:8765/api/v1/runs/550e8400-e29b-41d4-a716-446655440000/commit-url
-```
-
-### GET /api/v1/runs/{event_id}/repo-url
-Returns a normalized repository URL for the run.
-
-Auth: required if enabled
-Rate limit: enforced if enabled
-
-Path parameters:
-- `event_id` (string, required): event identifier
-
-Status codes:
-- 200 OK: returns `{"repo_url": "<url or null>"}`
-- 401 Unauthorized: auth required/invalid
-- 404 Not Found: event_id not found
-- 429 Too Many Requests: rate limit exceeded
-- 500 Internal Server Error: database errors
-
-Example:
-```bash
-curl http://localhost:8765/api/v1/runs/550e8400-e29b-41d4-a716-446655440000/repo-url
-```
-
-### POST /api/v1/runs/{event_id}/associate-commit
-Associate a git commit with an existing run.
-
-Auth: required if enabled
-Rate limit: enforced if enabled
-
-Path parameters:
-- `event_id` (string, required): event identifier
-
-Request body: CommitAssociation
-
-Status codes:
-- 200 OK: association saved
-- 401 Unauthorized: auth required/invalid
-- 404 Not Found: event_id not found
-- 422 Unprocessable Entity: validation error
-- 429 Too Many Requests: rate limit exceeded
-- 500 Internal Server Error: database errors
-
-Example:
-```bash
-curl -X POST http://localhost:8765/api/v1/runs/550e8400-e29b-41d4-a716-446655440000/associate-commit \
-  -H "Content-Type: application/json" \
-  -d '{"commit_hash":"abc1234567890abcdef","commit_source":"llm","commit_author":"Claude Code <noreply@anthropic.com>","commit_timestamp":"2026-01-02T10:00:00Z"}'
-```
-
-Response:
-```json
-{"status": "success", "event_id": "550e8400-e29b-41d4-a716-446655440000", "run_id": "2026-01-05T18:40:27Z-seo-intelligence-abc123", "commit_hash": "abc1234567890abcdef"}
-```
-
-
-## Quick Reference Table
-
-| Endpoint | Method | Purpose | Auth | Rate Limit | Idempotent |
-|----------|--------|---------|------|------------|------------|
-| `/health` | GET | Service health check | No | No | Yes |
-| `/metrics` | GET | System usage statistics | No | No | Yes |
-| `/api/v1/metadata` | GET | Get distinct agents/jobs | No | Yes | Yes |
-| `/api/v1/runs` | POST | Create single run | Yes* | Yes | Yes (event_id) |
-| `/api/v1/runs/batch` | POST | Create multiple runs | Yes* | Yes | Yes (event_id) |
-| `/api/v1/runs` | GET | Query runs (filter/page) | No | Yes | Yes |
-| `/api/v1/runs/{event_id}` | GET | Get single run | No | Yes | Yes |
-| `/api/v1/runs/{event_id}` | PATCH | Update run fields | Yes* | Yes | Yes |
-| `/api/v1/runs/{event_id}/associate-commit` | POST | Link git commit | Yes* | Yes | Yes |
-| `/api/v1/runs/{event_id}/commit-url` | GET | Get commit URL | Yes* | Yes | Yes |
-| `/api/v1/runs/{event_id}/repo-url` | GET | Get repo URL | Yes* | Yes | Yes |
-
-*Auth required only if `TELEMETRY_API_AUTH_ENABLED=true` (disabled by default)
-
-## Common Troubleshooting
-
-### 422 Validation Error: "field required"
-**Problem:** Missing required fields in POST /api/v1/runs
-**Solution:** Ensure these fields are present: `event_id`, `run_id`, `agent_name`, `job_type`, `start_time`
-
-### 422 Validation Error: "Status must be one of..."
-**Problem:** Invalid status value on PATCH endpoint
-**Solution:** Use canonical statuses only: `running`, `success`, `failure`, `partial`, `timeout`, `cancelled`
-**Note:** Aliases `failed`, `completed`, `succeeded` are accepted on POST but **NOT on PATCH**
-
-### 422 Validation Error: "ensure this value has at least 1 characters"
-**Problem:** Timestamp missing timezone
-**Solution:** Always include timezone: `2026-01-12T10:30:00Z` or `2026-01-12T10:30:00+00:00`
-
-### 404 Not Found
-**Problem:** event_id doesn't exist in database
 **Solution:**
-- Verify event_id was created with POST /api/v1/runs first
-- Check for typos in event_id
-- Use GET /api/v1/runs to verify the run exists
+1. Verify the run was created with POST first
+2. Check for typos in `event_id`
+3. Use GET `/api/v1/runs` to verify the run exists
 
-### 429 Too Many Requests
-**Problem:** Exceeded rate limit
+**Debug:**
+```bash
+# Verify run exists
+curl http://localhost:8765/api/v1/runs/YOUR-EVENT-ID
+```
+
+---
+
+### Error: 429 Too Many Requests
+
+**Problem:** Exceeded rate limit.
+
 **Solution:**
 - Wait 60 seconds (see `Retry-After` header)
 - Reduce request frequency
 - Use batch endpoint for multiple events
-- Consider disabling rate limiting in development
+- Disable rate limiting in development (`TELEMETRY_RATE_LIMIT_ENABLED=false`)
 
-### 500 Internal Server Error: "database is locked"
-**Problem:** Multiple processes trying to write to database
+**Batch Alternative:**
+```python
+# Instead of 100 individual POST requests
+events = [...]
+requests.post(f"{api_url}/api/v1/runs/batch", json=events)
+```
+
+---
+
+### Error: 500 "database is locked"
+
+**Problem:** Multiple processes writing to SQLite database.
+
 **Solution:**
 - Ensure only ONE API worker is running (`TELEMETRY_API_WORKERS=1`)
 - Check for other processes accessing database directly
-- Wait and retry (transient lock contention)
+- Wait and retry (usually transient)
 
-### Duplicate event_id returns 201 Created (not error)
-**Problem:** This is NOT an error - it's idempotent behavior
-**Solution:** This is expected. Check the response body `status` field:
-- `"status": "created"` = new run was inserted
-- `"status": "duplicate"` = run already exists, no changes made
-Both return HTTP 201.
+---
 
-### commit_url or repo_url returns null
-**Problem:** Missing git metadata or unsupported platform
+### Issue: Duplicate `event_id` returns 201 (not an error)
+
+**Problem:** This is NOT an error — it's idempotent behavior.
+
+**Explanation:** Both new and duplicate runs return HTTP 201. Check the response body:
+- `"status": "created"` → New run inserted
+- `"status": "duplicate"` → Run already exists (safe retry)
+
+**Example:**
+```python
+response = requests.post(..., json={"event_id": event_id, ...})
+result = response.json()
+
+if result["status"] == "created":
+    print("New run created")
+elif result["status"] == "duplicate":
+    print("Run already exists (idempotent retry)")
+```
+
+---
+
+### Issue: `git_commit_source` not saved after POST
+
+**Problem:** `git_commit_source`, `git_commit_author`, `git_commit_timestamp` not persisted on POST.
+
+**Explanation:** These fields are **accepted** in the POST body but **NOT persisted** during initial creation.
+
+**Solution:** Use one of these methods to set commit metadata:
+
+**Option 1: PATCH**
+```python
+requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
+    "git_commit_source": "llm",
+    "git_commit_author": "Claude <noreply@anthropic.com>",
+    "git_commit_timestamp": "2026-01-12T10:30:00Z"
+})
+```
+
+**Option 2: associate-commit**
+```python
+requests.post(f"{api_url}/api/v1/runs/{event_id}/associate-commit", json={
+    "commit_hash": "abc123",
+    "commit_source": "llm",
+    "commit_author": "Claude <noreply@anthropic.com>",
+    "commit_timestamp": "2026-01-12T10:30:00Z"
+})
+```
+
+---
+
+### Issue: `commit_url` or `repo_url` returns null
+
+**Problem:** Missing git metadata or unsupported platform.
+
 **Solution:**
 - Ensure `git_repo` and `git_commit_hash` are set
 - Supported platforms: GitHub.com, GitLab.com, Bitbucket.org only
-- Self-hosted instances return null (expected)
+- Self-hosted instances return `null` (expected behavior)
 
-### git_commit_source not saved after POST
-**Problem:** `git_commit_source`, `git_commit_author`, `git_commit_timestamp` appear to be ignored on POST
-**Solution:** These fields are **accepted** by the POST body schema but are **not persisted** during initial creation. Use one of:
-- `PATCH /api/v1/runs/{event_id}` with `git_commit_source`, `git_commit_author`, `git_commit_timestamp`
-- `POST /api/v1/runs/{event_id}/associate-commit` with `commit_source`, `commit_author`, `commit_timestamp`
-
-## Advanced Integration Patterns
-
-### Pattern: Context Manager for Run Tracking
-
-```python
-from contextlib import contextmanager
-import requests
-import uuid
-from datetime import datetime, timezone
-
-@contextmanager
-def telemetry_run(agent_name, job_type, api_url="http://localhost:8765"):
-    event_id = str(uuid.uuid4())
-    start_time = datetime.now(timezone.utc)
-
-    # Start run
-    requests.post(f"{api_url}/api/v1/runs", json={
-        "event_id": event_id,
-        "run_id": f"{start_time.isoformat()}-{agent_name}-{uuid.uuid4().hex[:8]}",
-        "agent_name": agent_name,
-        "job_type": job_type,
-        "status": "running",
-        "start_time": start_time.isoformat()
-    })
-
-    try:
-        yield event_id
-        # Mark success
-        requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
-            "status": "success",
-            "end_time": datetime.now(timezone.utc).isoformat(),
-            "duration_ms": int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
-        })
-    except Exception as e:
-        # Mark failure
-        requests.patch(f"{api_url}/api/v1/runs/{event_id}", json={
-            "status": "failure",
-            "end_time": datetime.now(timezone.utc).isoformat(),
-            "error_summary": str(e)
-        })
-        raise
-
-# Usage
-with telemetry_run("my-agent", "processing") as event_id:
-    do_work()
+**Verify:**
+```bash
+curl http://localhost:8765/api/v1/runs/YOUR-EVENT-ID/commit-url
 ```
 
-### Pattern: Retry with Exponential Backoff
-
-```python
-import time
-import requests
-
-def post_with_retry(url, json_data, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(url, json=json_data, timeout=10)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            if attempt == max_retries - 1:
-                # Log but don't crash your agent
-                print(f"Telemetry failed after {max_retries} attempts: {e}")
-                return None
-            time.sleep(2 ** attempt)  # 1s, 2s, 4s
-```
-
-### Pattern: Buffered Telemetry Writer
-
-```python
-import queue
-import threading
-import requests
-
-class BufferedTelemetry:
-    def __init__(self, api_url, flush_size=50, flush_interval=30):
-        self.api_url = api_url
-        self.buffer = queue.Queue()
-        self.flush_size = flush_size
-        self.flush_interval = flush_interval
-        self.worker = threading.Thread(target=self._flush_worker, daemon=True)
-        self.worker.start()
-
-    def add(self, run_data):
-        self.buffer.put(run_data)
-        if self.buffer.qsize() >= self.flush_size:
-            self._flush()
-
-    def _flush(self):
-        events = []
-        while not self.buffer.empty() and len(events) < self.flush_size:
-            try:
-                events.append(self.buffer.get_nowait())
-            except queue.Empty:
-                break
-
-        if events:
-            try:
-                requests.post(f"{self.api_url}/api/v1/runs/batch", json=events)
-            except Exception as e:
-                print(f"Batch upload failed: {e}")
-                # Re-queue failed events
-                for event in events:
-                    self.buffer.put(event)
-
-    def _flush_worker(self):
-        while True:
-            time.sleep(self.flush_interval)
-            self._flush()
-```
+---
 
 ## See Also
 
+- **Interactive API Docs:** http://localhost:8765/docs
 - **Detailed Endpoint Specs:** [specs/features/](../../specs/features/)
 - **System Architecture:** [specs/_index.md](../../specs/_index.md)
-- **Deployment Guide:** [docs/DEPLOYMENT_GUIDE.md](../DEPLOYMENT_GUIDE.md)
-- **Python Client SDK:** Use `TelemetryClient` from `src/telemetry/client.py` for automatic buffer failover and retry logic
+- **Deployment Guide:** [DEPLOYMENT_GUIDE.md](../DEPLOYMENT_GUIDE.md)
+- **Python Client SDK:** Use `TelemetryClient` from `src/telemetry/client.py` for production integrations
