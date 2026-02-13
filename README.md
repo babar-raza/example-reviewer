@@ -10,6 +10,7 @@ This project provides automated tools to:
 - Validate examples against the latest Aspose.ZIP NuGet package
 - Automatically fix common issues
 - Generate comprehensive reports
+- Track production-committed changes separately from test runs (dual-database mode)
 
 ## Project Structure
 

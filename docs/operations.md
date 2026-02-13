@@ -200,83 +200,171 @@ If you see repeated corruption warnings:
 
 ### Database Overview
 
-**Location**: `data/examples.db`
+**Architecture** (as of 2026-02-12): Dual-database support for production/dev separation
+
+**Databases**:
+- **Development DB** (default): `data/example_reviewer.db`
+  - Contains all runs (experimental, test, and production)
+  - Default location, always active
+
+- **Production DB** (optional): `data/example_reviewer_prod.db`
+  - Contains only runs that created git commits
+  - Enabled via configuration (see below)
 
 **Type**: SQLite3 with WAL (Write-Ahead Logging) mode
 
-**Current Size**:
+**Check database sizes**:
 ```bash
-ls -lh data/examples.db
-# Example: 196KB
+ls -lh data/example_reviewer.db
+ls -lh data/example_reviewer_prod.db  # If production DB is enabled
 ```
 
-**Tables** (actual schema):
-- `pages` - Markdown files with code snippets
-- `snippets` - Extracted code snippets
-- `gists` - Gist metadata (ID, owner, fetch status)
-- `gist_files` - Gist file content and metadata
-- `runs` - Validation/discovery runs
-- `run_events` - Events during runs
-- `snippet_issues` - Issues found in snippets
-- `snippet_versions` - Snippet version history
-- `build_attempts` - Compilation attempts
-- `fixes_applied` - Applied fixes tracking
-- `schema_version` - Database schema version
+**Current Tables** (schema):
+- `run_records` - Pipeline run metadata
+- `example_records` - Canonical example information
+- `example_run_state` - Per-run example state
+- `compile_attempts` - Compilation results
+- `runtime_attempts` - Runtime execution results
+- `markdown_edits` - Code modifications made
+- `telemetry_runs` - Full telemetry data with git commit info
+- `telemetry_events` - Event stream during runs
+- `failure_details` - Detailed failure analysis
+- `review_results` - Final LLM review results
+- `gist_publications` - Published gist tracking
+
+### Production Database Setup
+
+**Enable production database** in `config/global.json`:
+```json
+{
+  "database": {
+    "path": "./data/example_reviewer.db",
+    "production_path": "./data/example_reviewer_prod.db"
+  }
+}
+```
+
+**Or via CLI**:
+```bash
+python -m src.cli.main run --family zip --prod-db-path ./data/production.db --commit
+```
+
+**Or via environment variable**:
+```bash
+export EXAMPLE_REVIEWER_PROD_DB_PATH="./data/production.db"
+```
+
+**How it works**:
+- All runs write to development database during execution
+- After successful git commit, the entire run is copied to production database
+- Copy is atomic (transaction-based) and includes all related records
+- If commit fails, nothing is written to production database
+
+**Benefits**:
+- **Clean analytics**: Query production DB for only committed examples
+- **Safe testing**: Experimental runs don't pollute production metrics
+- **Audit trail**: Production DB shows exactly what shipped to git
 
 ### Database Size Queries
 
-**Total database size**:
+**Check database sizes**:
 ```bash
-ls -lh data/examples.db
+# Development database
+ls -lh data/example_reviewer.db
+
+# Production database (if enabled)
+ls -lh data/example_reviewer_prod.db
 ```
 
-Or using SQLite:
+**Using SQLite**:
 ```python
 import sqlite3
-conn = sqlite3.connect('data/examples.db')
-cursor = conn.cursor()
-cursor.execute("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
-size_bytes = cursor.fetchone()[0]
-size_mb = size_bytes / (1024 * 1024)
-print(f"Database size: {size_mb:.2f} MB")
-conn.close()
+
+def get_db_size(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
+    size_bytes = cursor.fetchone()[0]
+    size_mb = size_bytes / (1024 * 1024)
+    conn.close()
+    return size_mb
+
+print(f"Dev DB: {get_db_size('data/example_reviewer.db'):.2f} MB")
+print(f"Prod DB: {get_db_size('data/example_reviewer_prod.db'):.2f} MB")
 ```
 
 **Table row counts**:
 ```python
 import sqlite3
-conn = sqlite3.connect('data/examples.db')
+
+def get_table_stats(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Get all tables
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    tables = [row[0] for row in cursor.fetchall()]
+
+    print(f"\nTable Statistics for {db_path}:")
+    for table in tables:
+        if table.startswith('sqlite_'):
+            continue  # Skip internal tables
+        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+        count = cursor.fetchone()[0]
+        print(f"  {table}: {count:,} rows")
+
+    conn.close()
+
+get_table_stats('data/example_reviewer.db')
+get_table_stats('data/example_reviewer_prod.db')  # If production DB enabled
+```
+
+### Production Database Analytics
+
+**Query production runs only**:
+```python
+import sqlite3
+
+conn = sqlite3.connect('data/example_reviewer_prod.db')
 cursor = conn.cursor()
 
-# Get all tables
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-tables = [row[0] for row in cursor.fetchall()]
+# Get production run summary
+cursor.execute("""
+    SELECT
+        product_family,
+        COUNT(*) as total_runs,
+        SUM(items_succeeded) as total_verified
+    FROM telemetry_runs
+    WHERE git_commit_hash IS NOT NULL AND git_commit_hash != ''
+    GROUP BY product_family
+""")
 
-print("Table Statistics:")
-for table in tables:
-    if table == 'sqlite_sequence':
-        continue  # Skip internal table
-    cursor.execute(f"SELECT COUNT(*) FROM {table}")
-    count = cursor.fetchone()[0]
-    print(f"  {table}: {count:,} rows")
+print("Production Runs by Family:")
+for row in cursor.fetchall():
+    print(f"  {row[0]}: {row[1]} runs, {row[2]} verified examples")
 
 conn.close()
 ```
 
-**Expected output**:
-```
-Table Statistics:
-  build_attempts: 0 rows
-  fixes_applied: 0 rows
-  gist_files: 1 rows
-  gists: 2 rows
-  pages: 2 rows
-  run_events: 15 rows
-  runs: 3 rows
-  schema_version: 1 rows
-  snippet_issues: 0 rows
-  snippet_versions: 0 rows
-  snippets: 1 rows
+**Compare dev vs production databases**:
+```python
+import sqlite3
+
+def count_runs(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM telemetry_runs")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+dev_runs = count_runs('data/example_reviewer.db')
+prod_runs = count_runs('data/example_reviewer_prod.db')
+
+print(f"Development runs: {dev_runs}")
+print(f"Production runs: {prod_runs}")
+print(f"Test/experimental runs: {dev_runs - prod_runs}")
+print(f"Production ratio: {prod_runs/dev_runs*100:.1f}%")
 ```
 
 ### Database Cleanup

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added - 2026-02-12
+
+## Update — 2026-02-12
+- **Dual-Database Architecture** ✅ - Production/development database separation implemented
+  - **Feature**: Optional production database for tracking committed runs separately from test runs
+  - **Implementation**: Deferred write strategy (atomic copy after successful git commit)
+  - **Configuration**: New `DatabaseConfig` class with `production_path` field
+  - **Files Modified**:
+    - `src/core/config.py`: DatabaseConfig class, environment variable support, backward compatibility
+    - `src/core/database.py`: production_db_path parameter, get_production_connection(), copy_run_to_production() (164 lines)
+    - `src/pipeline/orchestrator.py`: Production DB initialization and post-commit trigger
+    - `src/cli/main.py`: --prod-db-path CLI argument
+    - `src/mcp_tools/tools.py`: Production DB config passthrough
+  - **Backward Compatibility**: 100% - defaults to single-DB mode if not configured
+  - **Enabling Methods**:
+    - Config: `{"database": {"production_path": "./data/example_reviewer_prod.db"}}`
+    - CLI: `--prod-db-path ./data/production.db`
+    - Env: `EXAMPLE_REVIEWER_PROD_DB_PATH`
+  - **Benefits**: Clean production analytics, safe experimentation, audit trail of committed changes
+  - **Testing**: 7/7 database schema tests pass, config backward compatibility verified
+  - **Documentation**: Updated configuration.md, operations.md, README.md
+  - **Plan**: C:\Users\prora\.claude\plans\sunny-churning-quilt.md
+  - **Migration Script**: Deferred (starting fresh with production DB)
+
 ### Added - 2026-01-16
 
 ## Update — 2026-01-16 21:00 PKT

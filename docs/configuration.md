@@ -66,6 +66,52 @@ Key fields (`telemetry`):
 
 Telemetry is coordinated by `src/services/telemetry_service.py` and DB tables in `src/core/database.py`.
 
+### Database Configuration
+
+**New in 2026-02-12**: Dual-database architecture support for separating production and development data.
+
+Key fields (`database`):
+
+- `path`: Primary database path (default: `./data/example_reviewer.db`)
+- `production_path`: Optional production database path (default: `null`)
+- `production_criteria`: How to identify production runs (currently only `"git_commit"` supported)
+
+**How it works:**
+- **Single-DB mode (default)**: All runs write to the primary database
+- **Dual-DB mode**: Development runs write to `path`, production runs (with git commits) write to both databases
+- Production database receives atomic copies of entire runs after successful git commits
+
+**Configuration example:**
+```json
+{
+  "database": {
+    "path": "./data/example_reviewer.db",
+    "production_path": "./data/example_reviewer_prod.db",
+    "production_criteria": "git_commit"
+  }
+}
+```
+
+**CLI override:**
+```bash
+python -m src.cli.main run --family zip --prod-db-path ./data/production.db --commit
+```
+
+**Environment variable:**
+```bash
+export EXAMPLE_REVIEWER_DATABASE_PATH="./data/example_reviewer.db"
+export EXAMPLE_REVIEWER_PROD_DB_PATH="./data/production.db"
+```
+
+**Use cases:**
+- **Clean production analytics**: Query only committed, verified examples
+- **Safe experimentation**: Test runs don't pollute production metrics
+- **Audit trail**: Production DB contains only what actually shipped
+
+**Backward compatibility:** If `production_path` is not set, the pipeline operates in single-database mode (pre-2026-02-12 behavior).
+
+Implementation: `src/core/database.py` (`copy_run_to_production()` method).
+
 ### Backfill
 
 Key fields (`backfill`):
