@@ -399,20 +399,21 @@ class CompilationService:
         code_lines = code.split('\n')
         using_lines = []
         code_body_lines = []
-        in_usings = True
 
         for line in code_lines:
             stripped = line.strip()
-            # Check if this line is a using statement
-            if in_usings and (stripped.startswith('using ') and stripped.endswith(';')):
+            # Extract using NAMESPACE directives from anywhere in the code
+            # (not 'using var', 'using (', or other C# using statements)
+            if (stripped.startswith('using ') and stripped.endswith(';')
+                    and not re.match(r'using\s+(var|[a-z_])\s', stripped)
+                    and not stripped.startswith('using (')):
                 using_lines.append(line)
-            elif in_usings and (not stripped or stripped.startswith('//')):
-                # Skip empty lines and comments at the top
-                continue
             else:
-                # Once we hit non-using code, add all remaining lines to body
-                in_usings = False
                 code_body_lines.append(line)
+
+        # Remove leading blank lines from code body
+        while code_body_lines and not code_body_lines[0].strip():
+            code_body_lines.pop(0)
 
         # Add all required usings (combine with existing)
         all_usings = set(self.DEFAULT_USINGS)
@@ -433,22 +434,47 @@ class CompilationService:
             lines.append(f"using {using};")
         lines.append("")
 
+        # Check if code body starts with a method declaration
+        first_meaningful = ''
+        for bl in code_body_lines:
+            if bl.strip():
+                first_meaningful = bl.strip()
+                break
+
+        is_method_fragment = bool(re.match(
+            r'(?:public|private|protected|internal|static|async|virtual|override|sealed|\s)*'
+            r'(?:void|Task|Task<[\w.<>\[\],\s]+>|string|int|bool|long|double|float|decimal|object|[\w.<>\[\]]+)\s+\w+\s*\(',
+            first_meaningful
+        ))
+
         lines.append("public class Program")
         lines.append("{")
 
-        # Determine Main signature
-        if analysis['is_async']:
-            lines.append("    public static async Task Main(string[] args)")
+        if is_method_fragment:
+            # Wrap method as a class member, add dummy Main() stub
+            for line in code_body_lines:
+                lines.append(f"    {line}")
+            lines.append("")
+            lines.append("    public static async System.Threading.Tasks.Task Main(string[] args)")
+            lines.append("    {")
+            lines.append("        // Entry point - method defined above")
+            lines.append("    }")
         else:
-            lines.append("    public static void Main(string[] args)")
+            # Determine Main signature — use FQ Task to avoid CS0104 ambiguity
+            # (e.g., Aspose.Email.Calendar.Task vs System.Threading.Tasks.Task)
+            if analysis['is_async']:
+                lines.append("    public static async System.Threading.Tasks.Task Main(string[] args)")
+            else:
+                lines.append("    public static void Main(string[] args)")
 
-        lines.append("    {")
+            lines.append("    {")
 
-        # Indent only the actual code body (not the using statements)
-        for line in code_body_lines:
-            lines.append(f"        {line}")
+            # Indent only the actual code body (not the using statements)
+            for line in code_body_lines:
+                lines.append(f"        {line}")
 
-        lines.append("    }")
+            lines.append("    }")
+
         lines.append("}")
 
         return '\n'.join(lines)
@@ -490,6 +516,19 @@ class CompilationService:
                     package_refs.append(
                         f'    <PackageReference Include="{pkg.name}" Version="{version}" />'
                     )
+
+        # Auto-detect System.Drawing usage and add NuGet package
+        if wrapped_code and (
+            'System.Drawing.Bitmap' in wrapped_code
+            or 'System.Drawing.Graphics' in wrapped_code
+            or re.search(r'using\s+System\.Drawing\s*;', wrapped_code)
+        ):
+            # Only add if not already present
+            if not any('System.Drawing.Common' in ref for ref in package_refs):
+                package_refs.append(
+                    '    <PackageReference Include="System.Drawing.Common" Version="8.*" />'
+                )
+                logger.info("Auto-added System.Drawing.Common NuGet package (detected System.Drawing usage)")
 
         # Phase-2 Gate B: Use context harness for project template if available
         if self.context_harness is not None:

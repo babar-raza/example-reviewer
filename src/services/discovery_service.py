@@ -50,6 +50,15 @@ class DiscoveryService:
     # Task 1: Minimum meaningful lines threshold
     MIN_MEANINGFUL_LINES = 3
 
+    # P1-C: Placeholder path/key patterns
+    PLACEHOLDER_PATTERNS = [
+        r'"path[\\/]to[\\/]',
+        r'"your[\s_-]',
+        r'"YOUR_',
+        r'@"[A-Z]:\\[^"]*path\\to',
+        r'"<[^>]+>"',              # "<your-api-key>"
+    ]
+
     def __init__(
         self,
         db: Database,
@@ -229,7 +238,125 @@ class DiscoveryService:
         if len(meaningful_lines) < self.MIN_MEANINGFUL_LINES:
             return False, f"snippet_too_incomplete (only {len(meaningful_lines)} meaningful lines)"
 
+        # Check: Using-only snippets (no executable code beyond using/namespace declarations)
+        executable_lines = [l for l in meaningful_lines
+                            if not l.startswith('using ') and not l.startswith('namespace ')]
+        if not executable_lines:
+            return False, "using_only_snippet"
+
+        # Check: Short fragments referencing undeclared variables (outer-context dependency)
+        if len(meaningful_lines) <= 25:
+            if self._has_undeclared_loop_variables(code):
+                return False, "fragment_outer_context"
+            if self._has_undeclared_context_variables(code):
+                return False, "fragment_undeclared_context_variable"
+
+        # Check: Interface/class stubs with method signatures but no implementations
+        if self._is_stub_definition(code):
+            return False, "interface_stub_no_implementation"
+
         return True, ""
+
+    def _has_undeclared_loop_variables(self, code: str) -> bool:
+        """Detect foreach loops iterating over variables never declared in the snippet."""
+        foreach_matches = re.findall(r'foreach\s*\([^)]*\bin\s+(\w+)\)', code)
+        for var_name in foreach_matches:
+            # Check if variable is declared anywhere before the foreach
+            decl_pattern = rf'(?:var|string|int|bool|List|IEnumerable|string\[\]|Image\[\]|RasterImage\[\]|IList|ICollection)\s+{re.escape(var_name)}\b'
+            assign_pattern = rf'\b{re.escape(var_name)}\s*='
+            param_pattern = rf'\(\s*(?:[\w.<>\[\]]+\s+)*{re.escape(var_name)}\s*[,)]'
+            if not re.search(decl_pattern, code) and not re.search(assign_pattern, code) and not re.search(param_pattern, code):
+                return True
+        return False
+
+    def _has_undeclared_context_variables(self, code: str) -> bool:
+        """Detect variables used but never declared in the snippet (broader than just loops)."""
+        lines = code.strip().split('\n')
+        meaningful = [l.strip() for l in lines if l.strip() and not l.strip().startswith('//')]
+
+        # Find variables used at the START of statements in property/method access
+        # Pattern: identifier.Something (at statement start, not after a type declaration)
+        used_vars = set()
+        for line in meaningful:
+            # Match: varName.Property or varName.Method(
+            m = re.match(r'\s*(\w+)\s*\.', line)
+            if m:
+                var = m.group(1)
+                # Skip known keywords and type names
+                if var not in ('var', 'string', 'int', 'bool', 'Console', 'File', 'Path',
+                              'Directory', 'Environment', 'Math', 'Convert', 'Task', 'Thread',
+                              'Image', 'Bitmap', 'Graphics', 'Color', 'new', 'return', 'if',
+                              'for', 'foreach', 'while', 'using', 'await', 'this', 'base',
+                              'typeof', 'nameof', 'sizeof', 'default'):
+                    # Check if it looks like a type name (PascalCase with no prior declaration)
+                    # Skip if it starts with uppercase and could be a static class call
+                    if not var[0].isupper():
+                        used_vars.add(var)
+
+        if not used_vars:
+            return False
+
+        # Check if each used variable is declared somewhere in the snippet
+        for var in used_vars:
+            # Look for declaration: Type varName, var varName, varName =
+            decl_found = False
+            for line in meaningful:
+                stripped = line.strip()
+                # Assignment: var =
+                if re.search(rf'\b{re.escape(var)}\s*=', stripped):
+                    decl_found = True
+                    break
+                # Type declaration: SomeType varName
+                if re.search(rf'(?:var|[\w.<>\[\]]+)\s+{re.escape(var)}\s*[=;,)]', stripped):
+                    decl_found = True
+                    break
+                # Parameter: (Type varName
+                if re.search(rf'\(\s*[\w.<>\[\]]+\s+{re.escape(var)}\s*[,)]', stripped):
+                    decl_found = True
+                    break
+                # foreach: foreach (var varName in
+                if re.search(rf'foreach\s*\(.*\b{re.escape(var)}\s+in\b', stripped):
+                    decl_found = True
+                    break
+            if not decl_found:
+                return True
+
+        return False
+
+    def _is_stub_definition(self, code: str) -> bool:
+        """Detect class/interface with method signatures but no method bodies."""
+        lines = code.strip().splitlines()
+        meaningful = [l.strip() for l in lines if l.strip() and not l.strip().startswith('//')]
+        # Must have class/interface declaration
+        has_type_decl = any(re.match(r'(public\s+)?(abstract\s+)?(class|interface|struct)\s+\w+', l) for l in meaningful)
+        if not has_type_decl:
+            return False
+        # Find method signatures (lines with return type + method name + parentheses)
+        method_sig_pattern = r'^\s*(public|private|protected|internal)?\s*(static\s+)?(async\s+)?(override\s+)?(virtual\s+)?(void|Task|string|int|bool|[\w.<>]+)\s+\w+\s*\('
+        method_sigs = [l for l in meaningful if re.match(method_sig_pattern, l)]
+        if not method_sigs:
+            return False
+        # Check if ALL method signatures end with ';' (no body)
+        sigs_without_body = [l for l in method_sigs if l.rstrip().endswith(';') or l.rstrip().endswith(')')]
+        # If all method-like lines are just signatures (no { after ), it's a stub
+        return len(sigs_without_body) == len(method_sigs)
+
+    def _count_placeholder_indicators(self, code: str) -> int:
+        """Count placeholder path/key indicators in code."""
+        count = 0
+        for pattern in self.PLACEHOLDER_PATTERNS:
+            count += len(re.findall(pattern, code, re.IGNORECASE))
+        return count
+
+    def _is_license_only_example(self, code: str) -> bool:
+        """Detect examples that primarily demonstrate license/metering setup."""
+        lines = code.strip().split('\n')
+        meaningful = [l.strip() for l in lines if l.strip() and not l.strip().startswith('//') and not l.strip().startswith('using ')]
+        if len(meaningful) > 8:
+            return False  # Only filter short license-only snippets
+        has_metered = any('Metered' in l or 'SetMeteredKey' in l for l in meaningful)
+        has_license = any('License' in l and ('SetLicense' in l or '.License(' in l or 'new License' in l) for l in meaningful)
+        return has_metered or has_license
 
     def _record_skipped_candidate(
         self,
@@ -315,6 +442,17 @@ class DiscoveryService:
                 reason = "No C# code indicators found"
                 self._track_filter_reason(reason)
                 return False, reason
+
+        # Check for excessive placeholder content
+        placeholder_count = self._count_placeholder_indicators(code)
+        if placeholder_count >= 3:
+            self._track_filter_reason("excessive_placeholder_content")
+            return False, "excessive_placeholder_content"
+
+        # Check: Metered license examples (require API keys, always fail)
+        if self._is_license_only_example(code):
+            self._track_filter_reason("license_api_key_required")
+            return False, "license_api_key_required"
 
         return True, "Passed all filters"
 
@@ -594,6 +732,19 @@ class DiscoveryService:
                     # Extract last part of namespace for concise marker
                     ns_suffix = invalid_ns.split('.')[-1].lower()
                     foreign.append(f'invalid_namespace_{ns_suffix}')
+
+        # External framework markers (not Aspose cross-family, but foreign frameworks)
+        external_framework_markers = {
+            'aspnet_mvc': ['Microsoft.AspNetCore.Mvc', ': Controller', ': ControllerBase'],
+            'wpf': ['System.Windows.Presentation', 'xmlns:x='],
+            'winforms': ['System.Windows.Forms', 'InitializeComponent()'],
+            'blazor': ['Microsoft.AspNetCore.Components', '@page '],
+        }
+        for framework, markers in external_framework_markers.items():
+            for marker in markers:
+                if marker in code:
+                    foreign.append(f"foreign_framework_{framework}")
+                    break  # One match per framework is sufficient
 
         return foreign
 

@@ -1080,6 +1080,9 @@ class PipelineOrchestrator:
                 except Exception:
                     logger.info(f"Phase 0: API catalog for {family} exists")
 
+            # Phase 0.5: Validate default_usings against catalog
+            self._validate_default_usings(family, family_config)
+
             # Phase A: Discovery
             logger.info(f"Phase A: Discovery for {family}")
             with track_phase_timing(self.db, run_id, family, "discovery"):
@@ -2186,6 +2189,28 @@ class PipelineOrchestrator:
                         example.example_id,
                         ExampleStatus.COMPILE_FAILED,
                         failure_reason='\n'.join(result.errors[:3]),
+                        run_id=run_id,
+                    )
+                    continue
+
+                # P1-B: Gate — check if CS0246 errors reference types not in the catalog
+                # If so, skip LLM escalation (LLM cannot invent missing types)
+                try:
+                    _gate_catalog = self.registry.get_api_catalog(family) if self.registry else None
+                except Exception:
+                    _gate_catalog = None
+                unfixable_types = self._check_unfixable_types(result.errors, _gate_catalog)
+                if unfixable_types:
+                    _unfixable_str = ', '.join(unfixable_types)
+                    logger.warning(
+                        f"UNFIXABLE_API for {example.example_id}: types not in catalog: "
+                        f"{_unfixable_str} - skipping LLM escalation"
+                    )
+                    stats['failed'] += 1
+                    self.db.update_example_status(
+                        example.example_id,
+                        ExampleStatus.COMPILE_FAILED,
+                        failure_reason=f"UNFIXABLE_API: {_unfixable_str}",
                         run_id=run_id,
                     )
                     continue
@@ -4764,6 +4789,76 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         
         return stats
     
+    def _validate_default_usings(self, family: str, family_config: FamilyConfig) -> None:
+        """Validate default_usings against the API catalog and remove invalid namespaces.
+
+        Checks each namespace in family_config.code_defaults.default_usings against
+        the catalog's known namespace set. BCL prefixes (System, Microsoft, Newtonsoft)
+        are always allowed. Invalid namespaces are logged and filtered out.
+        """
+        try:
+            catalog_service = self.registry.get_api_catalog(family) if self.registry else None
+        except Exception:
+            catalog_service = None
+
+        if not catalog_service or not catalog_service.is_loaded:
+            return
+
+        default_usings = family_config.code_defaults.default_usings
+        if not default_usings:
+            return
+
+        valid_namespaces = catalog_service.get_namespace_set()
+        bcl_prefixes = ('System', 'Microsoft', 'Newtonsoft')
+
+        invalid_ns = []
+        for ns in default_usings:
+            if ns.startswith(bcl_prefixes):
+                continue
+            if ns not in valid_namespaces:
+                invalid_ns.append(ns)
+
+        if invalid_ns:
+            logger.warning(
+                f"default_usings validation: {len(invalid_ns)} invalid namespace(s) "
+                f"for family '{family}': {invalid_ns}"
+            )
+            # Filter out invalid namespaces from the mutable config object
+            family_config.code_defaults.default_usings = [
+                ns for ns in default_usings if ns not in invalid_ns
+            ]
+            logger.info(
+                f"Filtered default_usings: {family_config.code_defaults.default_usings}"
+            )
+
+    def _check_unfixable_types(self, errors: List[str], catalog_service) -> List[str]:
+        """Check if CS0246 errors reference types not in the catalog.
+
+        Returns a list of type names from CS0246 errors that are not present
+        in the API catalog and are not well-known BCL types. These represent
+        types that cannot be fixed by adding using directives.
+        """
+        if not catalog_service:
+            return []
+        unfixable = []
+        bcl_types = {
+            'String', 'Int32', 'Boolean', 'Object', 'Exception', 'DateTime',
+            'TimeSpan', 'Guid', 'Nullable', 'IDisposable', 'IEnumerable',
+            'ICollection', 'IList', 'IDictionary', 'Func', 'Action',
+            'EventArgs', 'EventHandler', 'Attribute', 'Type',
+        }
+        for err in errors:
+            if 'CS0246' not in err:
+                continue
+            m = re.search(r"'(\w+)'", err)
+            if m:
+                type_name = m.group(1)
+                if type_name in bcl_types:
+                    continue
+                if not catalog_service.has_type(type_name):
+                    unfixable.append(type_name)
+        return unfixable
+
     def _is_catalog_invalid(self, path: Path) -> bool:
         """Check if catalog file exists but is empty or corrupt."""
         try:

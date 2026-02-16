@@ -775,6 +775,10 @@ _FAMILY_GENERATORS: Dict[str, Any] = {
     ".tiff": lambda dest, td, _: _generate_bmp(dest),  # BMP as fallback for TIFF
     ".tif": lambda dest, td, _: _generate_bmp(dest),
     ".svg": lambda dest, td, _: _generate_svg(dest),
+    # Email formats (generate minimal valid content)
+    ".eml": lambda dest, td, _: _generate_eml(dest),
+    ".msg": lambda dest, td, _: _generate_msg_as_eml(dest),
+    ".mbox": lambda dest, td, _: _generate_mbox(dest),
     # Image/design formats (copy from canonical in test-data)
     ".psd": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".psd"),
     ".psb": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".psb"),
@@ -789,6 +793,71 @@ _FAMILY_GENERATORS: Dict[str, Any] = {
     ".j2k": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".j2k"),
     ".jp2": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".jp2"),
 }
+
+
+def _generate_eml(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid .eml file (RFC 2822 format)."""
+    content = (
+        "From: sender@example.com\r\n"
+        "To: recipient@example.com\r\n"
+        "Subject: Sample Email Message\r\n"
+        "Date: Mon, 01 Jan 2024 00:00:00 +0000\r\n"
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "Content-Transfer-Encoding: 7bit\r\n"
+        "\r\n"
+        "This is a sample email message for testing.\r\n"
+        "It contains plain text content.\r\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated EML {dest.name}")
+
+
+def _generate_msg_as_eml(dest: Path) -> Tuple[bool, str]:
+    """Generate a .msg placeholder as .eml content.
+
+    MSG is a complex binary Outlook format. Aspose.Email can typically
+    load .eml files as well, so we generate valid RFC 2822 content.
+    For real .msg files, the backfill system should copy from the repo.
+    """
+    content = (
+        "From: sender@example.com\r\n"
+        "To: recipient@example.com\r\n"
+        "Subject: Sample Outlook Message\r\n"
+        "Date: Mon, 01 Jan 2024 00:00:00 +0000\r\n"
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "\r\n"
+        "This is a sample message generated as EML fallback for .msg format.\r\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated MSG (as EML fallback) {dest.name}")
+
+
+def _generate_mbox(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid .mbox file (Unix mailbox format)."""
+    content = (
+        "From sender@example.com Mon Jan 01 00:00:00 2024\r\n"
+        "From: sender@example.com\r\n"
+        "To: recipient@example.com\r\n"
+        "Subject: Sample Mbox Message 1\r\n"
+        "Date: Mon, 01 Jan 2024 00:00:00 +0000\r\n"
+        "\r\n"
+        "First message in mbox.\r\n"
+        "\r\n"
+        "From sender2@example.com Mon Jan 01 01:00:00 2024\r\n"
+        "From: sender2@example.com\r\n"
+        "To: recipient@example.com\r\n"
+        "Subject: Sample Mbox Message 2\r\n"
+        "Date: Mon, 01 Jan 2024 01:00:00 +0000\r\n"
+        "\r\n"
+        "Second message in mbox.\r\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated MBOX {dest.name}")
 
 
 def _generate_svg(dest: Path) -> Tuple[bool, str]:

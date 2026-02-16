@@ -982,13 +982,24 @@ def main() -> int:
     
     elif args.command == 'run':
         # Determine strategy configuration
+        # Default: all strategies ENABLED (matching orchestrator's intent)
+        # Individual flags are opt-in overrides; --enable-all-deterministic is a no-op (already default)
+        has_any_flag = any([
+            getattr(args, 'enable_transformers', False),
+            getattr(args, 'enable_retrieval', False),
+            getattr(args, 'enable_semantic_microfixes', False),
+            getattr(args, 'enable_substitution', False),
+            getattr(args, 'enable_learned_patterns', False),
+        ])
         enable_all = getattr(args, 'enable_all_deterministic', False)
+        # If no individual flags set, enable all by default
+        default_enabled = not has_any_flag or enable_all
         strategy_config = {
-            'enable_transformers': enable_all or getattr(args, 'enable_transformers', False),
-            'enable_retrieval': enable_all or getattr(args, 'enable_retrieval', False),
-            'enable_semantic_microfixes': enable_all or getattr(args, 'enable_semantic_microfixes', False),
-            'enable_substitution': enable_all or getattr(args, 'enable_substitution', False),
-            'enable_learned_patterns': enable_all or getattr(args, 'enable_learned_patterns', False),
+            'enable_transformers': default_enabled or getattr(args, 'enable_transformers', False),
+            'enable_retrieval': default_enabled or getattr(args, 'enable_retrieval', False),
+            'enable_semantic_microfixes': default_enabled or getattr(args, 'enable_semantic_microfixes', False),
+            'enable_substitution': default_enabled or getattr(args, 'enable_substitution', False),
+            'enable_learned_patterns': default_enabled or getattr(args, 'enable_learned_patterns', False),
         }
 
         result = tools.run_pipeline(

@@ -98,6 +98,26 @@ class ContextDriftValidator:
         drift_detected = original_context != fixed_context
 
         if drift_detected:
+            # Allow acceptable transitions: wrapping bare snippets is expected
+            # console -> library: LLM wrapping a partial snippet with class/namespace
+            # console -> aspnet_minimal: LLM wrapping an ASP.NET snippet
+            allowed_transitions = {
+                ("console", "library"),
+                ("console", "aspnet_minimal"),
+            }
+            transition = (original_context, fixed_context)
+            if transition in allowed_transitions:
+                logger.info(
+                    f"Context transition allowed: {original_context} -> {fixed_context} "
+                    f"(wrapping partial snippet)"
+                )
+                return ContextDriftResult(
+                    drift_detected=True,
+                    original_context=original_context,
+                    fixed_context=fixed_context,
+                    drift_allowed=True
+                )
+
             logger.warning(
                 f"Context drift detected: {original_context} -> {fixed_context}"
             )

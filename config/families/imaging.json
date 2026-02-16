@@ -36,7 +36,14 @@
       "System.Text",
       "Aspose.Imaging",
       "Aspose.Imaging.FileFormats",
+      "Aspose.Imaging.FileFormats.Png",
+      "Aspose.Imaging.FileFormats.Jpeg",
+      "Aspose.Imaging.FileFormats.Bmp",
+      "Aspose.Imaging.FileFormats.Gif",
+      "Aspose.Imaging.FileFormats.Tiff",
       "Aspose.Imaging.ImageOptions",
+      "Aspose.Imaging.ImageFilters.FilterOptions",
+      "Aspose.Imaging.Brushes",
       "Aspose.Imaging.Sources"
     ]
   },
@@ -70,13 +77,19 @@
       "sample.tiff"
     ],
     "required_dirs": [],
-    "file_aliases": {},
+    "file_aliases": {
+      "sample.png": ["PNG/aspose_logo.png", "PNG/template.png"],
+      "sample.jpg": ["JPEG/aspose-logo.jpg", "JPEG/test.jpg"],
+      "sample.bmp": ["Bmp/Rle4.bmp", "PNG/template.bmp"],
+      "sample.gif": ["GIF/ezgif.com-gif-maker(1)___.gif"],
+      "sample.tiff": ["Tiff/Sample.tif", "Tiff/lichee.tif"]
+    },
     "expected_outputs": [],
     "env": {}
   },
   "test_data": {
     "local_path": "artifacts/backfill/imaging/test-data",
-    "download_if_missing": false,
+    "download_if_missing": true,
     "inventory_path": "artifacts/backfill/imaging/test-data-inventory.json"
   },
   "gist": {

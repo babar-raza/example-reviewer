@@ -117,6 +117,10 @@ class APICatalogService:
         """Check if a symbol (type name) exists in the catalog."""
         return symbol in self._types
 
+    def has_type(self, type_name: str) -> bool:
+        """Check if a type exists in the catalog."""
+        return type_name in self._types
+
     def is_ambiguous(self, type_name: str) -> bool:
         """Check if a type name exists in multiple namespaces."""
         return type_name in self._ambiguous_types

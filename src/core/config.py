@@ -683,6 +683,7 @@ class NuGetPackage(BaseModel):
     name: str
     version_strategy: str = Field(default="latest_stable")
     version: Optional[str] = None
+    dll_name: Optional[str] = Field(default=None, description="DLL name if different from package name")
 
 
 class NuGetConfig(BaseModel):
@@ -957,6 +958,12 @@ class ConfigurationManager:
         # LLM overrides - resolve coherent provider profiles
         env_provider = os.getenv('LLM_PROVIDER')
         if env_provider:
+            if env_provider != llm.provider:
+                logger.warning(
+                    f"LLM_PROVIDER env var '{env_provider}' overrides config "
+                    f"provider '{llm.provider}' (base_url={llm.base_url}, model={llm.model}). "
+                    f"Unset LLM_PROVIDER to use config values."
+                )
             llm.provider = env_provider
             # Look up full provider profile from model_routing
             provider_profile = config.model_routing.providers.get(env_provider)

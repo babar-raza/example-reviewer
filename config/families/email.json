@@ -34,10 +34,19 @@
       "System",
       "System.IO",
       "System.Text",
+      "System.Net",
       "Aspose.Email",
       "Aspose.Email.Clients",
       "Aspose.Email.Clients.Smtp",
-      "Aspose.Email.Mail"
+      "Aspose.Email.Clients.Imap",
+      "Aspose.Email.Clients.Pop3",
+      "Aspose.Email.Clients.Exchange",
+      "Aspose.Email.Mail",
+      "Aspose.Email.Mime",
+      "Aspose.Email.Storage.Pst",
+      "Aspose.Email.Storage.Mbox",
+      "Aspose.Email.PersonalInfo",
+      "Aspose.Email.Calendar"
     ]
   },
   "namespace_policy": {
@@ -68,13 +77,17 @@
       "sample.mbox"
     ],
     "required_dirs": [],
-    "file_aliases": {},
+    "file_aliases": {
+      "sample.msg": ["Email/Message.msg"],
+      "sample.eml": ["Email/Message.eml", "Email/Attachments.eml"],
+      "sample.mbox": ["Thunderbird/ExampleMbox.mbox"]
+    },
     "expected_outputs": [],
     "env": {}
   },
   "test_data": {
     "local_path": "artifacts/backfill/email/test-data",
-    "download_if_missing": false,
+    "download_if_missing": true,
     "inventory_path": "artifacts/backfill/email/test-data-inventory.json"
   },
   "gist": {

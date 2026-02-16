@@ -191,16 +191,26 @@ class BackfillService:
                 )
 
             # Copy test data from repo to local path
-            source_path = repo_path / family_config.example_repo.test_data_path
+            configured_path = family_config.example_repo.test_data_path
+            source_path = repo_path / configured_path
             if not source_path.exists():
-                return BackfillResult(
-                    success=False,
-                    target="test_data",
-                    source=str(source_path),
-                    destination=str(local_path),
-                    error=f"test_data_path not found in repo: {family_config.example_repo.test_data_path}",
-                    duration_seconds=(datetime.now() - start_time).total_seconds()
-                )
+                # Auto-discover: scan repo for common test data directory patterns
+                discovered = self._auto_discover_test_data_path(repo_path, family)
+                if discovered:
+                    logger.info(
+                        f"Config test_data_path '{configured_path}' not found, "
+                        f"auto-discovered: '{discovered}'"
+                    )
+                    source_path = repo_path / discovered
+                else:
+                    return BackfillResult(
+                        success=False,
+                        target="test_data",
+                        source=str(source_path),
+                        destination=str(local_path),
+                        error=f"test_data_path not found in repo: {configured_path} (auto-discovery also failed)",
+                        duration_seconds=(datetime.now() - start_time).total_seconds()
+                    )
 
             # Create destination directory (with path guard)
             assert_write_allowed(local_path, reason=f"backfill test data for {family}")
@@ -502,6 +512,46 @@ class BackfillService:
                 error=str(e),
                 duration_seconds=(datetime.now() - start_time).total_seconds()
             )
+
+    def _auto_discover_test_data_path(self, repo_path: Path, family: str) -> Optional[str]:
+        """Auto-discover test data directory in cloned repo.
+
+        Tries common Aspose repo layouts in priority order, then deep-scans
+        the Examples/ directory as a fallback.
+
+        Args:
+            repo_path: Path to cloned repository root
+            family: Family identifier (e.g. 'email', 'imaging')
+
+        Returns:
+            Relative path string (e.g. 'Examples/Data') or None
+        """
+        candidates = [
+            "Examples/Data",
+            "Data",
+            f"Examples/Aspose.{family.upper()}.Examples.CSharp/Data",
+            f"Examples/Aspose.{family.capitalize()}.Examples.CSharp/Data",
+            "Examples/TestData",
+            "TestData",
+            "Samples/Data",
+        ]
+
+        for candidate in candidates:
+            path = repo_path / candidate
+            if path.exists() and path.is_dir() and any(path.iterdir()):
+                logger.info(f"Auto-discovered test_data_path: {candidate}")
+                return candidate
+
+        # Deep scan: look for any "Data" dir under Examples/
+        examples_dir = repo_path / "Examples"
+        if examples_dir.exists():
+            for item in sorted(examples_dir.rglob("Data")):
+                if item.is_dir() and any(item.iterdir()):
+                    rel = str(item.relative_to(repo_path)).replace("\\", "/")
+                    logger.info(f"Auto-discovered test_data_path (deep scan): {rel}")
+                    return rel
+
+        return None
 
     def _get_or_clone_repo(
         self,

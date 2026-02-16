@@ -204,19 +204,25 @@ def parse_cs0104_error(error: str) -> Optional[Tuple[str, str]]:
 
 def fix_cs0104_ambiguous_reference(code: str, type_name: str, fq_name: str) -> Tuple[str, str]:
     """
-    Fix CS0104 by fully qualifying the ambiguous type with its Aspose namespace.
+    Fix CS0104 by fully qualifying the ambiguous type with its preferred namespace.
 
-    Replaces patterns like 'new ParallelOptions' with 'new Aspose.Zip.Saving.ParallelOptions'.
+    Replaces all usage patterns: new Task(...), Task.WhenAll(...), Task<bool>, async Task Method.
     """
+    esc = re.escape(type_name)
     patterns = [
-        (rf'\bnew\s+{re.escape(type_name)}\b', f'new {fq_name}'),
-        (rf'(?<![.\w]){re.escape(type_name)}(?=\s+\w)', fq_name),
+        (rf'\bnew\s+{esc}\b', f'new {fq_name}'),                # new Task(...)
+        (rf'(?<![.\w]){esc}(?=\.)', fq_name),                    # Task.WhenAll, Task.Delay
+        (rf'(?<![.\w]){esc}(?=<)', fq_name),                     # Task<bool>, Task<IActionResult>
+        (rf'(?<![.\w]){esc}(?=\s+\w)', fq_name),                 # Task methodName, async Task Convert
     ]
+    applied = False
     for pattern, replacement in patterns:
         new_code = re.sub(pattern, replacement, code)
         if new_code != code:
-            return new_code, f"CS0104: Fully qualified ambiguous '{type_name}' as '{fq_name}'"
             code = new_code
+            applied = True
+    if applied:
+        return code, f"CS0104: Fully qualified ambiguous '{type_name}' as '{fq_name}'"
     return code, ""
 
 
@@ -259,6 +265,22 @@ def fix_cs0234_namespace_missing(
                 break
 
     if not correct_ns or correct_ns == wrong_namespace:
+        # Fallback: type_name might be a sub-namespace segment, not a type
+        # e.g., CS0234: 'Mail' does not exist in 'Aspose.Email' -> remove 'using Aspose.Email.Mail;'
+        full_bad_ns = f"{wrong_namespace}.{type_name}"
+        bad_using = f"using {full_bad_ns};"
+        if bad_using in code:
+            # Check if this namespace exists in the catalog
+            ns_set = set()
+            if hasattr(catalog, 'get_namespace_set'):
+                ns_set = catalog.get_namespace_set()
+            elif isinstance(catalog, dict):
+                ns_set = set(catalog.get('namespaces', []))
+            if full_bad_ns not in ns_set:
+                fixed_code = code.replace(bad_using + '\n', '', 1)
+                if fixed_code == code:
+                    fixed_code = code.replace(bad_using, '', 1)
+                return fixed_code, f"CS0234: Removed invalid namespace '{full_bad_ns}' (not in catalog)"
         return code, ""
 
     correct_using = f"using {correct_ns};"
@@ -369,7 +391,7 @@ def fix_cs1513_missing_brace(code: str) -> Tuple[str, str]:
     return fixed_code, f"CS1513: Added {missing} missing closing brace(s)"
 
 
-def fix_cs0246_missing_using(code: str, type_name: str, using_directives: Dict[str, str] = None) -> Tuple[str, str]:
+def fix_cs0246_missing_using(code: str, type_name: str, using_directives: Dict[str, str] = None, catalog=None) -> Tuple[str, str]:
     """
     Fix CS0246: Add missing using directive from allowlist.
 
@@ -389,6 +411,19 @@ def fix_cs0246_missing_using(code: str, type_name: str, using_directives: Dict[s
 
     using_directive = directives[type_name]
 
+    # Validate namespace if catalog is available
+    if catalog and hasattr(catalog, 'get_namespace_set'):
+        # Extract namespace from using directive (e.g., "using Aspose.Email;" -> "Aspose.Email")
+        ns_match = re.match(r'using\s+([\w.]+)\s*;', using_directive)
+        if ns_match:
+            ns = ns_match.group(1)
+            bcl_prefixes = ('System', 'Microsoft', 'Newtonsoft')
+            if not any(ns.startswith(p) for p in bcl_prefixes):
+                ns_set = catalog.get_namespace_set()
+                if ns not in ns_set:
+                    logger.warning(f"CS0246: Skipping '{using_directive}' — namespace '{ns}' not in catalog")
+                    return code, ""
+
     # Check if using directive already exists
     if using_directive in code:
         return code, ""
@@ -399,7 +434,11 @@ def fix_cs0246_missing_using(code: str, type_name: str, using_directives: Dict[s
 
     for idx, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith('using ') and stripped.endswith(';'):
+        # Only match namespace using directives, NOT C# using statements
+        # 'using System;' YES | 'using var x = ...;' NO | 'using (var x = ...' NO
+        if (stripped.startswith('using ') and stripped.endswith(';')
+            and not re.match(r'using\s+(var|[a-z_])\s', stripped)
+            and not stripped.startswith('using (')):
             last_using_idx = idx
 
     # Insert after last using directive
@@ -1253,6 +1292,71 @@ def fix_placeholder_directory_paths(code: str) -> Tuple[str, str]:
     return fixed_code, fix_desc
 
 
+def fix_hardcoded_file_paths(code: str) -> Tuple[str, str]:
+    """Replace hardcoded absolute file paths with just the filename for runtime portability."""
+    applied = False
+
+    # Pattern 1: @"C:\anything\filename.ext" -> "filename.ext"
+    pattern1 = r'@"[A-Za-z]:\\[^"]*\\([^"\\]+\.\w{2,5})"'
+    new_code = re.sub(pattern1, r'"\1"', code)
+    if new_code != code:
+        code = new_code
+        applied = True
+
+    # Pattern 2: "C:\\anything\\filename.ext" (non-verbatim) -> "filename.ext"
+    pattern2 = r'"[A-Za-z]:\\\\[^"]*\\\\([^"\\\\]+\.\w{2,5})"'
+    new_code = re.sub(pattern2, r'"\1"', code)
+    if new_code != code:
+        code = new_code
+        applied = True
+
+    # Pattern 3: "/absolute/path/filename.ext" -> "filename.ext"
+    pattern3 = r'"/[^"]+/([^"/]+\.\w{2,5})"'
+    new_code = re.sub(pattern3, r'"\1"', code)
+    if new_code != code:
+        code = new_code
+        applied = True
+
+    # Pattern 4: @"C:\DirectoryName" (directory path, no extension) -> "."
+    # Match verbatim strings that are drive-letter paths without file extensions
+    pattern4 = r'@"[A-Za-z]:\\[^"]*"'
+    def _replace_dir_path(m):
+        path = m.group(0)[2:-1]  # Strip @" and "
+        # Extract last path segment
+        segments = path.replace('/', '\\').split('\\')
+        last = segments[-1] if segments else 'output'
+        # If last segment has no extension, it's a directory path
+        if '.' not in last:
+            return '"."'  # Use current directory
+        return m.group(0)  # Has extension — leave for pattern 1/2/3
+
+    new_code = re.sub(pattern4, _replace_dir_path, code)
+    if new_code != code:
+        code = new_code
+        applied = True
+
+    # Pattern 5: "C:\\DirectoryName" (escaped backslash directory) -> "."
+    pattern5 = r'"[A-Za-z]:\\\\[^"]*"'
+    def _replace_esc_dir_path(m):
+        path = m.group(0)[1:-1]  # Strip quotes
+        segments = path.replace('\\\\', '\\').replace('/', '\\').split('\\')
+        last = segments[-1] if segments else 'output'
+        if '.' not in last:
+            return '"."'
+        return m.group(0)
+
+    new_code = re.sub(pattern5, _replace_esc_dir_path, code)
+    if new_code != code:
+        code = new_code
+        applied = True
+
+    if applied:
+        fix_desc = "RUNTIME: Replaced hardcoded absolute file paths with relative filenames"
+        logger.info(f"Applied fix: {fix_desc}")
+        return code, fix_desc
+    return code, ""
+
+
 def fix_extract_output_directory(code: str) -> Tuple[str, str]:
     """
     Fix runtime DirectoryNotFoundException for Extract calls targeting subdirectories.
@@ -2062,6 +2166,18 @@ def apply_semantic_microfixes(
     if fix_desc:
         applied_fixes.append(fix_desc)
 
+    # 0b. Proactively fully qualify known ambiguous types (cross-family CS0104 prevention)
+    # Types like 'Task' exist in both System.Threading.Tasks and Aspose.Email.Calendar,
+    # causing CS0104 when both usings are present. Qualify them BEFORE first compile.
+    _PROACTIVE_QUALIFICATIONS = {
+        'Task': 'System.Threading.Tasks.Task',
+    }
+    for _type_name, _fq_name in _PROACTIVE_QUALIFICATIONS.items():
+        if _type_name in fixed_code:
+            fixed_code, fix_desc = fix_cs0104_ambiguous_reference(fixed_code, _type_name, _fq_name)
+            if fix_desc:
+                applied_fixes.append(f"PROACTIVE {fix_desc}")
+
     # 1. Apply family-specific proactive fixes (LEGACY — generic catalog-driven fixers
     # in steps 6-8 below now handle most of these cases autonomously. Per-family files
     # are kept as fallback for truly unique patterns that can't be derived from catalog.)
@@ -2095,6 +2211,11 @@ def apply_semantic_microfixes(
 
     # 2b. Fix placeholder directory paths (zip_folder, folder, etc.)
     fixed_code, fix_desc = fix_placeholder_directory_paths(fixed_code)
+    if fix_desc:
+        applied_fixes.append(fix_desc)
+
+    # 2b2. Fix hardcoded absolute file paths (C:\...\file.ext -> file.ext)
+    fixed_code, fix_desc = fix_hardcoded_file_paths(fixed_code)
     if fix_desc:
         applied_fixes.append(fix_desc)
 
