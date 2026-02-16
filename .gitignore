@@ -1,135 +1,110 @@
-# Python virtual environment and bytecode
-.venv/
-venv/
-*.pyc
-*.pyo
+# Python virtual environments and bytecode
+/.venv/
+/venv/
 __pycache__/
+*.py[cod]
+*.pyo
 .pytest_cache/
 
-# Runtime directories
-artifacts/
-cache/
-data/
-logs/
-workspaces/
-validation-results/
-
-# Reports - keep engineering logs but ignore run artifacts
-reports/*
-!reports/SONNET_*.md
-!reports/CODEX_*.md
-!reports/STATUS.md
-!reports/TASK_BACKLOG.md
-!reports/agents/
-!reports/preflight_candidates.md
-!reports/preflight_tree.txt
-!reports/report_md_files.txt
-!reports/root_md_files.txt
-!reports/root_scripts.txt
-
 # Build artifacts
-test-examples/bin/
-test-examples/obj/
 *.dll
 *.exe
 *.pdb
+/test-examples/**/bin/
+/test-examples/**/obj/
+/test-examples/**/.vs/
 
-# Temporary files
-*.db
-*.db-journal
-*.zip
-!test-data/**/*.zip
-snippet_*_content.txt
+# Runtime/generated directories (root-scoped)
+/artifacts/
+/cache/
+/data/
+/logs/
+/workspace/
+/workspaces/
+/runs/
+/validation-results/
+/local-telemetry/
+/.cache/
+/.benchmarks/
+/node_modules/
+/.claude/
+/backups/
+/temp/
+/catalog-types/
+/KB/
+/report/
+/reports/
+/plans/
+/test-data/
+/test-content/
+/test_determinism/
+/%LOCALAPPDATA%/
+/tools/api-index-generator/
+/tools/create_phase*.py
+/tools/fix_phase*.py
 
-# Root artifacts
+# Generated config derivatives
+/config/families/*_api_catalog*.json
+/config/families/barcode.json
+/config/families/ocr*.json
+/config/families/psd*.json
+/config/global_*.json
+
+# Temporary and local files
 .coverage
-*.log
-*.db
-*.zip
-*.txt
-*.json
+*.db-journal
+snippet_*_content.txt
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.~lock.*
 
-# Temporary project management files
+# Root-generated artifacts
+/*.log
+/*.zip
+/*.db
+/*.txt
+/*.json
+/NUL
+/pipeline_full.log
+/zip_catalog_stderr.txt
+
+!/requirements.txt
+!/requirements-dev.txt
+
+# Root temporary project management files
 /PHASE*.md
 /PROMPT*.md
 /COMPLETE*.md
 /FIXES*.md
 /IMPLEMENTATION*.md
 /INTEGRATION*.md
-create_*.py
-fix_*.py
-collect_*.py
-recompile_*.py
-query_run.py
-run_with_userpath.py
-run_pytest.py
-run_track2_unit_fast.py
+/create_*.py
+/fix_*.py
+/collect_*.py
+/recompile_*.py
+/query_run.py
+/run_with_userpath.py
+/run_pytest.py
+/run_track2_unit_fast.py
 
-# Release artifacts and packages
+# Releases and secrets
 /release/
-
-# Secrets and environment variables
 .env
 .env.local
-secrets/
+/secrets/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-/Python313Libsite-packages
-# Local telemetry directory
-/local-telemetry
+# Tooling and editor
+/.vscode/
+/.idea/
+/Python313Libsite-packages/
 
-# Runtime workspace directories (workspace copy mode artifacts)
-workspace/
-/runs/
-
-# Test determinism artifacts
-test_determinism/
-
-# Pipeline logs
-pipeline_full.log
-
-# Test reports and outputs
-test_*.txt
-test_results*.txt
-validation_output.log
-validation_run_*.log
-
-# Generated reports and plans
-reports/
-plans/
-
-# Knowledge base (generated documentation)
-KB/
-
-# Test data and content (should not be committed)
-test-data/
-test-content/
-
-# Build and cache directories
-.cache/
-.benchmarks/
-
-# IDE and editor files
-*.swp
-*.swo
-
-# Python environment
-/Python313Libsite-packages
-
-# NUL file (Windows artifact)
-NUL
-/report
-node_modules
-/.claude
-
-# Local scratch and backup artifacts
-/backups/
-/temp/
-/catalog-types/
-*.backup
+# Local scratch backups
 *.markdown_backup
 *.backup_*
+*.backup
+/local-telemetry
+/report
+/runs
