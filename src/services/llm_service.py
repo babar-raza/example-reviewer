@@ -134,8 +134,8 @@ using (var archive = new Archive(settings))
 
     def __init__(
         self,
-        provider: str = "openai",
-        model: str = "gpt-4o",
+        provider: str = "company",
+        model: str = "gpt-oss-120b",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         temperature: float = 0.2,
@@ -180,7 +180,7 @@ using (var archive = new Archive(settings))
         self._client = None
         self._capabilities: Optional[ProviderCapabilities] = None
         self._capabilities_detected = False
-        self._executor = ThreadPoolExecutor(max_workers=1)  # For timeout enforcement
+        self._executor = ThreadPoolExecutor(max_workers=2)  # 2 workers to survive starvation from timed-out thread
         self._last_response: Optional[LLMResponse] = None  # Last LLM response for telemetry capture
 
         # Initialize complexity classifier for smart routing
@@ -190,6 +190,7 @@ using (var archive = new Archive(settings))
         self.routing_config: Optional[Dict[str, Any]] = None
         self.routing_enabled = False
         self._fallback_client = None
+        self._ollama_manager = None  # Lazy-initialized OllamaManager for auto-start
 
         # Telemetry tracking for routing decisions
         self._tier_distribution = {"small": 0, "medium": 0, "large": 0}
@@ -202,6 +203,22 @@ using (var archive = new Archive(settings))
         if not OPENAI_AVAILABLE:
             logger.warning("OpenAI library not available. LLM features disabled.")
             return
+
+        # Diagnostic logging for provider routing
+        api_key_status = f"SET ({len(self.api_key)} chars)" if self.api_key else "MISSING"
+        logger.info(
+            f"LLM client init: provider={self.provider}, model={self.model}, "
+            f"base_url={self.base_url}, api_key={api_key_status}"
+        )
+
+        # Guard against OPENAI_BASE_URL env var silently overriding code-level base_url
+        env_base_url = os.getenv("OPENAI_BASE_URL")
+        if env_base_url and self.base_url and env_base_url != self.base_url:
+            logger.warning(
+                f"OPENAI_BASE_URL env var ({env_base_url}) differs from configured "
+                f"base_url ({self.base_url}). Removing env var to prevent silent override."
+            )
+            os.environ.pop("OPENAI_BASE_URL", None)
 
         client_kwargs = {}
 
@@ -224,7 +241,18 @@ using (var archive = new Archive(settings))
 
         try:
             self._client = OpenAI(**client_kwargs)
-            logger.debug(f"Initialized LLM client for {self.provider} with timeout={self.timeout_seconds}s")
+            # Verify the client's actual base_url matches what we intended
+            actual_base = str(self._client.base_url).rstrip("/")
+            intended_base = (client_kwargs.get("base_url") or "https://api.openai.com/v1").rstrip("/")
+            if actual_base != intended_base:
+                logger.warning(
+                    f"Client base_url mismatch! Intended: {intended_base}, "
+                    f"Actual: {actual_base}. Check OPENAI_BASE_URL env var."
+                )
+            logger.info(
+                f"LLM client initialized: provider={self.provider}, "
+                f"base_url={actual_base}, timeout={self.timeout_seconds}s"
+            )
         except Exception as e:
             logger.warning(f"Failed to initialize OpenAI client: {e}. LLM features disabled.")
             self._client = None
@@ -237,6 +265,75 @@ using (var archive = new Archive(settings))
         if self.provider != "ollama" and not self.api_key:
             return False
         return True
+
+    def preflight_check(self) -> Dict[str, Any]:
+        """
+        Perform a lightweight availability check on primary and fallback endpoints.
+        Returns a dict with status of each endpoint.
+        """
+        result = {
+            "primary": {"available": False, "model": self.model, "base_url": self.base_url, "error": None},
+            "fallback": {"available": False, "model": None, "base_url": None, "error": None},
+        }
+
+        # Check primary
+        if self._client:
+            try:
+                self._client.models.list()
+                result["primary"]["available"] = True
+            except Exception as e:
+                result["primary"]["error"] = str(e)[:200]
+        else:
+            result["primary"]["error"] = "Client not initialized (missing API key?)"
+
+        # Check fallback
+        if self.routing_config and self.routing_config.get("fallback_enabled", True):
+            fallback_client = self._get_fallback_client()
+            fallback_model = self._get_fallback_model()
+            result["fallback"]["model"] = fallback_model
+
+            providers = self.routing_config.get("providers", {})
+            ollama_config = providers.get("ollama", {})
+            result["fallback"]["base_url"] = ollama_config.get("base_url", "http://localhost:11434/v1")
+
+            if fallback_client:
+                try:
+                    fallback_client.models.list()
+                    result["fallback"]["available"] = True
+                except Exception as e:
+                    result["fallback"]["error"] = str(e)[:200]
+                    # Auto-start Ollama if configured
+                    if ollama_config.get("auto_start", True):
+                        ollama_status = self._ensure_ollama_running(ollama_config)
+                        if ollama_status and ollama_status.is_running:
+                            self._fallback_client = None  # Force re-creation
+                            fallback_client = self._get_fallback_client()
+                            if fallback_client:
+                                try:
+                                    fallback_client.models.list()
+                                    result["fallback"]["available"] = True
+                                    result["fallback"]["error"] = None
+                                    result["fallback"]["auto_started"] = True
+                                except Exception as e2:
+                                    result["fallback"]["error"] = f"Auto-started but still unavailable: {str(e2)[:150]}"
+            else:
+                result["fallback"]["error"] = "Fallback client not initialized"
+                # Also try auto-start if client wasn't initialized
+                if ollama_config.get("auto_start", True):
+                    ollama_status = self._ensure_ollama_running(ollama_config)
+                    if ollama_status and ollama_status.is_running:
+                        self._fallback_client = None
+                        fallback_client = self._get_fallback_client()
+                        if fallback_client:
+                            try:
+                                fallback_client.models.list()
+                                result["fallback"]["available"] = True
+                                result["fallback"]["error"] = None
+                                result["fallback"]["auto_started"] = True
+                            except Exception:
+                                pass
+
+        return result
 
     def set_routing_config(self, routing_config: Dict[str, Any]) -> None:
         """
@@ -296,6 +393,45 @@ using (var archive = new Archive(settings))
             return ollama_config.get("model", "qwen2.5-coder:7b")
         return "qwen2.5-coder:7b"
 
+    def _ensure_ollama_running(self, ollama_config: Dict[str, Any]):
+        """
+        Ensure Ollama is running, using OllamaManager for lifecycle management.
+
+        Args:
+            ollama_config: Ollama provider configuration dict
+
+        Returns:
+            OllamaStatus if manager was created, None if unavailable
+        """
+        if self._ollama_manager is not None:
+            return self._ollama_manager.ensure_running()
+
+        try:
+            from .ollama_manager import OllamaManager
+
+            # Strip /v1 suffix — OllamaManager uses the native API (not OpenAI-compat)
+            base_url = ollama_config.get("base_url", "http://localhost:11434/v1")
+            if base_url.endswith("/v1"):
+                base_url = base_url[:-3]
+
+            self._ollama_manager = OllamaManager(
+                base_url=base_url,
+                model=ollama_config.get("model", "qwen2.5-coder:7b"),
+                auto_start=ollama_config.get("auto_start", True),
+                startup_timeout_seconds=ollama_config.get("startup_timeout_seconds", 30),
+                auto_pull_model=ollama_config.get("auto_pull_model", True),
+                pull_timeout_seconds=ollama_config.get("pull_timeout_seconds", 600),
+            )
+
+            return self._ollama_manager.ensure_running()
+
+        except ImportError:
+            logger.warning("OllamaManager not available")
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to initialize OllamaManager: {e}")
+            return None
+
     def _call_with_fallback(self, model: str, messages: List[Dict], **kwargs) -> Optional[Any]:
         """
         Try calling company LLM, fallback to Ollama if unavailable.
@@ -324,6 +460,12 @@ using (var archive = new Archive(settings))
             error_str = str(e).lower()
             if self.routing_config.get("fallback_on_error", True) or isinstance(e, TimeoutError):
                 logger.warning(f"Primary provider unavailable ({type(e).__name__}): {e}. Attempting fallback to Ollama.")
+
+                # Ensure Ollama is running before attempting fallback
+                providers = self.routing_config.get("providers", {})
+                ollama_config = providers.get("ollama", {})
+                if ollama_config.get("auto_start", True):
+                    self._ensure_ollama_running(ollama_config)
 
                 try:
                     # Try fallback client with fallback-specific model
@@ -436,13 +578,11 @@ using (var archive = new Archive(settings))
         try:
             return future.result(timeout=timeout_seconds)
         except FutureTimeout:
-            # Log timeout error
+            future.cancel()  # Best-effort cancellation of stuck thread
             logger.error(
                 f"LLM timeout exceeded after {timeout_seconds}s: {label} "
                 f"(provider={self.provider}, model={self.model})"
             )
-            # Note: Telemetry event 'timeout_exceeded' should be emitted by caller
-            # who has access to db and run_id context
             raise TimeoutError(
                 f"LLM request timeout after {timeout_seconds}s: {label} "
                 f"(provider={self.provider}, model={self.model})"
@@ -571,6 +711,41 @@ using (var archive = new Archive(settings))
             LLMResponse with content and metadata
         """
         if not self._client:
+            # Primary client unavailable — attempt fallback if routing is configured
+            if self.routing_config and self.routing_config.get("fallback_enabled", True):
+                fallback_client = self._get_fallback_client()
+                if fallback_client:
+                    fallback_model = self._get_fallback_model()
+                    logger.warning(
+                        f"Primary client not initialized, using fallback: {fallback_model}"
+                    )
+                    messages = []
+                    if system_prompt:
+                        messages.append({"role": "system", "content": system_prompt})
+                    messages.append({"role": "user", "content": prompt})
+                    try:
+                        import time as _time
+                        start = _time.time()
+                        response = fallback_client.chat.completions.create(
+                            model=fallback_model,
+                            messages=messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature if temperature is not None else self.temperature,
+                        )
+                        elapsed = int((_time.time() - start) * 1000)
+                        content = response.choices[0].message.content if response.choices else ""
+                        return LLMResponse(
+                            content=content,
+                            model=fallback_model,
+                            usage=dict(response.usage) if response.usage else {},
+                            finish_reason=response.choices[0].finish_reason if response.choices else "error",
+                            latency_ms=elapsed,
+                            success=True,
+                            error=None,
+                        )
+                    except Exception as e:
+                        logger.error(f"Fallback client also failed in complete(): {e}")
+
             return LLMResponse(
                 content="",
                 model=self.model,
@@ -578,7 +753,7 @@ using (var archive = new Archive(settings))
                 finish_reason="error",
                 latency_ms=0,
                 success=False,
-                error="LLM client not initialized"
+                error="LLM client not initialized (primary and fallback both unavailable)"
             )
 
         messages = []
@@ -908,6 +1083,19 @@ using (var archive = new Archive(settings))
                 parts.append(f"- `{name}` is ambiguous across: {', '.join(amb_ns)}")
                 parts.append(f"  Use fully qualified name (e.g. `{amb_ns[0]}.{name}`)")
 
+        # ---- Add mined using patterns if available ----
+        if hasattr(catalog, 'mine_using_patterns') and type_names:
+            try:
+                mined_patterns = catalog.mine_using_patterns(self.family, self.db)
+                for name in type_names:
+                    if name in mined_patterns and mined_patterns[name]:
+                        parts.append(f"- Reference examples using `{name}` typically include:")
+                        for using in mined_patterns[name][:5]:  # Limit to 5 usings
+                            parts.append(f"    using {using};")
+            except Exception as e:
+                # Graceful degradation - log but don't fail
+                logger.debug(f"Could not mine using patterns: {e}")
+
         # ---- Add namespace list summary (for CS0246/CS0234 missing using) ----
         if error_code in ("CS0246", "CS0234") and not parts:
             # Type not found in catalog, provide namespace list for reference
@@ -921,6 +1109,66 @@ using (var archive = new Archive(settings))
                     parts.append(f"  ... and {len(all_ns) - 15} more")
 
         return "\n".join(parts) if parts else ""
+
+    def _build_few_shot_section(
+        self,
+        error_logs: str,
+        family: str,
+        catalog=None,
+        similar_examples=None
+    ) -> str:
+        """Build family-specific few-shot examples from reference corpus.
+
+        Falls back to static FEW_SHOT_EXAMPLES when no dynamic examples available.
+
+        Args:
+            error_logs: Compilation error output
+            family: Family name (zip, words, etc.)
+            catalog: Optional API catalog for error-specific context
+            similar_examples: Optional list that can be either:
+                             - List of code strings (current orchestrator format)
+                             - List of (example_id, code, score, metadata) tuples (future)
+
+        Returns:
+            Formatted few-shot examples section for LLM prompt
+        """
+        parts = ["## Minimal Fix Patterns:"]
+
+        # Extract error code for optional enhancement
+        error_code = None
+        error_code_match = re.search(r'(CS\d{4})', error_logs)
+        if error_code_match:
+            error_code = error_code_match.group(1)
+
+        # Use similar CS_FILE examples if available (tuple format only)
+        if similar_examples:
+            # Check if we have tuple format (enhanced) or string format (current)
+            if similar_examples and isinstance(similar_examples[0], tuple):
+                cs_file_count = 0
+                for item in similar_examples[:2]:
+                    # Unpack tuple: (example_id, code, score, metadata)
+                    ex_id, code, score, meta = item
+                    # Prioritize CS_FILE (canonical reference) examples
+                    if meta.get("source_type") == "cs_file":
+                        topic = meta.get("topic", "similar example")
+                        parts.append(f"\nWorking reference example ({topic}):")
+                        parts.append("```csharp")
+                        # Limit to first 500 chars to keep prompt concise
+                        parts.append(code[:500])
+                        if len(code) > 500:
+                            parts.append("// ... (truncated)")
+                        parts.append("```")
+                        cs_file_count += 1
+
+                # If we found CS_FILE examples, use them instead of static examples
+                if cs_file_count > 0:
+                    if error_code:
+                        parts.append(f"\n(Error-specific patterns for {error_code})")
+                    return "\n".join(parts)
+
+        # Fallback to static examples when vector DB disabled, string format, or no CS_FILE matches
+        parts.append(self.FEW_SHOT_EXAMPLES)
+        return "\n".join(parts)
 
     def _fix_compile_code(
         self,
@@ -1052,11 +1300,14 @@ If you cannot fix the code without major changes, return the original code uncha
             for hint in scaffolding_hints:
                 prompt_parts.append(f"- {hint}")
 
-        # Add few-shot examples
+        # Add few-shot examples (dynamic or static)
+        family_name = family_config.get("family", "unknown") if isinstance(family_config, dict) else (family_config.family if family_config else "unknown")
+        few_shot_section = self._build_few_shot_section(
+            error_logs, family_name, catalog, similar_examples
+        )
         prompt_parts.extend([
             "",
-            "## Minimal Fix Patterns:",
-            self.FEW_SHOT_EXAMPLES,
+            few_shot_section,
         ])
 
         # Add API patterns from config
@@ -1629,7 +1880,7 @@ Return the C# code now:"""
             rejection_reason: Short reason code (e.g., "empty_response")
             rejection_details: Full structured details
         """
-        from datetime import datetime
+        from datetime import datetime, timezone
         from .models import TelemetryEvent
 
         try:
@@ -1646,7 +1897,7 @@ Return the C# code now:"""
                     'rejection_reason': rejection_reason,
                     **rejection_details,
                 },
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
             )
             db.save_telemetry_event(event)
 
@@ -1731,6 +1982,7 @@ Return a JSON object with the following structure:
         markdown_content: str,
         code_snippets: List[Dict[str, Any]],
         catalog=None,
+        family: str = None,
     ) -> Dict[str, Any]:
         """
         Review markdown with GUARANTEED structured output using Instructor.
@@ -1743,6 +1995,8 @@ Return a JSON object with the following structure:
             markdown_content: Full markdown file content
             code_snippets: List of code snippets with context
                 Each snippet should have: code, example_id, line, language
+            catalog: Optional API catalog service
+            family: Family identifier for catalog-based validation (e.g., 'ocr', 'zip', 'words')
 
         Returns:
             Structured dictionary with:
@@ -1762,22 +2016,26 @@ Return a JSON object with the following structure:
 
         # Use Instructor if available for guaranteed schema compliance
         if INSTRUCTOR_AVAILABLE:
-            return self._review_with_instructor(markdown_content, code_snippets, catalog=catalog)
+            return self._review_with_instructor(markdown_content, code_snippets, catalog=catalog, family=family)
         else:
             logger.warning("Instructor not available, falling back to manual JSON parsing")
-            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog)
+            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog, family=family)
 
     def _review_with_instructor(
         self,
         markdown_content: str,
         code_snippets: List[Dict[str, Any]],
         catalog=None,
+        family: str = None,
     ) -> Dict[str, Any]:
         """
         Review using Instructor for guaranteed schema compliance.
 
         This method uses Pydantic models to enforce the response schema,
         with automatic retries on validation failure.
+
+        Args:
+            family: Family identifier for catalog-based validation (e.g., 'ocr', 'zip', 'words')
         """
         system_prompt = """You are a technical documentation reviewer specializing in code example quality.
 
@@ -1803,7 +2061,22 @@ Severity definitions:
 - error: Must be fixed before publishing
 - critical: Severe issue requiring immediate attention
 
-ONLY report actual issues. If the code is fine, set approved=true with empty issues list."""
+CRITICAL: You MUST respond with a JSON object matching this EXACT schema:
+{
+  "approved": boolean,
+  "issues": [
+    {
+      "snippet_index": integer (0-based index of code snippet),
+      "issue_type": "syntax_error"|"missing_context"|"incomplete_code"|"api_mismatch"|"security_concern"|"formatting_issue"|"documentation_gap"|"other",
+      "description": "string (minimum 10 characters)",
+      "suggestion": "string or null",
+      "severity": "info"|"warning"|"error"|"critical"
+    }
+  ]
+}
+
+Do NOT wrap the response in markdown code blocks. Do NOT include explanatory text before or after the JSON.
+ONLY return the JSON object itself. If the code is fine, return: {"approved": true, "issues": []}"""
 
         prompt_parts = [
             "Review the following markdown document with code snippets:",
@@ -1833,24 +2106,40 @@ ONLY report actual issues. If the code is fine, set approved=true with empty iss
                 prompt_parts.append(catalog_context)
                 prompt_parts.append("")
 
-        prompt_parts.append("Review these snippets and provide your assessment:")
+        prompt_parts.extend([
+            "Review these snippets and provide your assessment.",
+            "",
+            "RESPONSE FORMAT REQUIREMENT:",
+            "Return ONLY a JSON object with 'approved' (boolean) and 'issues' (array).",
+            "Each issue must have: snippet_index (int), issue_type (enum), description (string), suggestion (string/null), severity (enum).",
+            "Do NOT wrap in markdown. Do NOT add explanatory text. ONLY the JSON object.",
+        ])
 
         try:
             # Wrap client with Instructor for structured outputs
-            client = instructor.from_openai(self._client)
+            # Use Mode.JSON to bypass tool_call mechanism entirely.
+            # Mode.TOOLS fails with OpenAI-compatible providers that return
+            # multiple tool_calls (Instructor asserts exactly 1).
+            # Mode.JSON uses response_format={"type":"json_object"} instead.
+            _instructor_mode = instructor.Mode.JSON
+            client = instructor.from_openai(self._client, mode=_instructor_mode)
 
             # Make the request with automatic schema enforcement
             _instructor_start = time.time()
-            response = client.chat.completions.create(
-                model=self.model,
-                response_model=ReviewResponse,
-                messages=[
+
+            # Build request parameters
+            request_params = {
+                "model": self.model,
+                "response_model": ReviewResponse,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": "\n".join(prompt_parts)},
                 ],
-                max_retries=3,  # Automatic retry on validation failure
-                temperature=0,  # Deterministic for consistency
-            )
+                "max_retries": 3,  # Automatic retry on validation failure
+                "temperature": 0,  # Deterministic for consistency
+            }
+
+            response = client.chat.completions.create(**request_params)
             _instructor_latency = int((time.time() - _instructor_start) * 1000)
 
             # Capture for telemetry (Instructor doesn't expose raw usage)
@@ -1878,6 +2167,18 @@ ONLY report actual issues. If the code is fine, set approved=true with empty iss
                     'severity': issue.severity.value,
                 })
 
+            # TASK-FIX-REVIEW-03: Filter out false-positive API mismatches using catalog
+            if family:
+                legitimate_issues = [
+                    issue for issue in processed_issues
+                    if self._validate_api_mismatch_against_catalog(issue, family)
+                ]
+                filtered_count = len(processed_issues) - len(legitimate_issues)
+                if filtered_count > 0:
+                    logger.info(f"[{family}] Filtered {filtered_count} false-positive API mismatch issues using catalog validation")
+                processed_issues = legitimate_issues
+
+            logger.info(f"Instructor review succeeded (mode={_instructor_mode.value})")
             return {
                 'approved': response.approved,
                 'issues': processed_issues,
@@ -1886,20 +2187,87 @@ ONLY report actual issues. If the code is fine, set approved=true with empty iss
             }
 
         except Exception as e:
-            logger.warning(f"Instructor-based review failed: {e}, falling back to manual parsing")
-            # Fall back to manual parsing on error
-            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog)
+            error_type = type(e).__name__
+            error_msg = str(e)
+            logger.warning(
+                f"Instructor review failed (mode={_instructor_mode.value}): "
+                f"{error_type}: {error_msg}. Model: {self.model}."
+            )
+            logger.debug("Full Instructor error traceback:", exc_info=True)
+
+            # Fallback chain: Mode.JSON -> Mode.JSON_SCHEMA -> manual parsing
+            if _instructor_mode == instructor.Mode.JSON:
+                try:
+                    logger.info("Retrying with instructor Mode.JSON_SCHEMA")
+                    client2 = instructor.from_openai(self._client, mode=instructor.Mode.JSON_SCHEMA)
+                    request_params_retry = {
+                        "model": self.model,
+                        "response_model": ReviewResponse,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": "\n".join(prompt_parts)},
+                        ],
+                        "max_retries": 2,
+                        "temperature": 0,
+                    }
+                    response = client2.chat.completions.create(**request_params_retry)
+                    _instructor_latency = int((time.time() - _instructor_start) * 1000)
+                    self._last_response = LLMResponse(
+                        content=response.model_dump_json() if hasattr(response, 'model_dump_json') else str(response),
+                        model=self.model, usage={}, finish_reason="stop",
+                        latency_ms=_instructor_latency, success=True,
+                    )
+                    processed_issues = []
+                    for issue in response.issues:
+                        example_id = 'unknown'
+                        if 0 <= issue.snippet_index < len(code_snippets):
+                            example_id = code_snippets[issue.snippet_index].get('example_id', 'unknown')
+                        processed_issues.append({
+                            'example_id': example_id,
+                            'issue_type': issue.issue_type.value,
+                            'description': issue.description,
+                            'suggestion': issue.suggestion,
+                            'severity': issue.severity.value,
+                        })
+                    if family:
+                        legitimate_issues = [
+                            issue for issue in processed_issues
+                            if self._validate_api_mismatch_against_catalog(issue, family)
+                        ]
+                        filtered_count = len(processed_issues) - len(legitimate_issues)
+                        if filtered_count > 0:
+                            logger.info(f"[{family}] Filtered {filtered_count} false-positive API mismatch issues using catalog validation")
+                        processed_issues = legitimate_issues
+                    logger.info("Instructor review succeeded (mode=JSON_SCHEMA, fallback)")
+                    return {
+                        'approved': response.approved,
+                        'issues': processed_issues,
+                        'raw_response': response.model_dump_json(),
+                        'confidence': 'high',
+                    }
+                except Exception as e2:
+                    logger.warning(
+                        f"Instructor JSON_SCHEMA fallback also failed: {type(e2).__name__}: {e2}. "
+                        f"Falling back to manual parsing."
+                    )
+
+            # Final fallback: manual parsing
+            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog, family=family)
 
     def _review_with_manual_parsing(
         self,
         markdown_content: str,
         code_snippets: List[Dict[str, Any]],
         catalog=None,
+        family: str = None,
     ) -> Dict[str, Any]:
         """
         Fallback review method with manual JSON parsing.
 
         Used when Instructor is unavailable or fails.
+
+        Args:
+            family: Family identifier for catalog-based validation (e.g., 'ocr', 'zip', 'words')
         """
         system_prompt = """You are a technical documentation reviewer specializing in code example quality.
 
@@ -1959,7 +2327,7 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
             'issues': [],
             'raw_response': response.content if response.success else '',
             'llm_error': response.error if not response.success else None,
-            'confidence': 'low',  # Manual parsing has lower confidence
+            'confidence': 'low',  # Manual parsing baseline (lower reliability than Instructor)
         }
 
         if not response.success:
@@ -1986,7 +2354,9 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
 
             parsed = json.loads(content)
             result['approved'] = parsed.get('approved', True)
-            result['confidence'] = 'medium'  # Successfully parsed
+            # Successfully parsed, but downgrade from 'high' to 'medium' for manual parsing fallback
+            result['confidence'] = 'medium'  # Penalty: 'high' -> 'medium' (Instructor not used)
+            logger.info(f"Manual parsing confidence penalty applied: confidence={result['confidence']}")
 
             raw_issues = parsed.get('issues', [])
             processed_issues = []
@@ -2004,6 +2374,17 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
                     'suggestion': issue.get('suggestion'),
                     'severity': issue.get('severity', 'warning'),
                 })
+
+            # TASK-FIX-REVIEW-03: Filter out false-positive API mismatches using catalog
+            if family:
+                legitimate_issues = [
+                    issue for issue in processed_issues
+                    if self._validate_api_mismatch_against_catalog(issue, family)
+                ]
+                filtered_count = len(processed_issues) - len(legitimate_issues)
+                if filtered_count > 0:
+                    logger.info(f"[{family}] Filtered {filtered_count} false-positive API mismatch issues using catalog validation")
+                processed_issues = legitimate_issues
 
             result['issues'] = processed_issues
 
@@ -2035,6 +2416,145 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
         parts.append("")
         parts.append("VALIDATION: Flag 'api_mismatch' if code uses types/namespaces NOT in this list.")
         return "\n".join(parts)
+
+    def _load_api_catalog(self, family: str) -> dict:
+        """
+        Load API catalog for ANY family (GENERIC).
+
+        TASK-FIX-REVIEW-03: Generic catalog loader that works with all Aspose families.
+
+        Args:
+            family: Family identifier (e.g., 'ocr', 'zip', 'words', 'cells', 'barcode', 'pdf')
+
+        Returns:
+            Catalog dict with 'types', 'namespaces', 'enums', 'properties', etc.
+            Returns empty dict structure if catalog not found.
+        """
+        catalog_path = f"config/families/{family}_api_catalog.json"
+
+        # Check if file exists
+        if not os.path.exists(catalog_path):
+            logger.warning(f"API catalog not found for family '{family}': {catalog_path}")
+            return {'types': {}, 'namespaces': [], 'enums': {}, 'properties': {}}
+
+        try:
+            with open(catalog_path, 'r', encoding='utf-8') as f:
+                catalog = json.load(f)
+                logger.debug(f"[{family}] Loaded API catalog from {catalog_path}")
+                return catalog
+        except Exception as e:
+            logger.warning(f"Failed to load API catalog for family '{family}': {e}")
+            return {'types': {}, 'namespaces': [], 'enums': {}, 'properties': {}}
+
+    def _validate_api_mismatch_against_catalog(self, issue: dict, family: str) -> bool:
+        """
+        GENERIC: Returns True if issue is legitimate, False if false positive.
+
+        TASK-FIX-REVIEW-03: Cross-validates API mismatch issues against installed catalog.
+        Works with ZIP, Words, Cells, Barcode, OCR, PDF, etc.
+
+        Args:
+            issue: Issue dict with 'issue_type', 'description', etc.
+            family: Family identifier (e.g., 'ocr', 'zip', 'words')
+
+        Returns:
+            True if issue is legitimate (keep it)
+            False if issue is false positive (filter it out)
+        """
+        # Only validate api_mismatch issues
+        if issue.get('issue_type') != 'api_mismatch':
+            return True
+
+        # Load catalog for this family
+        catalog = self._load_api_catalog(family)
+        if not catalog.get('types'):
+            # No catalog available, keep the issue (conservative)
+            return True
+
+        description = issue.get('description', '')
+
+        # Extract API references from description (e.g., "Language.Eng", "Document.Save", "result.FileName")
+        # Pattern: Word.Word or Word.Word.Word chains
+        import re
+        api_refs = re.findall(r'\b([A-Z][a-zA-Z0-9]+(?:\.[A-Z][a-zA-Z0-9]+)+)\b', description)
+
+        if not api_refs:
+            # No API references found, keep the issue
+            return True
+
+        # Check each API reference against catalog
+        for api_ref in api_refs:
+            parts = api_ref.split('.')
+            type_name = parts[0]  # First part is the type (e.g., "Language", "Document", "result")
+
+            # Check if type exists in catalog
+            # catalog['types'] is a dict: {"TypeName": "Namespace", ...}
+            type_found = False
+
+            # Direct type name match
+            if type_name in catalog.get('types', {}):
+                type_found = True
+            else:
+                # Check full names (types might be stored with namespace prefix)
+                for cat_type_name, cat_namespace in catalog.get('types', {}).items():
+                    if cat_type_name == type_name:
+                        type_found = True
+                        break
+
+            # If type found, check if it has the referenced member (enum, property, method)
+            if type_found and len(parts) > 1:
+                member_name = parts[1]  # Second part is the member (e.g., "Eng", "Save", "FileName")
+
+                # Check in enums
+                if type_name in catalog.get('enums', {}):
+                    enum_values = catalog['enums'][type_name]
+                    if member_name.upper() in [v.upper() for v in enum_values]:
+                        logger.info(
+                            f"[{family}] API mismatch false positive: {api_ref} "
+                            f"(enum {type_name}.{member_name} exists in catalog)"
+                        )
+                        return False
+
+                # Check in properties
+                if type_name in catalog.get('properties', {}):
+                    properties = catalog['properties'][type_name]
+                    if member_name in properties:
+                        logger.info(
+                            f"[{family}] API mismatch false positive: {api_ref} "
+                            f"(property {type_name}.{member_name} exists in catalog)"
+                        )
+                        return False
+
+                # Check in methods (if catalog has key_methods)
+                if type_name in catalog.get('key_methods', {}):
+                    methods = catalog['key_methods'][type_name]
+                    # Methods might be stored as list of dicts with 'name' key or list of strings
+                    if isinstance(methods, list):
+                        # List of method dicts: [{'name': 'MethodName', ...}, ...]
+                        method_names = set()
+                        for m in methods:
+                            if isinstance(m, dict) and 'name' in m:
+                                method_names.add(m['name'])
+                            elif isinstance(m, str):
+                                method_names.add(m)
+
+                        if member_name in method_names:
+                            logger.info(
+                                f"[{family}] API mismatch false positive: {api_ref} "
+                                f"(method {type_name}.{member_name} exists in catalog)"
+                            )
+                            return False
+                    elif isinstance(methods, dict):
+                        # Dict of methods: {'MethodName': {...}, ...}
+                        if member_name in methods:
+                            logger.info(
+                                f"[{family}] API mismatch false positive: {api_ref} "
+                                f"(method {type_name}.{member_name} exists in catalog)"
+                            )
+                            return False
+
+        # Issue passed validation - keep it
+        return True
 
     def final_review(
         self,
