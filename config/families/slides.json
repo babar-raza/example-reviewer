@@ -1,30 +1,43 @@
 {
   "family": "slides",
   "display_name": "Aspose.Slides for .NET",
-  "auto_commit": false,
+  "auto_commit": true,
   "commit_message_template": "fix(slides): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_roots": [
+    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/slides",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/slides/en",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/slides/en"
+  ],
   "content_pattern": {
-    "blog": "**/slides/*/index.md",
-    "docs": "**/slides/en/**/*.md",
-    "kb": "**/slides/en/**/*.md",
-    "products": "**/slides/en/**/*.md",
-    "reference": "**/slides/en/**/*.md"
+    "blog": "**/index.md",
+    "docs": "**/*.md",
+    "kb": "**/*.md"
   },
+  "file_exclude_patterns": [
+    "index\\.[a-z]{2}\\.md$",
+    "index\\.[a-z]{2}-[a-z]{2}\\.md$",
+    "[/\\\\](ar|bg|ca|cs|da|de|el|es|fa|fi|fr|he|hi|hr|hu|id|it|ja|ko|lt|lv|ms|nl|no|pl|pt|ro|ru|sk|sr|sv|th|tr|uk|vi|zh)[/\\\\]"
+  ],
   "nuget_config": {
     "primary_package": {
       "name": "Aspose.Slides.NET",
-      "version_strategy": "latest_stable"
+      "version_strategy": "latest_stable",
+      "dll_name": "Aspose.Slides"
     },
     "additional_packages": [],
-    "target_frameworks": ["net8.0"]
+    "target_frameworks": [
+      "net8.0"
+    ]
   },
   "code_defaults": {
     "default_usings": [
+      "System",
+      "System.IO",
+      "System.Text",
       "Aspose.Slides",
       "Aspose.Slides.Export",
       "Aspose.Slides.Charts",
-      "Aspose.Slides.Animation",
-      "Aspose.Slides.SmartArt"
+      "Aspose.Slides.Animation"
     ]
   },
   "namespace_policy": {
@@ -34,16 +47,92 @@
       "Aspose.Slides.*",
       "System",
       "System.*",
+      "System.IO",
+      "System.Text",
       "System.Drawing",
-      "System.Drawing.*",
-      "System.Threading.Tasks",
-      "System.Collections.Concurrent"
+      "System.Collections.Generic",
+      "System.Linq"
     ],
     "blacklist": []
   },
   "patterns": [],
   "non_existent_apis": [],
   "api_patterns": {},
+  "runtime_validation": {
+    "enabled": true,
+    "mode": "lenient",
+    "timeout_seconds": 30,
+    "required_files": [
+      "presentation.pptx",
+      "sample.pptx",
+      "template.pptx"
+    ],
+    "required_dirs": [],
+    "file_aliases": {},
+    "expected_outputs": [],
+    "env": {}
+  },
+  "test_data": {
+    "local_path": "artifacts/backfill/slides/test-data",
+    "download_if_missing": false,
+    "inventory_path": "artifacts/backfill/slides/test-data-inventory.json"
+  },
+  "gist": {
+    "enabled": true,
+    "pat_env_var": "GITHUB_PAT"
+  },
+  "discovery_patterns": {
+    "fence_patterns": [
+      "^```(\\w+|c#)\\s*\\n(.*?)^```"
+    ],
+    "validatable_languages": [
+      "cs",
+      "csharp",
+      "c#",
+      "C#"
+    ],
+    "normalize_to_canonical": true,
+    "regex_timeout_seconds": 5.0,
+    "context_extraction": {
+      "enabled": true,
+      "max_paragraphs": 3,
+      "include_file_header": true
+    },
+    "gist_extraction": {
+      "enabled": true,
+      "allowed_owners": [
+        "aspose-com-gists",
+        "aspose-slides"
+      ],
+      "blocked_owners": []
+    }
+  },
+  "context_enforcement": {
+    "enabled": true
+  },
+  "fixture_passwords": {
+    "default": "p@s$"
+  },
+  "api_catalog": {
+    "enabled": true,
+    "storage_type": "json",
+    "path": "config/families/slides_api_catalog.json",
+    "lazy_loading": false
+  },
+  "fixture_resolver": {
+    "enabled": true,
+    "max_generations_per_run": 50,
+    "registry_path": "artifacts/backfill/slides/fixture-registry.json"
+  },
+  "learned_patterns": {
+    "enabled": true,
+    "min_confidence": 0.6,
+    "max_patterns_per_error": 3,
+    "require_approval": true,
+    "feedback_tracking": true,
+    "retire_threshold": 0.3,
+    "retire_min_applications": 10
+  },
   "persistent_fix": {
     "enabled": true,
     "max_iterations": 10,
@@ -55,5 +144,11 @@
   "dependency_resolution": {
     "enabled": true,
     "confidence_threshold": 0.7
+  },
+  "example_repo": {
+    "url": "https://github.com/aspose-slides/Aspose.Slides-for-.NET",
+    "examples_path": "Examples",
+    "test_data_path": "Data",
+    "ref": "master"
   }
 }

@@ -1,12 +1,12 @@
 {
-  "family": "imaging",
-  "display_name": "Aspose.Imaging for .NET",
+  "family": "tex",
+  "display_name": "Aspose.TeX for .NET",
   "auto_commit": true,
-  "commit_message_template": "fix(imaging): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "commit_message_template": "fix(tex): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
-    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/imaging",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/imaging/en",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/imaging/en"
+    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/tex",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/tex/en",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/tex/en"
   ],
   "content_pattern": {
     "blog": "**/index.md",
@@ -20,9 +20,9 @@
   ],
   "nuget_config": {
     "primary_package": {
-      "name": "Aspose.Imaging",
+      "name": "Aspose.TeX",
       "version_strategy": "latest_stable",
-      "dll_name": "Aspose.Imaging"
+      "dll_name": "Aspose.TeX"
     },
     "additional_packages": [],
     "target_frameworks": [
@@ -34,17 +34,16 @@
       "System",
       "System.IO",
       "System.Text",
-      "Aspose.Imaging",
-      "Aspose.Imaging.FileFormats",
-      "Aspose.Imaging.ImageOptions",
-      "Aspose.Imaging.Sources"
+      "Aspose.TeX",
+      "Aspose.TeX.IO",
+      "Aspose.TeX.Presentation"
     ]
   },
   "namespace_policy": {
     "mode": "whitelist",
     "allowed_namespaces": [
-      "Aspose.Imaging",
-      "Aspose.Imaging.*",
+      "Aspose.TeX",
+      "Aspose.TeX.*",
       "System",
       "System.*",
       "System.IO",
@@ -63,11 +62,8 @@
     "mode": "lenient",
     "timeout_seconds": 30,
     "required_files": [
-      "sample.png",
-      "sample.jpg",
-      "sample.bmp",
-      "sample.gif",
-      "sample.tiff"
+      "sample.tex",
+      "hello-world.tex"
     ],
     "required_dirs": [],
     "file_aliases": {},
@@ -75,9 +71,9 @@
     "env": {}
   },
   "test_data": {
-    "local_path": "artifacts/backfill/imaging/test-data",
+    "local_path": "artifacts/backfill/tex/test-data",
     "download_if_missing": false,
-    "inventory_path": "artifacts/backfill/imaging/test-data-inventory.json"
+    "inventory_path": "artifacts/backfill/tex/test-data-inventory.json"
   },
   "gist": {
     "enabled": true,
@@ -104,7 +100,7 @@
       "enabled": true,
       "allowed_owners": [
         "aspose-com-gists",
-        "aspose-imaging"
+        "aspose-tex"
       ],
       "blocked_owners": []
     }
@@ -118,13 +114,13 @@
   "api_catalog": {
     "enabled": true,
     "storage_type": "json",
-    "path": "config/families/imaging_api_catalog.json",
+    "path": "config/families/tex_api_catalog.json",
     "lazy_loading": false
   },
   "fixture_resolver": {
     "enabled": true,
     "max_generations_per_run": 50,
-    "registry_path": "artifacts/backfill/imaging/fixture-registry.json"
+    "registry_path": "artifacts/backfill/tex/fixture-registry.json"
   },
   "learned_patterns": {
     "enabled": true,
@@ -148,7 +144,7 @@
     "confidence_threshold": 0.7
   },
   "example_repo": {
-    "url": "https://github.com/aspose-imaging/Aspose.Imaging-for-.NET",
+    "url": "https://github.com/aspose-tex/Aspose.TeX-for-.NET",
     "examples_path": "Examples",
     "test_data_path": "Data",
     "ref": "master"

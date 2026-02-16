@@ -1,12 +1,12 @@
 {
-  "family": "imaging",
-  "display_name": "Aspose.Imaging for .NET",
+  "family": "tasks",
+  "display_name": "Aspose.Tasks for .NET",
   "auto_commit": true,
-  "commit_message_template": "fix(imaging): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "commit_message_template": "fix(tasks): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
-    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/imaging",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/imaging/en",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/imaging/en"
+    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/tasks",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/tasks/en",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/tasks/en"
   ],
   "content_pattern": {
     "blog": "**/index.md",
@@ -20,9 +20,9 @@
   ],
   "nuget_config": {
     "primary_package": {
-      "name": "Aspose.Imaging",
+      "name": "Aspose.Tasks",
       "version_strategy": "latest_stable",
-      "dll_name": "Aspose.Imaging"
+      "dll_name": "Aspose.Tasks"
     },
     "additional_packages": [],
     "target_frameworks": [
@@ -34,17 +34,16 @@
       "System",
       "System.IO",
       "System.Text",
-      "Aspose.Imaging",
-      "Aspose.Imaging.FileFormats",
-      "Aspose.Imaging.ImageOptions",
-      "Aspose.Imaging.Sources"
+      "Aspose.Tasks",
+      "Aspose.Tasks.Saving",
+      "Aspose.Tasks.Visualization"
     ]
   },
   "namespace_policy": {
     "mode": "whitelist",
     "allowed_namespaces": [
-      "Aspose.Imaging",
-      "Aspose.Imaging.*",
+      "Aspose.Tasks",
+      "Aspose.Tasks.*",
       "System",
       "System.*",
       "System.IO",
@@ -63,11 +62,9 @@
     "mode": "lenient",
     "timeout_seconds": 30,
     "required_files": [
-      "sample.png",
-      "sample.jpg",
-      "sample.bmp",
-      "sample.gif",
-      "sample.tiff"
+      "sample.mpp",
+      "project.mpp",
+      "template.mpt"
     ],
     "required_dirs": [],
     "file_aliases": {},
@@ -75,9 +72,9 @@
     "env": {}
   },
   "test_data": {
-    "local_path": "artifacts/backfill/imaging/test-data",
+    "local_path": "artifacts/backfill/tasks/test-data",
     "download_if_missing": false,
-    "inventory_path": "artifacts/backfill/imaging/test-data-inventory.json"
+    "inventory_path": "artifacts/backfill/tasks/test-data-inventory.json"
   },
   "gist": {
     "enabled": true,
@@ -104,7 +101,7 @@
       "enabled": true,
       "allowed_owners": [
         "aspose-com-gists",
-        "aspose-imaging"
+        "aspose-tasks"
       ],
       "blocked_owners": []
     }
@@ -118,13 +115,13 @@
   "api_catalog": {
     "enabled": true,
     "storage_type": "json",
-    "path": "config/families/imaging_api_catalog.json",
+    "path": "config/families/tasks_api_catalog.json",
     "lazy_loading": false
   },
   "fixture_resolver": {
     "enabled": true,
     "max_generations_per_run": 50,
-    "registry_path": "artifacts/backfill/imaging/fixture-registry.json"
+    "registry_path": "artifacts/backfill/tasks/fixture-registry.json"
   },
   "learned_patterns": {
     "enabled": true,
@@ -148,7 +145,7 @@
     "confidence_threshold": 0.7
   },
   "example_repo": {
-    "url": "https://github.com/aspose-imaging/Aspose.Imaging-for-.NET",
+    "url": "https://github.com/aspose-tasks/Aspose.Tasks-for-.NET",
     "examples_path": "Examples",
     "test_data_path": "Data",
     "ref": "master"
