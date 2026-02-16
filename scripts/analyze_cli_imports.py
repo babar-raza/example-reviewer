@@ -41,6 +41,7 @@ PYTHON_BUILTINS = {
     'AttributeError', 'KeyError', 'IndexError', 'NameError',
     'RuntimeError', 'NotImplementedError', 'OSError', 'IOError',
     'ImportError', 'ModuleNotFoundError', 'FileNotFoundError',
+    'ConnectionError', 'TimeoutError',
     # Common constants
     'True', 'False', 'None', 'NotImplemented', 'Ellipsis',
 }
