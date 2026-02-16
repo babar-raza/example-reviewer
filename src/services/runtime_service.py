@@ -359,6 +359,18 @@ class RuntimeService:
                 if not dst_path.exists():
                     shutil.copytree(src_file, dst_path)
 
+        # Create common subdirectory mirrors for code that references
+        # files via "input/file.ext" or similar prefixes
+        for subdir_name in ("input", "source", "data"):
+            subdir = work_dir / subdir_name
+            if not subdir.exists():
+                subdir.mkdir(parents=True, exist_ok=True)
+                for src_file in source_dir.iterdir():
+                    if src_file.is_file():
+                        dst = subdir / src_file.name
+                        if not dst.exists():
+                            shutil.copy2(src_file, dst)
+
         # Then handle specific required files with RECURSIVE lookup
         for required_file in required_files:
             # Use recursive helper to find file anywhere under source_dir
@@ -566,6 +578,17 @@ class RuntimeService:
 """
         (work_dir / "Runtime.csproj").write_text(project_content, encoding='utf-8')
     
+    @staticmethod
+    def _detect_entry_call(code: str) -> str:
+        """Detect a public static void method (Run, Execute, etc.) and return a call statement."""
+        entry_match = re.search(
+            r'(?:public\s+)?class\s+(\w+).*?public\s+static\s+void\s+(\w+)\s*\(\s*\)',
+            code, re.DOTALL
+        )
+        if entry_match and entry_match.group(2) != 'Main':
+            return f"        {entry_match.group(1)}.{entry_match.group(2)}();"
+        return "        // Entry point"
+
     def _analyze_code(self, code: str, family_config: FamilyConfig) -> Dict[str, Any]:
         """
         Analyze code to determine its structure and what's missing.
@@ -693,7 +716,7 @@ class RuntimeService:
                 lines.append("{")
                 lines.append("    public static void Main(string[] args)")
                 lines.append("    {")
-                lines.append("        // Entry point - code executed from namespace classes")
+                lines.append(self._detect_entry_call(code))
                 lines.append("    }")
                 lines.append("}")
 
@@ -723,7 +746,7 @@ class RuntimeService:
                 lines.append("{")
                 lines.append("    public static void Main(string[] args)")
                 lines.append("    {")
-                lines.append("        // Entry point - instantiate and use classes above")
+                lines.append(self._detect_entry_call(code))
                 lines.append("    }")
                 lines.append("}")
 

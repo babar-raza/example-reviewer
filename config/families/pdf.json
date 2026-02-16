@@ -3,12 +3,15 @@
   "display_name": "Aspose.PDF for .NET",
   "auto_commit": false,
   "commit_message_template": "fix(pdf): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
+  "content_roots": [
+    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/pdf",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/pdf/en",
+    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/pdf/en"
+  ],
   "content_pattern": {
-    "blog": "**/pdf/*/index.md",
-    "docs": "**/pdf/en/**/*.md",
-    "kb": "**/pdf/en/**/*.md",
-    "products": "**/pdf/en/**/*.md",
-    "reference": "**/pdf/en/**/*.md"
+    "blog": "**/index.md",
+    "docs": "**/*.md",
+    "kb": "**/*.md"
   },
   "nuget_config": {
     "primary_package": {
@@ -25,6 +28,8 @@
   },
   "code_defaults": {
     "default_usings": [
+      "System",
+      "System.IO",
       "Aspose.Pdf",
       "Aspose.Pdf.Text",
       "Aspose.Pdf.Forms",
@@ -47,6 +52,59 @@
       "Newtonsoft.Json.*"
     ],
     "blacklist": []
+  },
+  "cs_discovery": {
+    "enabled": true,
+    "roots": [],
+    "exclude_patterns": [
+      "RunExamples\\.cs$",
+      "AssemblyInfo\\.cs$",
+      "\\.Designer\\.cs$",
+      "\\bobj\\b",
+      "\\bbin\\b"
+    ],
+    "extraction_strategy": "exstart_exend",
+    "data_dir_replacements": {
+      "RunExamples\\.GetDataDir_\\w+\\(\\)": "./"
+    },
+    "entry_point_pattern": "Run"
+  },
+  "example_repo": {
+    "url": "https://github.com/aspose-pdf/Aspose.PDF-for-.NET",
+    "examples_path": "Examples/CSharp",
+    "test_data_path": "Examples/Data",
+    "ref": "master"
+  },
+  "test_data": {
+    "local_path": "artifacts/backfill/pdf/test-data",
+    "download_if_missing": true
+  },
+  "runtime_validation": {
+    "enabled": true,
+    "mode": "lenient",
+    "timeout_seconds": 30,
+    "required_files": [],
+    "required_dirs": [],
+    "file_aliases": {}
+  },
+  "fixture_resolver": {
+    "enabled": true,
+    "max_generations_per_run": 100,
+    "registry_path": "artifacts/backfill/pdf/fixture-registry.json"
+  },
+  "api_catalog": {
+    "enabled": true,
+    "storage_type": "json",
+    "path": "config/families/pdf_api_catalog.json"
+  },
+  "learned_patterns": {
+    "enabled": true,
+    "min_confidence": 0.6,
+    "max_patterns_per_error": 3,
+    "require_approval": false,
+    "feedback_tracking": true,
+    "retire_threshold": 0.3,
+    "retire_min_applications": 10
   },
   "patterns": [],
   "non_existent_apis": [],

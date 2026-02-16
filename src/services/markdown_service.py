@@ -255,8 +255,13 @@ class MarkdownUpdateService:
         # Apply updates
         updated_content = original_content
         changes = []
-        
+
         for example in verified_examples:
+            # CS_FILE examples are read-only reference — no markdown to update
+            if example.source_type == SourceType.CS_FILE:
+                logger.debug(f"Skipping CS_FILE example {example.example_id} (read-only reference)")
+                continue
+
             if example.source_type == SourceType.INLINE:
                 result = self._update_inline_example(
                     updated_content, example
@@ -306,7 +311,10 @@ class MarkdownUpdateService:
                         file_path=file_path,
                         example_id=example.example_id,
                         family=example.family,
-                        edit_type="inline_replace" if example.source_type == SourceType.INLINE else "gist_replace",
+                        edit_type={
+                            SourceType.INLINE: "inline_replace",
+                            SourceType.GIST: "gist_replace",
+                        }.get(example.source_type, "inline_replace"),
                         diff_ref=diff_ref,
                     )
                     self.db.save_markdown_edit(edit, run_id=self.run_id)

@@ -183,6 +183,22 @@ class CompilationService:
                 except Exception:
                     pass
     
+    @staticmethod
+    def _detect_entry_call(code: str) -> str:
+        """Detect a public static void method (Run, Execute, etc.) and return a call statement.
+
+        For .cs file examples (e.g. Aspose.PDF with Run(), Aspose.Words with test methods),
+        this injects the actual method invocation into the generated Main() body.
+        """
+        # Find class name and a public static void method that isn't Main
+        entry_match = re.search(
+            r'(?:public\s+)?class\s+(\w+).*?public\s+static\s+void\s+(\w+)\s*\(\s*\)',
+            code, re.DOTALL
+        )
+        if entry_match and entry_match.group(2) != 'Main':
+            return f"        {entry_match.group(1)}.{entry_match.group(2)}();"
+        return "        // Entry point"
+
     def _analyze_code(self, code: str, family_config: FamilyConfig) -> Dict[str, Any]:
         """
         Analyze code to determine its structure and what's missing.
@@ -326,7 +342,7 @@ class CompilationService:
                 lines.append("{")
                 lines.append("    public static void Main(string[] args)")
                 lines.append("    {")
-                lines.append("        // Entry point - code executed from namespace classes")
+                lines.append(self._detect_entry_call(code))
                 lines.append("    }")
                 lines.append("}")
 
@@ -356,7 +372,7 @@ class CompilationService:
                 lines.append("{")
                 lines.append("    public static void Main(string[] args)")
                 lines.append("    {")
-                lines.append("        // Entry point - instantiate and use classes above")
+                lines.append(self._detect_entry_call(code))
                 lines.append("    }")
                 lines.append("}")
 

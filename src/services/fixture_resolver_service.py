@@ -26,6 +26,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Deferred import to avoid circular dependency
+try:
+    from ..core.models import SourceType
+except ImportError:
+    SourceType = None
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -67,6 +73,9 @@ _CODE_FILE_EXTENSIONS = (
     ".rtf", ".odt", ".xlsx", ".xls", ".pptx", ".png", ".jpg", ".jpeg",
     ".bmp", ".gif", ".svg", ".tiff", ".tif", ".zip", ".7z", ".gz",
     ".rar", ".epub", ".mobi", ".chm", ".mhtml", ".xps",
+    # Image/design formats (PSD family and others)
+    ".psd", ".psb", ".ai", ".dicom", ".dcm", ".djvu", ".webp",
+    ".emf", ".wmf", ".dng", ".j2k", ".jp2",
 )
 
 # Pattern to extract string literals from C# code
@@ -174,6 +183,7 @@ class FixtureResolverService:
         max_generations_per_run: int = 50,
         registry_path: Optional[Path] = None,
         skip_output_patterns: Optional[List[str]] = None,
+        example_repo_test_data_dir: Optional[Path] = None,
     ):
         self._family = family
         self._test_data_dir = Path(test_data_dir)
@@ -181,6 +191,7 @@ class FixtureResolverService:
         self._max_generations = max_generations_per_run
         self._generations_this_run = 0
         self._skip_patterns = skip_output_patterns or ["output*", "result*", "*.out"]
+        self._example_repo_test_data_dir = Path(example_repo_test_data_dir) if example_repo_test_data_dir else None
 
         # Registry path defaults to test-data sibling
         if registry_path:
@@ -233,6 +244,15 @@ class FixtureResolverService:
         if result.resolved:
             self._copy_to_workspace(result.source_path, filename, workspace_dir)
             self._bump_usage(filename)
+            self._stats["resolved"] += 1
+            return result
+
+        # Tier 2.5: Example repo test data (if configured)
+        result = self._tier2_5_example_repo(filename)
+        if result.resolved:
+            self._place_in_test_data(result.source_path, filename)
+            self._copy_to_workspace(self._test_data_dir / filename, filename, workspace_dir)
+            self._register_fixture(filename, str(result.source_path), "example_repo")
             self._stats["resolved"] += 1
             return result
 
@@ -407,6 +427,21 @@ class FixtureResolverService:
                     source_path=target, method="registry",
                     message=f"Recreated from canonical {canonical}",
                 )
+
+        return ResolveResult(resolved=False, filename=filename)
+
+    def _tier2_5_example_repo(self, filename: str) -> ResolveResult:
+        """Tier 2.5: Check example repo test data directory."""
+        if not self._example_repo_test_data_dir or not self._example_repo_test_data_dir.exists():
+            return ResolveResult(resolved=False, filename=filename)
+
+        candidate = self._example_repo_test_data_dir / filename
+        if candidate.exists() and candidate.is_file():
+            return ResolveResult(
+                resolved=True, filename=filename,
+                source_path=candidate, method="example_repo",
+                message=f"Found in example repo test data: {filename}",
+            )
 
         return ResolveResult(resolved=False, filename=filename)
 
@@ -593,3 +628,43 @@ class FixtureResolverService:
         if filename not in unresolvable:
             unresolvable.append(filename)
             self._save_registry()
+
+    def mine_fixtures_from_cs_examples(self, family: str, db) -> Dict[str, List[str]]:
+        """Extract file references from verified CS_FILE examples.
+
+        Returns: {filename: [example_ids_that_use_it]}
+        """
+        fixture_map: Dict[str, List[str]] = {}
+
+        try:
+            # Lazy import to avoid circular dependency
+            if SourceType is None:
+                from ..core.models import SourceType as ST
+            else:
+                ST = SourceType
+
+            examples = db.get_examples_by_family(family)
+            if not examples:
+                return fixture_map
+
+            for ex in examples:
+                if ex.source_type != ST.CS_FILE:
+                    continue
+
+                code = ex.verified_code or ex.original_code
+                if not code:
+                    continue
+
+                # Extract file references using existing helper
+                file_refs = extract_file_references_from_code(code)
+                for filename in file_refs:
+                    if filename not in fixture_map:
+                        fixture_map[filename] = []
+                    fixture_map[filename].append(ex.example_id)
+
+            logger.info(f"Mined {len(fixture_map)} unique fixtures from CS_FILE examples in {family}")
+            return fixture_map
+
+        except Exception as e:
+            logger.warning(f"Error mining fixtures from CS examples: {e}")
+            return fixture_map

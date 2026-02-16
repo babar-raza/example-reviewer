@@ -85,13 +85,13 @@ class LLMConfig(BaseModel):
     """LLM provider configuration."""
     model_config = ConfigDict(extra="forbid")
 
-    provider: str = Field(default="openai", description="LLM provider (openai, ollama, azure)")
-    model: str = Field(default="gpt-4o-mini", description="Model name")
+    provider: str = Field(default="company", description="LLM provider (openai, ollama, azure, company)")
+    model: str = Field(default="gpt-oss-120b", description="Model name")
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_retries: int = Field(default=3, ge=1)
     retry_backoff_seconds: int = Field(default=5, ge=1)
-    api_key_env_var: str = Field(default="OPENAI_API_KEY")
-    base_url: Optional[str] = Field(default=None, description="Custom API base URL")
+    api_key_env_var: str = Field(default="litellm_key", description="Environment variable containing API key")
+    base_url: Optional[str] = Field(default="https://llm.professionalize.com/v1", description="Custom API base URL")
     timeout_seconds: int = Field(default=120)
     seed: Optional[int] = Field(default=None, description="Random seed for deterministic mode")
     deterministic_mode: bool = Field(default=False, description="Enable deterministic mode")
@@ -624,6 +624,11 @@ class ProviderConfig(BaseModel):
     model: str = "gpt-oss"
     fallback_to: Optional[str] = None
     timeout_seconds: int = 120
+    # Ollama auto-start settings (only meaningful for ollama provider)
+    auto_start: bool = True
+    startup_timeout_seconds: int = 30
+    auto_pull_model: bool = True
+    pull_timeout_seconds: int = 600
 
 
 class ModelRoutingConfig(BaseModel):
@@ -730,6 +735,35 @@ class ExampleRepoConfig(BaseModel):
     ref: str = "main"
 
 
+class CSDiscoveryConfig(BaseModel):
+    """Configuration for .cs file discovery from example repos."""
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    roots: List[str] = Field(default_factory=list, description="Root directories to scan for .cs files")
+    exclude_patterns: List[str] = Field(
+        default_factory=list,
+        description="Regex patterns for .cs file paths to exclude (e.g. RunExamples\\.cs$)"
+    )
+    extraction_strategy: str = Field(
+        default="exstart_exend",
+        description="Extraction strategy: exstart_exend, whole_file, or run_method"
+    )
+    data_dir_replacements: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Regex pattern -> replacement for data directory resolution"
+    )
+    strip_nunit_attributes: bool = Field(
+        default=False, description="Strip NUnit [Test]/[SetUp] attributes from extracted code"
+    )
+    strip_base_class: bool = Field(
+        default=False, description="Strip base class inheritance from extracted classes"
+    )
+    entry_point_pattern: str = Field(
+        default="", description="Static method name to invoke (e.g. 'Run' for PDF examples)"
+    )
+
+
 class FamilyConfig(BaseModel):
     """Per-family configuration settings."""
     model_config = ConfigDict(extra="forbid")
@@ -764,6 +798,9 @@ class FamilyConfig(BaseModel):
 
     # Fixture resolver (self-healing runtime environment)
     fixture_resolver: Optional[FixtureResolverConfig] = None
+
+    # CS file discovery (for repos with standalone .cs example files)
+    cs_discovery: CSDiscoveryConfig = Field(default_factory=CSDiscoveryConfig)
 
     # Patterns and hints
     patterns: List[Dict[str, Any]] = Field(default_factory=list)
@@ -1031,6 +1068,10 @@ class ConfigurationManager:
         # Fixture resolver config
         if 'fixture_resolver' in data:
             parsed['fixture_resolver'] = FixtureResolverConfig(**data['fixture_resolver'])
+
+        # CS file discovery config
+        if 'cs_discovery' in data:
+            parsed['cs_discovery'] = CSDiscoveryConfig(**data['cs_discovery'])
 
         # Learned patterns config
         if 'learned_patterns' in data:

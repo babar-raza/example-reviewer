@@ -10,6 +10,7 @@ HEAL-02: Replaces inline _load_catalog_directives() in semantic_microfixes.py
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -224,3 +225,59 @@ class APICatalogService:
     def has_enrichment(self) -> bool:
         """Check whether the catalog includes enrichment data (enums, constructors, methods, properties)."""
         return bool(self._enums or self._constructors or self._key_methods or self._properties)
+
+    def mine_using_patterns(self, family: str, db) -> Dict[str, List[str]]:
+        """Extract {API_type: [required_usings]} from verified .cs examples.
+
+        Analyzes verified CS_FILE examples to discover which using directives
+        are commonly used with specific types, providing empirical patterns
+        for LLM context augmentation.
+
+        Args:
+            family: Product family identifier
+            db: Database instance
+
+        Returns:
+            Dict mapping type names to lists of using directive namespaces
+        """
+        patterns: Dict[str, set] = {}
+
+        try:
+            # Lazy import to avoid circular dependency
+            try:
+                from ..core.models import SourceType
+            except ImportError:
+                return {}
+
+            examples = db.get_examples_by_family(family)
+            if not examples:
+                return {}
+
+            for ex in examples:
+                if ex.source_type != SourceType.CS_FILE:
+                    continue
+
+                code = ex.verified_code or ex.original_code
+                if not code:
+                    continue
+
+                # Extract using directives
+                usings = set(re.findall(r'using\s+([\w.]+)\s*;', code))
+
+                # Extract types used (via 'new' keyword)
+                types_used = set(re.findall(r'new\s+(\w+)\s*(?:\(|<)', code))
+
+                # Map each type to the usings present in the same file
+                for t in types_used:
+                    if t not in patterns:
+                        patterns[t] = set()
+                    patterns[t].update(usings)
+
+            # Convert sets to sorted lists
+            result = {t: sorted(u) for t, u in patterns.items()}
+            logger.info(f"Mined using patterns for {len(result)} types from CS_FILE examples in {family}")
+            return result
+
+        except Exception as e:
+            logger.warning(f"Error mining using patterns from CS examples: {e}")
+            return {}

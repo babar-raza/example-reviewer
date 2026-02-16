@@ -46,12 +46,14 @@ class SourceType(str, Enum):
     """Source type for code examples."""
     INLINE = "inline"
     GIST = "gist"
+    CS_FILE = "cs_file"
 
 
 class EditType(str, Enum):
-    """Type of markdown edit."""
+    """Type of edit operation."""
     INLINE_REPLACE = "inline_replace"
     GIST_REPLACE = "gist_replace"
+    CS_FILE_REPLACE = "cs_file_replace"
 
 
 class ScanMode(str, Enum):
@@ -111,8 +113,8 @@ class ExampleRecord(BaseModel):
     status: ExampleStatus = Field(default=ExampleStatus.DISCOVERED)
     failure_reason: Optional[str] = None
     escalation_reason: Optional[str] = Field(default=None, description="Reason for NEEDS_REVIEW escalation")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Content context fields for LLM relevance preservation
     section_heading: Optional[str] = Field(default=None, description="Markdown heading above code block")
@@ -199,7 +201,7 @@ class ExampleRecord(BaseModel):
         if not self.can_transition_to(new_status):
             return False
         self.status = new_status
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         if reason:
             self.failure_reason = reason
         return True
@@ -219,7 +221,7 @@ class CompileAttempt(BaseModel):
     llm_response_ref: str = Field(default="", description="LLM response artifact")
     error_messages: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     def model_post_init(self, __context) -> None:
         if not self.attempt_id:
@@ -246,7 +248,7 @@ class RuntimeAttempt(BaseModel):
     retrieved_examples_refs: List[str] = Field(default_factory=list)
     llm_request_ref: str = Field(default="")
     llm_response_ref: str = Field(default="")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     def model_post_init(self, __context) -> None:
         if not self.attempt_id:
@@ -264,7 +266,7 @@ class MarkdownEdit(BaseModel):
     diff_ref: str = Field(default="", description="Diff artifact reference")
     old_code: str = Field(default="")
     new_code: str = Field(default="")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     def model_post_init(self, __context) -> None:
         if not self.edit_id:
@@ -281,7 +283,7 @@ class CommitRecord(BaseModel):
     message: str = Field(default="")
     description: str = Field(default="")
     touched_files: List[str] = Field(default_factory=list)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     def model_post_init(self, __context) -> None:
         if not self.commit_id:
@@ -293,7 +295,7 @@ class RunRecord(BaseModel):
     """Record of a pipeline run."""
     run_id: str = Field(default="", description="Unique run ID")
     family: str = Field(..., description="Product family")
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
     status: str = Field(default="running")
     phases_completed: List[str] = Field(default_factory=list)
@@ -345,7 +347,7 @@ class TelemetryEvent(BaseModel):
     duration_ms: Optional[int] = None
     success: bool = Field(default=True)
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def model_post_init(self, __context) -> None:
         if not self.event_id:
@@ -392,7 +394,7 @@ class FailureDetail(BaseModel):
     error_message: Optional[str] = Field(default=None, description="Error message text")
     resolution: FailureResolution = Field(default=FailureResolution.PENDING)
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional context")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def model_post_init(self, __context) -> None:
         if not self.failure_id:
@@ -549,7 +551,7 @@ class ReviewIssue(BaseModel):
     suggestion: Optional[str] = Field(default=None, description="Suggested fix")
     severity: IssueSeverity = Field(default=IssueSeverity.WARNING)
     resolved: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def model_post_init(self, __context) -> None:
         if not self.issue_id:
@@ -567,7 +569,7 @@ class ReviewResult(BaseModel):
     review_attempt: int = Field(default=1, description="Which review attempt this is")
     issues: List[ReviewIssue] = Field(default_factory=list)
     llm_response: Optional[str] = Field(default=None, description="Raw LLM response")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def model_post_init(self, __context) -> None:
         if not self.review_id:

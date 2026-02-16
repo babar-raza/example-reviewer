@@ -742,6 +742,16 @@ def _generate_odt_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool,
     return (False, f"No canonical .odt found in test-data for {dest.name}")
 
 
+def _copy_canonical_by_ext(dest: Path, test_data_dir: Path, ext: str) -> Tuple[bool, str]:
+    """Copy first available file with matching extension from test-data (recursive)."""
+    for f in test_data_dir.rglob(f"*{ext}"):
+        if f.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, dest)
+            return (True, f"Generated {dest.name} from canonical {f.name}")
+    return (False, f"No canonical {ext} found in test-data for {dest.name}")
+
+
 # Extension-to-generator dispatch table
 _FAMILY_GENERATORS: Dict[str, Any] = {
     # Document formats (copy canonical)
@@ -765,6 +775,19 @@ _FAMILY_GENERATORS: Dict[str, Any] = {
     ".tiff": lambda dest, td, _: _generate_bmp(dest),  # BMP as fallback for TIFF
     ".tif": lambda dest, td, _: _generate_bmp(dest),
     ".svg": lambda dest, td, _: _generate_svg(dest),
+    # Image/design formats (copy from canonical in test-data)
+    ".psd": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".psd"),
+    ".psb": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".psb"),
+    ".ai": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".ai"),
+    ".dicom": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".dicom"),
+    ".dcm": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".dcm"),
+    ".djvu": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".djvu"),
+    ".webp": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".webp"),
+    ".emf": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".emf"),
+    ".wmf": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".wmf"),
+    ".dng": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".dng"),
+    ".j2k": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".j2k"),
+    ".jp2": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".jp2"),
 }
 
 

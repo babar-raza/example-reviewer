@@ -339,7 +339,7 @@ class DiscoveryService:
             Path to the exported JSON file
         """
         import json
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         output_dir = artifacts_dir / "runs" / run_id
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -359,7 +359,7 @@ class DiscoveryService:
 
         data = {
             'run_id': run_id,
-            'generated_at': datetime.utcnow().isoformat(),
+            'generated_at': datetime.now(timezone.utc).isoformat(),
             'total_skipped': len(self.skipped_candidates),
             'reason_summary': reason_counts,
             'skipped_candidates': self.skipped_candidates,
@@ -634,6 +634,7 @@ class DiscoveryService:
             'examples_found': 0,
             'inline_examples': 0,
             'gist_examples': 0,
+            'cs_file_examples': 0,
             'errors': 0,
             'snippets_filtered_out': 0,
             'filter_reasons': {},
@@ -678,7 +679,8 @@ class DiscoveryService:
                     self._save_examples_legacy(file_path, family, examples)
                     stats['examples_found'] += len(examples)
                     stats['inline_examples'] += sum(1 for e in examples if e.source_type == SourceType.INLINE)
-                    stats['gist_examples'] += sum(1 for e in examples if e.source_type != SourceType.INLINE)
+                    stats['gist_examples'] += sum(1 for e in examples if e.source_type == SourceType.GIST)
+                    stats['cs_file_examples'] += sum(1 for e in examples if e.source_type == SourceType.CS_FILE)
                 else:
                     # Modern schema: individual save with per-example check
                     for example in examples:
@@ -694,8 +696,10 @@ class DiscoveryService:
 
                         if example.source_type == SourceType.INLINE:
                             stats['inline_examples'] += 1
-                        else:
+                        elif example.source_type == SourceType.GIST:
                             stats['gist_examples'] += 1
+                        elif example.source_type == SourceType.CS_FILE:
+                            stats['cs_file_examples'] += 1
 
                 stats['files_processed'] += 1
 
@@ -715,6 +719,11 @@ class DiscoveryService:
         stats['snippets_filtered_out'] = filter_stats['filtered_out']
         stats['filter_reasons'] = filter_stats['reasons']
         stats['filtered_gists'] = filter_stats['filtered_gists']
+
+        # CS file discovery (for repos with standalone .cs example files)
+        if family_config.cs_discovery.enabled:
+            cs_stats = self._discover_cs_files(family, family_config, max_examples, run_id, stats)
+            stats['cs_file_examples'] = cs_stats.get('cs_file_examples', 0)
 
         stats['pages_scanned'] = stats['files_processed']
         stats['snippets_found'] = stats['examples_found']
@@ -770,7 +779,11 @@ class DiscoveryService:
             if example.section_heading:
                 locator["heading_context"] = [example.section_heading]
             locator_json = json.dumps(locator)
-            snippet_type = "fence" if example.source_type == SourceType.INLINE else "gist"
+            snippet_type = {
+                SourceType.INLINE: "fence",
+                SourceType.GIST: "gist",
+                SourceType.CS_FILE: "csfile"
+            }.get(example.source_type, "fence")
 
             result = conn.execute(
                 """
@@ -794,6 +807,253 @@ class DiscoveryService:
             )
 
         conn.commit()
+
+    # ── CS File Discovery ──────────────────────────────────────────────
+
+    def _discover_cs_files(
+        self,
+        family: str,
+        family_config: FamilyConfig,
+        max_examples: Optional[int],
+        run_id: Optional[str],
+        stats: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Discover examples from standalone .cs files using configurable extraction."""
+        import re as _re
+        cs_config = family_config.cs_discovery
+        cs_stats = {'cs_file_examples': 0, 'cs_files_scanned': 0}
+
+        roots = list(cs_config.roots)
+
+        # Auto-resolve roots from example_repo if no explicit roots configured
+        if not roots and family_config.example_repo.url:
+            repo_root = self._resolve_example_repo_path(family, family_config)
+            if repo_root:
+                # If examples_path specified, use it as sub-root
+                examples_path = family_config.example_repo.examples_path
+                if examples_path:
+                    candidate = repo_root / examples_path
+                    if candidate.exists():
+                        roots.append(str(candidate))
+                    else:
+                        roots.append(str(repo_root))
+                else:
+                    roots.append(str(repo_root))
+
+        if not roots:
+            logger.warning(f"CS discovery enabled for {family} but no roots resolved")
+            return cs_stats
+
+        for root in roots:
+            root_path = Path(root)
+            if not root_path.exists():
+                logger.warning(f"CS discovery root does not exist: {root}")
+                continue
+
+            cs_files = sorted(root_path.rglob("*.cs"), key=lambda p: str(p).lower())
+            logger.info(f"CS discovery: found {len(cs_files)} .cs files in {root}")
+
+            for cs_file in cs_files:
+                if max_examples and stats['examples_found'] >= max_examples:
+                    logger.info(f"Reached max_examples limit ({max_examples}), stopping CS discovery")
+                    break
+
+                # Apply exclude patterns
+                rel_path = str(cs_file.relative_to(root_path))
+                if any(_re.search(pat, rel_path) for pat in cs_config.exclude_patterns):
+                    continue
+
+                try:
+                    content = cs_file.read_text(encoding='utf-8-sig')
+                except Exception as e:
+                    logger.warning(f"Failed to read {cs_file}: {e}")
+                    stats['errors'] += 1
+                    continue
+
+                cs_stats['cs_files_scanned'] += 1
+                strategy = cs_config.extraction_strategy
+
+                if strategy == 'exstart_exend':
+                    examples = self._extract_exstart_examples(str(cs_file), content, family)
+                elif strategy == 'whole_file':
+                    examples = self._extract_whole_file_example(str(cs_file), content, family)
+                elif strategy == 'run_method':
+                    examples = self._extract_run_method_example(str(cs_file), content, family)
+                else:
+                    logger.warning(f"Unknown CS extraction strategy: {strategy}")
+                    continue
+
+                for example in examples:
+                    if max_examples and stats['examples_found'] >= max_examples:
+                        break
+                    self.db.save_example(example, run_id=run_id)
+                    stats['examples_found'] += 1
+                    cs_stats['cs_file_examples'] += 1
+
+                stats['files_processed'] += 1
+
+        logger.info(f"CS discovery: {cs_stats['cs_file_examples']} examples from {cs_stats['cs_files_scanned']} files")
+        return cs_stats
+
+    def _extract_exstart_examples(
+        self, file_path: str, content: str, family: str
+    ) -> List[ExampleRecord]:
+        """Extract examples from ExStart/ExEnd marker pairs."""
+        examples = []
+        # Match // ExStart:TagName ... // ExEnd:TagName (possibly with leading whitespace)
+        pattern = re.compile(
+            r'//\s*ExStart:(\S+)\s*\n(.*?)//\s*ExEnd:\1',
+            re.DOTALL
+        )
+
+        parent_dir = Path(file_path).parent.name
+        block_idx = 0
+
+        for match in pattern.finditer(content):
+            tag = match.group(1)
+            code = match.group(2).rstrip()
+
+            if not code.strip():
+                continue
+
+            # Skip nested/helper blocks (ExStart within ExStart typically means a sub-snippet)
+            # Only keep blocks that contain substantive code (at least 3 non-empty lines)
+            non_empty = [l for l in code.split('\n') if l.strip() and not l.strip().startswith('//')]
+            if len(non_empty) < 2:
+                continue
+
+            code_signature = compute_code_signature(code)
+            app_context = classify_app_context(code)
+
+            example = ExampleRecord(
+                family=family,
+                file_path=file_path,
+                source_type=SourceType.CS_FILE,
+                language='csharp',
+                location=Location(
+                    block_index=block_idx,
+                    start_line=content[:match.start()].count('\n') + 1,
+                    end_line=content[:match.end()].count('\n') + 1,
+                ),
+                original_code=code,
+                status=ExampleStatus.DISCOVERED,
+                section_heading=parent_dir,
+                topic=tag,
+                app_context=app_context.value,
+                code_block_signature=code_signature,
+            )
+            examples.append(example)
+            block_idx += 1
+
+        return examples
+
+    def _extract_whole_file_example(
+        self, file_path: str, content: str, family: str
+    ) -> List[ExampleRecord]:
+        """Treat the entire .cs file as one example."""
+        if not content.strip():
+            return []
+
+        code_signature = compute_code_signature(content)
+        app_context = classify_app_context(content)
+        parent_dir = Path(file_path).parent.name
+        topic = Path(file_path).stem
+
+        example = ExampleRecord(
+            family=family,
+            file_path=file_path,
+            source_type=SourceType.CS_FILE,
+            language='csharp',
+            location=Location(block_index=0, start_line=1, end_line=content.count('\n') + 1),
+            original_code=content,
+            status=ExampleStatus.DISCOVERED,
+            section_heading=parent_dir,
+            topic=topic,
+            app_context=app_context.value,
+            code_block_signature=code_signature,
+        )
+        return [example]
+
+    def _extract_run_method_example(
+        self, file_path: str, content: str, family: str
+    ) -> List[ExampleRecord]:
+        """Extract the Run() method body as the example."""
+        match = re.search(
+            r'public\s+static\s+void\s+Run\s*\(\s*\)\s*\{',
+            content
+        )
+        if not match:
+            return self._extract_whole_file_example(file_path, content, family)
+
+        # Find matching closing brace
+        start = match.end()
+        depth = 1
+        pos = start
+        while pos < len(content) and depth > 0:
+            if content[pos] == '{':
+                depth += 1
+            elif content[pos] == '}':
+                depth -= 1
+            pos += 1
+
+        method_body = content[start:pos - 1].strip()
+        if not method_body:
+            return []
+
+        code_signature = compute_code_signature(method_body)
+        app_context = classify_app_context(method_body)
+        parent_dir = Path(file_path).parent.name
+        topic = Path(file_path).stem
+
+        example = ExampleRecord(
+            family=family,
+            file_path=file_path,
+            source_type=SourceType.CS_FILE,
+            language='csharp',
+            location=Location(
+                block_index=0,
+                start_line=content[:match.start()].count('\n') + 1,
+                end_line=content[:pos].count('\n') + 1,
+            ),
+            original_code=method_body,
+            status=ExampleStatus.DISCOVERED,
+            section_heading=parent_dir,
+            topic=topic,
+            app_context=app_context.value,
+            code_block_signature=code_signature,
+        )
+        return [example]
+
+    def _resolve_example_repo_path(self, family: str, family_config: FamilyConfig) -> Optional[Path]:
+        """Resolve example repo to a local path, cloning if needed."""
+        url = family_config.example_repo.url
+        ref = family_config.example_repo.ref or "master"
+        if not url:
+            return None
+
+        repo_name = url.rstrip('/').split('/')[-1].replace('.git', '')
+        cache_dir = Path(".cache/backfill") / family / repo_name
+
+        if cache_dir.exists() and (cache_dir / '.git').exists():
+            logger.info(f"Using cached example repo at {cache_dir}")
+            return cache_dir
+
+        # Attempt to clone via git CLI (no GitPython dependency required)
+        try:
+            import subprocess
+            logger.info(f"Cloning example repo {url} (ref={ref}) to {cache_dir}")
+            cache_dir.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                ["git", "clone", "--depth", "1", "--branch", ref, url, str(cache_dir)],
+                check=True, capture_output=True, text=True, timeout=300,
+            )
+            logger.info(f"Successfully cloned {url} to {cache_dir}")
+            return cache_dir
+        except Exception as e:
+            logger.warning(f"Failed to clone example repo: {e}")
+            return None
+
+    # ── Markdown File Discovery ───────────────────────────────────────
 
     def _find_markdown_files(self, family_config: FamilyConfig) -> List[str]:
         """Find all markdown files matching family patterns."""

@@ -280,6 +280,18 @@ class FamilyServiceRegistry:
         if fr_config and fr_config.registry_path:
             registry_path = Path(fr_config.registry_path)
 
+        # Resolve example repo test data path from cache (enables Tier 2.5 resolution)
+        example_repo_test_data_dir = None
+        if family_config.example_repo and family_config.example_repo.test_data_path:
+            repo_url = family_config.example_repo.url
+            repo_name = repo_url.rstrip('/').split('/')[-1]
+            cache_test_data = (
+                Path(".cache/backfill") / family / repo_name
+                / family_config.example_repo.test_data_path
+            )
+            if cache_test_data.exists():
+                example_repo_test_data_dir = cache_test_data
+
         return FixtureResolverService(
             family=family,
             test_data_dir=test_data_dir,
@@ -287,6 +299,7 @@ class FamilyServiceRegistry:
             max_generations_per_run=fr_config.max_generations_per_run if fr_config else 50,
             registry_path=registry_path,
             skip_output_patterns=fr_config.skip_output_patterns if fr_config else None,
+            example_repo_test_data_dir=example_repo_test_data_dir,
         )
 
     def get_semantic_signature_service(self, family: str) -> SemanticSignatureService:
