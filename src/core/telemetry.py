@@ -8,7 +8,7 @@ import logging
 import os
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -51,7 +51,7 @@ def track_phase_timing(
         - Zero performance impact if database operation fails
     """
     start_time = time.perf_counter()
-    start_timestamp = datetime.utcnow()
+    start_timestamp = datetime.now(timezone.utc)
     success = True
     error_info = None
 
@@ -134,7 +134,7 @@ def emit_telemetry_event(
             duration_ms=duration_ms,
             success=success,
             metadata=metadata or {},
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
         db.save_telemetry_event(event)
         logger.debug(f"Emitted telemetry event: {event_type} for {example_id or 'run'}")
@@ -450,7 +450,7 @@ def log_resource_decision(
             duration_ms=0,  # Detection is nearly instant
             success=True,
             metadata=decision_data,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
         )
 
         db.save_telemetry_event(event)

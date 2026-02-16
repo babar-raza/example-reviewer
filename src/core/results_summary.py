@@ -6,7 +6,7 @@ Used by tools/verify_determinism.py to validate reproducibility.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -65,7 +65,7 @@ class ResultsSummary:
         self.per_example_statuses = per_example_statuses or {}
         self.drift_scores = drift_scores or {}
         self.run_duration_seconds = run_duration_seconds
-        self.timestamp = timestamp or datetime.utcnow()
+        self.timestamp = timestamp or datetime.now(timezone.utc)
 
     @classmethod
     def from_run(cls, db: 'Database', run_id: str) -> 'ResultsSummary':
@@ -132,7 +132,7 @@ class ResultsSummary:
             per_example_statuses=per_example_statuses,
             drift_scores={},  # Optional: populated if drift tracking enabled
             run_duration_seconds=run_duration_seconds,
-            timestamp=run_record.completed_at or datetime.utcnow(),
+            timestamp=run_record.completed_at or datetime.now(timezone.utc),
         )
 
     def to_dict(self) -> Dict[str, Any]:

@@ -5,7 +5,7 @@ Provides utilities to track failures for analytics.
 
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..core.database import Database
 from ..core.models import FailureDetail, FailureCategory, FailureResolution
@@ -53,7 +53,7 @@ def track_failure(
         error_message=truncated_error,
         resolution=resolution,
         metadata=metadata or {},
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
     )
 
     try:

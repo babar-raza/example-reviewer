@@ -7,7 +7,7 @@ import json
 import logging
 import shlex
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -151,7 +151,7 @@ class GistService:
         payload = {
             "gist_id": gist_id,
             "etag": etag,
-            "cached_at": datetime.utcnow().isoformat(),
+            "cached_at": datetime.now(timezone.utc).isoformat(),
             "data": data,
         }
         cache_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -163,7 +163,7 @@ class GistService:
             cached_dt = datetime.fromisoformat(cached_at)
         except ValueError:
             return False
-        return datetime.utcnow() - cached_dt <= self.cache_ttl
+        return datetime.now(timezone.utc) - cached_dt <= self.cache_ttl
 
     def _result_from_cache(
         self,
@@ -175,7 +175,7 @@ class GistService:
     ) -> GistFetchResult:
         data = cache_data.get("data", {})
         if refresh_cache:
-            cache_data["cached_at"] = datetime.utcnow().isoformat()
+            cache_data["cached_at"] = datetime.now(timezone.utc).isoformat()
             self._write_cache(gist_id, cache_data.get("etag"), data)
         return self._result_from_payload(gist_id, owner, data, filename, cache_data.get("etag"))
 

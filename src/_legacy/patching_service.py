@@ -7,7 +7,7 @@ import json
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
@@ -279,7 +279,7 @@ class PatchingService:
             return None
 
     def _create_backup_branch(self, family: str) -> Dict[str, str]:
-        branch = f"backup/{family}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        branch = f"backup/{family}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
         try:
             commit = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
