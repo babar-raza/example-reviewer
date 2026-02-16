@@ -732,6 +732,91 @@ def _get_llm_service():
         return None
 
 
+def review_patterns(family: str, auto_approve: bool = False) -> None:
+    """
+    Review pending patterns: show summary, auto-approve high performers.
+
+    Queries pattern_performance table and auto-approves patterns that meet
+    thresholds (score >= 0.8 AND applications >= 3). Retires patterns with
+    score <= 0.1 AND applications >= 10.
+    """
+    from src.services.learned_patterns_service import LearnedPatternsService
+
+    service = LearnedPatternsService(family, db_path=CATALOG_DB)
+    conn = sqlite3.connect(str(CATALOG_DB))
+    conn.row_factory = sqlite3.Row
+
+    # Get all pending patterns with performance data
+    rows = conn.execute(
+        """
+        SELECT lp.id, lp.error_signature, lp.fix_type, lp.fix_template,
+               lp.confidence, lp.source,
+               COALESCE(pp.times_applied, 0) as times_applied,
+               COALESCE(pp.times_succeeded, 0) as times_succeeded,
+               COALESCE(pp.success_rate, 0.0) as success_rate
+        FROM learned_patterns lp
+        LEFT JOIN pattern_performance pp ON lp.id = pp.pattern_id
+        WHERE lp.family = ?
+          AND lp.auto_approved = FALSE
+          AND lp.source NOT LIKE 'retired_%'
+        ORDER BY lp.fix_type, pp.success_rate DESC
+        """,
+        (family,),
+    ).fetchall()
+
+    if not rows:
+        print(f"No pending patterns for family '{family}'.")
+        conn.close()
+        service.close()
+        return
+
+    print(f"\nPending patterns for '{family}': {len(rows)}")
+    print(f"{'='*70}")
+
+    approve_ids = []
+    retire_ids = []
+
+    for row in rows:
+        applied = row["times_applied"]
+        rate = row["success_rate"]
+        status = ""
+
+        # Auto-approve: high performance
+        if applied >= 3 and rate >= 0.8:
+            status = " [AUTO-APPROVE]"
+            approve_ids.append(row["id"])
+        # Retire: consistently failing
+        elif applied >= 10 and rate <= 0.1:
+            status = " [RETIRE]"
+            retire_ids.append(row["id"])
+
+        print(
+            f"  #{row['id']:3d} {row['fix_type']:18s} {row['error_signature']:12s} "
+            f"conf={row['confidence']:.2f} "
+            f"perf={row['times_succeeded']}/{applied} ({rate:.0%})"
+            f"{status}"
+        )
+
+    print(f"\n{'='*70}")
+    print(f"Summary: {len(approve_ids)} auto-approve, {len(retire_ids)} retire, "
+          f"{len(rows) - len(approve_ids) - len(retire_ids)} needs review")
+
+    if auto_approve:
+        if approve_ids:
+            count = service.bulk_approve(approve_ids)
+            print(f"Approved {count} patterns")
+        if retire_ids:
+            for pid in retire_ids:
+                service.retire_pattern(pid, "low_performance")
+            print(f"Retired {len(retire_ids)} patterns")
+    else:
+        if approve_ids or retire_ids:
+            print("(Use --auto-approve to apply changes)")
+
+    conn.close()
+    service.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Auto-learn fix patterns from pipeline runs")
     parser.add_argument("--family", required=True, help="Product family")
@@ -741,7 +826,17 @@ def main():
     parser.add_argument("--no-llm", action="store_true", help="Disable LLM extraction (overrides config)")
     parser.add_argument("--retire-patterns", action="store_true", help="Force pattern retirement (overrides config enabled=false)")
     parser.add_argument("--no-retire", action="store_true", help="Skip pattern retirement (overrides config)")
+    parser.add_argument("--review", action="store_true", help="Review pending patterns (show status, auto-approve/retire)")
+    parser.add_argument("--auto-approve", action="store_true", help="Apply auto-approve/retire actions during --review")
     args = parser.parse_args()
+
+    # Handle --review subcommand
+    if args.review:
+        if not CATALOG_DB.exists():
+            logger.error(f"Catalog database not found: {CATALOG_DB}")
+            sys.exit(1)
+        review_patterns(args.family, auto_approve=args.auto_approve)
+        return
 
     if not MAIN_DB.exists():
         logger.error(f"Main database not found: {MAIN_DB}")

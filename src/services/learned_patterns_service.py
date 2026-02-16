@@ -721,6 +721,109 @@ class LearnedPatternsService:
         conn.commit()
         return retired
 
+    def approve_pattern(self, pattern_id: int) -> bool:
+        """
+        Approve a pattern by setting auto_approved=TRUE.
+
+        Args:
+            pattern_id: ID of the pattern to approve
+
+        Returns:
+            True if pattern was updated, False if not found or error
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE learned_patterns
+                SET auto_approved = TRUE,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (pattern_id,),
+            )
+            conn.commit()
+            if cursor.rowcount > 0:
+                logger.info(f"Approved pattern {pattern_id}")
+                # Invalidate preloaded cache since approval status changed
+                self._preloaded_cache.clear()
+                return True
+            logger.warning(f"Pattern {pattern_id} not found")
+            return False
+        except sqlite3.Error as e:
+            logger.error(f"Error approving pattern {pattern_id}: {e}")
+            return False
+
+    def retire_pattern(self, pattern_id: int, reason: str) -> bool:
+        """
+        Retire a pattern by setting auto_approved=FALSE and marking source.
+
+        Args:
+            pattern_id: ID of the pattern to retire
+            reason: Reason for retirement (appended to source as 'retired_{reason}')
+
+        Returns:
+            True if pattern was updated, False if not found or error
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                """
+                UPDATE learned_patterns
+                SET auto_approved = FALSE,
+                    source = 'retired_' || ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (reason, pattern_id),
+            )
+            conn.commit()
+            if cursor.rowcount > 0:
+                logger.info(f"Retired pattern {pattern_id}: {reason}")
+                self._preloaded_cache.clear()
+                return True
+            logger.warning(f"Pattern {pattern_id} not found")
+            return False
+        except sqlite3.Error as e:
+            logger.error(f"Error retiring pattern {pattern_id}: {e}")
+            return False
+
+    def bulk_approve(self, pattern_ids: List[int]) -> int:
+        """
+        Approve multiple patterns in a single transaction.
+
+        Args:
+            pattern_ids: List of pattern IDs to approve
+
+        Returns:
+            Number of patterns successfully approved
+        """
+        if not pattern_ids:
+            return 0
+
+        conn = self._get_connection()
+        approved = 0
+        try:
+            for pid in pattern_ids:
+                cursor = conn.execute(
+                    """
+                    UPDATE learned_patterns
+                    SET auto_approved = TRUE,
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (pid,),
+                )
+                approved += cursor.rowcount
+            conn.commit()
+            logger.info(f"Bulk approved {approved}/{len(pattern_ids)} patterns")
+            self._preloaded_cache.clear()
+            return approved
+        except sqlite3.Error as e:
+            logger.error(f"Error during bulk approval: {e}")
+            conn.rollback()
+            return 0
+
     def get_pattern_performance(self, pattern_id: int) -> Optional[Dict[str, Any]]:
         """Get performance metrics for a pattern."""
         conn = self._get_connection()

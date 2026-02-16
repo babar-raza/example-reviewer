@@ -40,7 +40,7 @@ USING_DIRECTIVE_ALLOWLIST: Dict[str, str] = {
 
 
 # Allowlist for CS0103: Variable names that can be auto-defined
-UNDECLARED_VAR_ALLOWLIST = {"outputPath", "destinationPath", "archivePath", "filePath", "dataDir"}
+UNDECLARED_VAR_ALLOWLIST = {"outputPath", "destinationPath", "archivePath", "filePath", "dataDir", "baseDir", "sourceDir", "outputDir", "baseFolder", "SourceDir", "OutputDir", "outputFolder", "output"}
 
 
 # Password normalization: common placeholder passwords to replace with test password
@@ -161,15 +161,25 @@ def parse_cs0246_error(error: str, using_directives: Dict[str, str] = None) -> O
     return None
 
 
+_SYSTEM_PREFERRED_TYPES = {
+    "Path", "Directory", "File", "Console", "Environment", "Math",
+    "Convert", "Encoding", "Stream", "Color", "Image", "Graphics",
+    "Uri", "WebClient", "HttpClient", "Task", "Thread",
+}
+
+
 def parse_cs0104_error(error: str) -> Optional[Tuple[str, str]]:
     """
-    Parse CS0104 error to extract ambiguous type and preferred Aspose namespace.
+    Parse CS0104 error to extract ambiguous type and preferred namespace.
 
     Error format: "'ParallelOptions' is an ambiguous reference between
     'Aspose.Zip.Saving.ParallelOptions' and 'System.Threading.Tasks.ParallelOptions'"
 
+    For common BCL types (Path, Directory, File, etc.), prefers System namespace.
+    For Aspose-specific types, prefers Aspose namespace.
+
     Returns:
-        Tuple of (type_name, aspose_fully_qualified) or None
+        Tuple of (type_name, fully_qualified) or None
     """
     match = re.search(
         r"'(\w+)' is an ambiguous reference between '([\w.]+)' and '([\w.]+)'",
@@ -178,7 +188,13 @@ def parse_cs0104_error(error: str) -> Optional[Tuple[str, str]]:
     if match:
         type_name = match.group(1)
         ref1, ref2 = match.group(2), match.group(3)
-        # Prefer the Aspose namespace
+        # For well-known System types, prefer the System namespace
+        if type_name in _SYSTEM_PREFERRED_TYPES:
+            if ref1.startswith("System."):
+                return (type_name, ref1)
+            elif ref2.startswith("System."):
+                return (type_name, ref2)
+        # Otherwise prefer the Aspose namespace
         if ref1.startswith("Aspose."):
             return (type_name, ref1)
         elif ref2.startswith("Aspose."):
@@ -202,6 +218,155 @@ def fix_cs0104_ambiguous_reference(code: str, type_name: str, fq_name: str) -> T
             return new_code, f"CS0104: Fully qualified ambiguous '{type_name}' as '{fq_name}'"
             code = new_code
     return code, ""
+
+
+def parse_cs0234_error(error: str) -> Optional[Tuple[str, str]]:
+    """
+    Parse CS0234 error: "The type or namespace name 'X' does not exist in the namespace 'Y'"
+
+    Returns:
+        Tuple of (type_name, wrong_namespace) or None
+    """
+    match = re.search(
+        r"The type or namespace name '(\w+)' does not exist in the namespace '([\w.]+)'",
+        error,
+    )
+    if match:
+        return (match.group(1), match.group(2))
+    return None
+
+
+def fix_cs0234_namespace_missing(
+    code: str, type_name: str, wrong_namespace: str, catalog=None
+) -> Tuple[str, str]:
+    """
+    Fix CS0234: The type 'X' does not exist in namespace 'Y'.
+    Strategy: Look up the correct namespace in the catalog, add/replace using directive.
+    """
+    if not catalog:
+        return code, ""
+
+    # Look up the correct namespace for the type in the catalog
+    correct_ns = None
+    if hasattr(catalog, "get_namespace_for_type"):
+        correct_ns = catalog.get_namespace_for_type(type_name)
+    elif isinstance(catalog, dict):
+        # Catalog may be a dict with types section
+        types = catalog.get("types", [])
+        for t in types:
+            if t.get("name") == type_name:
+                correct_ns = t.get("namespace")
+                break
+
+    if not correct_ns or correct_ns == wrong_namespace:
+        return code, ""
+
+    correct_using = f"using {correct_ns};"
+    wrong_using = f"using {wrong_namespace};"
+
+    if correct_using in code:
+        return code, ""  # Already has the correct using
+
+    if wrong_using in code:
+        # Replace the wrong using with the correct one
+        fixed_code = code.replace(wrong_using, correct_using, 1)
+        return fixed_code, f"CS0234: Replaced 'using {wrong_namespace}' with 'using {correct_ns}' for type '{type_name}'"
+    else:
+        # Add the correct using directive
+        fixed_code, desc = fix_cs0246_missing_using(code, type_name, {type_name: correct_using})
+        if desc:
+            return fixed_code, f"CS0234: Added 'using {correct_ns}' for type '{type_name}' (was missing from '{wrong_namespace}')"
+        return code, ""
+
+
+def parse_cs1069_error(error: str) -> Optional[Tuple[str, str]]:
+    """
+    Parse CS1069 error: "The type name 'X' could not be found in the namespace 'Y'"
+    (type forwarding / assembly mismatch)
+
+    Returns:
+        Tuple of (type_name, current_namespace) or None
+    """
+    match = re.search(
+        r"The type name '(\w+)' could not be found in the namespace '([\w.]+)'",
+        error,
+    )
+    if match:
+        return (match.group(1), match.group(2))
+    return None
+
+
+def fix_cs1069_type_forwarded(
+    code: str, type_name: str, namespace: str, catalog=None
+) -> Tuple[str, str]:
+    """
+    Fix CS1069: Type forwarded to another assembly.
+    Strategy: Look up the correct namespace in the catalog, replace using directive.
+    """
+    if not catalog:
+        return code, ""
+
+    correct_ns = None
+    if hasattr(catalog, "get_namespace_for_type"):
+        correct_ns = catalog.get_namespace_for_type(type_name)
+    elif isinstance(catalog, dict):
+        types = catalog.get("types", [])
+        for t in types:
+            if t.get("name") == type_name:
+                correct_ns = t.get("namespace")
+                break
+
+    if not correct_ns or correct_ns == namespace:
+        return code, ""
+
+    old_using = f"using {namespace};"
+    new_using = f"using {correct_ns};"
+
+    if new_using in code:
+        return code, ""
+
+    if old_using in code:
+        fixed_code = code.replace(old_using, new_using, 1)
+        return fixed_code, f"CS1069: Type '{type_name}' forwarded; replaced 'using {namespace}' with 'using {correct_ns}'"
+
+    # Add the correct using if old one not found
+    lines = code.split('\n')
+    last_using = -1
+    for i, line in enumerate(lines):
+        if line.strip().startswith('using ') and line.strip().endswith(';'):
+            last_using = i
+    if last_using >= 0:
+        lines.insert(last_using + 1, new_using)
+    else:
+        lines.insert(0, new_using)
+    fixed_code = '\n'.join(lines)
+    return fixed_code, f"CS1069: Added 'using {correct_ns}' for forwarded type '{type_name}'"
+
+
+def fix_cs1513_missing_brace(code: str) -> Tuple[str, str]:
+    """
+    Fix CS1513: Missing closing brace(s).
+    Counts opening vs closing braces and appends missing ones.
+    Conservative: only fixes if difference is 1-3 braces.
+    """
+    open_count = code.count('{')
+    close_count = code.count('}')
+
+    if open_count <= close_count:
+        return code, ""
+
+    missing = open_count - close_count
+
+    if missing > 3:
+        # Too many missing braces — likely a deeper structural issue
+        return code, ""
+
+    lines = code.rstrip().split('\n')
+    for _ in range(missing):
+        lines.append('}')
+
+    fixed_code = '\n'.join(lines)
+    return fixed_code, f"CS1513: Added {missing} missing closing brace(s)"
 
 
 def fix_cs0246_missing_using(code: str, type_name: str, using_directives: Dict[str, str] = None) -> Tuple[str, str]:
@@ -272,8 +437,9 @@ def fix_cs0103_undefined_name(code: str, var_name: str, using_directives: Dict[s
         return fix_cs0246_missing_using(code, var_name, using_directives)
 
     # Generate safe default based on variable name
-    if var_name == "dataDir":
-        # Common Aspose gist boilerplate: dataDir is a path prefix for test files
+    if var_name in ("dataDir", "baseDir", "sourceDir", "outputDir", "baseFolder",
+                     "SourceDir", "OutputDir", "outputFolder", "output"):
+        # Common Aspose gist boilerplate: path prefix variables for test files
         default_value = '""'
     else:
         default_value = 'Path.Combine(Path.GetTempPath(), "output")'
@@ -1137,6 +1303,32 @@ def fix_extract_output_directory(code: str) -> Tuple[str, str]:
     return fixed_code, fix_desc
 
 
+def fix_plugins_to_lowcode(code: str) -> Tuple[str, str]:
+    """
+    Fix deprecated Aspose.*.Plugins namespace → Aspose.*.LowCode.
+
+    Starting in 2025, Aspose products renamed the Plugins namespace to LowCode:
+    - Aspose.Pdf.Plugins → Aspose.Pdf.LowCode
+    - Aspose.Words.Plugins → Aspose.Words.LowCode
+    - Aspose.Cells.Plugins → Aspose.Cells.LowCode
+    etc.
+
+    Blog/doc examples may still reference the old Plugins namespace.
+    """
+    if '.Plugins' not in code:
+        return code, ""
+
+    # Replace Aspose.*.Plugins with Aspose.*.LowCode
+    fixed = re.sub(
+        r'\bAspose\.(\w+)\.Plugins\b',
+        r'Aspose.\1.LowCode',
+        code,
+    )
+    if fixed != code:
+        return fixed, "Renamed deprecated Aspose.*.Plugins to Aspose.*.LowCode"
+    return code, ""
+
+
 def fix_cs1061_save_async(code: str) -> Tuple[str, str]:
     """
     Fix CS1061: Archive does not contain a definition for 'SaveAsync'.
@@ -1566,6 +1758,251 @@ def proactive_add_using_directives(code: str, namespace_map: Dict[str, str]) -> 
     return fixed_code, fixes
 
 
+def fix_data_dir_patterns(code: str, replacements: Dict[str, str]) -> Tuple[str, str]:
+    """Apply configurable data-dir pattern replacements for CS file examples.
+
+    Replaces family-specific data directory resolution patterns (e.g.
+    RunExamples.GetDataDir_*(), MyDir, ArtifactsDir) with workspace-relative paths.
+
+    Args:
+        code: C# source code
+        replacements: Dict of {regex_pattern: replacement_string}
+
+    Returns:
+        (modified_code, description_of_changes)
+    """
+    changes = []
+    for pattern, replacement in replacements.items():
+        # If replacement already has quotes, use as-is; otherwise add quotes
+        if replacement.startswith('"') or replacement.startswith('@"'):
+            repl = replacement
+        else:
+            repl = f'"{replacement}"'
+        new_code, count = re.subn(pattern, repl, code)
+        if count > 0:
+            changes.append(f"{count}x {pattern}")
+            code = new_code
+    desc = f"Data dir fix: {'; '.join(changes)}" if changes else ""
+    return code, desc
+
+
+def fix_example_namespace_collision(code: str, package_namespace: str = "") -> Tuple[str, str]:
+    """Strip example namespaces that collide with the NuGet package namespace.
+
+    Removes namespace wrappers like:
+      namespace Aspose.Pdf.Examples.CSharp.AsposePDF.Text { ... }
+      namespace DocsExamples.Programming_with_Documents { ... }
+
+    This prevents CS0234/CS0246 errors caused by the example namespace
+    partially matching the NuGet package namespace.
+
+    Args:
+        code: C# source code
+        package_namespace: NuGet package root namespace (e.g. "Aspose.Pdf")
+
+    Returns:
+        (modified_code, description_of_changes)
+    """
+    # Match namespace declarations that look like example namespaces
+    ns_pattern = re.compile(
+        r'^(\s*)namespace\s+([\w.]+)\s*\{',
+        re.MULTILINE
+    )
+    match = ns_pattern.search(code)
+    if not match:
+        return code, ""
+
+    ns_name = match.group(2)
+
+    # Only strip if it looks like an example namespace (contains "Examples", "Docs", etc.)
+    # or if it starts with the package namespace and has extra segments
+    is_example_ns = any(kw in ns_name for kw in ['Examples', 'DocsExamples', 'ApiExamples', 'Samples'])
+    is_collision = package_namespace and ns_name.startswith(package_namespace) and ns_name != package_namespace
+
+    if not (is_example_ns or is_collision):
+        return code, ""
+
+    # Find the matching closing brace by counting braces from the namespace opening
+    ns_start = match.start()
+    brace_start = match.end() - 1  # Position of the opening {
+    depth = 1
+    pos = brace_start + 1
+    while pos < len(code) and depth > 0:
+        if code[pos] == '{':
+            depth += 1
+        elif code[pos] == '}':
+            depth -= 1
+        pos += 1
+
+    if depth != 0:
+        return code, ""
+
+    ns_end = pos  # Position after the closing }
+
+    # Extract the inner content (between { and })
+    inner = code[brace_start + 1:ns_end - 1]
+
+    # Dedent the inner content by the namespace indentation
+    indent = match.group(1)
+    if indent:
+        lines = inner.split('\n')
+        dedented = []
+        for line in lines:
+            if line.startswith(indent + '    '):
+                dedented.append(line[len(indent) + 4:])
+            elif line.startswith(indent):
+                dedented.append(line[len(indent):])
+            elif line.strip() == '':
+                dedented.append('')
+            else:
+                dedented.append(line)
+        inner = '\n'.join(dedented)
+
+    # Reconstruct: code before namespace + inner content + code after namespace
+    result = code[:ns_start] + inner.strip() + '\n' + code[ns_end:].lstrip()
+
+    return result.strip(), f"Stripped example namespace '{ns_name}'"
+
+
+# ---------------------------------------------------------------------------
+# HEAL-37: Proactive catalog-driven error-inference functions
+# These scan code BEFORE compilation and validate against the API catalog
+# to catch errors that would otherwise require a compile-fail-fix cycle.
+# ---------------------------------------------------------------------------
+
+
+def proactive_validate_enum_members(code: str, catalog) -> Tuple[str, List[str]]:
+    """
+    Proactively validate enum member references against the API catalog.
+
+    Scans code for EnumType.MemberName patterns and fuzzy-fixes invalid members
+    BEFORE compilation, eliminating CS0117 errors proactively.
+    """
+    if not catalog or not hasattr(catalog, 'get_all_enums'):
+        return code, []
+
+    all_enums = catalog.get_all_enums()
+    if not all_enums:
+        return code, []
+
+    fixes = []
+    fixed_code = code
+
+    for enum_name, valid_members in all_enums.items():
+        if not valid_members:
+            continue
+        pattern = rf'\b{re.escape(enum_name)}\.(\w+)\b'
+        for match in re.finditer(pattern, fixed_code):
+            member_name = match.group(1)
+            if member_name in valid_members:
+                continue
+            best = difflib.get_close_matches(member_name, valid_members, n=1, cutoff=0.4)
+            if best:
+                old_ref = f"{enum_name}.{member_name}"
+                new_ref = f"{enum_name}.{best[0]}"
+                fixed_code = fixed_code.replace(old_ref, new_ref)
+                fixes.append(
+                    f"PROACTIVE_ENUM: Fixed '{old_ref}' -> '{new_ref}' (catalog enum validation)"
+                )
+                logger.info(f"PROACTIVE_ENUM: {old_ref} -> {new_ref}")
+
+    return fixed_code, fixes
+
+
+def proactive_validate_constructors(code: str, catalog) -> Tuple[str, List[str]]:
+    """
+    Proactively validate constructor calls against catalog signatures.
+
+    Scans for new TypeName(args) patterns and checks if the arguments match
+    known overloads. Wraps string args in Options objects where needed.
+    Catches CS1503 proactively.
+    """
+    if not catalog or not hasattr(catalog, 'get_constructor_signatures'):
+        return code, []
+
+    fixes = []
+    fixed_code = code
+
+    # Find all constructor calls: new TypeName(...)
+    ctor_pattern = r'new\s+(\w+)\s*\('
+    seen_types = set()
+    for match in re.finditer(ctor_pattern, fixed_code):
+        type_name = match.group(1)
+        if type_name in seen_types:
+            continue
+        seen_types.add(type_name)
+
+        ctors = catalog.get_constructor_signatures(type_name)
+        if not ctors:
+            continue
+
+        result = fix_cs1503_constructor_type(fixed_code, type_name, catalog=catalog)
+        if result is not None and result != fixed_code:
+            fixed_code = result
+            fixes.append(
+                f"PROACTIVE_CTOR: Wrapped constructor arg for '{type_name}' "
+                f"with Options type (catalog constructor validation)"
+            )
+            logger.info(f"PROACTIVE_CTOR: Wrapped arg for {type_name}")
+
+    return fixed_code, fixes
+
+
+def proactive_normalize_type_casing(code: str, catalog) -> Tuple[str, List[str]]:
+    """
+    Proactively fix type name casing against the API catalog.
+
+    Scans for type references and does case-insensitive matching to fix
+    casing errors (e.g. BarCodeGenerator -> BarcodeGenerator) BEFORE
+    compilation, eliminating CS0246 errors proactively.
+    """
+    if not catalog or not hasattr(catalog, 'find_type_case_insensitive'):
+        return code, []
+
+    fixes = []
+    fixed_code = code
+
+    # Find candidate type names: PascalCase identifiers after 'new', '.', or standalone
+    type_pattern = r'(?:new\s+)([A-Z]\w{2,})\b'
+    seen = set()
+
+    for match in re.finditer(type_pattern, fixed_code):
+        type_name = match.group(1)
+        if type_name in seen:
+            continue
+        seen.add(type_name)
+
+        # Skip if already valid in catalog
+        if catalog.validate_symbol(type_name):
+            continue
+
+        # Try case-insensitive match
+        correct_name = catalog.find_type_case_insensitive(type_name)
+        if correct_name and correct_name != type_name:
+            fixed_code = re.sub(rf'\b{re.escape(type_name)}\b', correct_name, fixed_code)
+
+            # Add using directive for the correct type if missing
+            using_dir = catalog.get_using_directive(correct_name)
+            if using_dir and using_dir not in fixed_code:
+                lines = fixed_code.split('\n')
+                last_using = -1
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('using ') and line.strip().endswith(';'):
+                        last_using = i
+                if last_using >= 0:
+                    lines.insert(last_using + 1, using_dir)
+                else:
+                    lines.insert(0, using_dir)
+                fixed_code = '\n'.join(lines)
+
+            fixes.append(
+                f"PROACTIVE_CASING: Fixed type casing '{type_name}' -> '{correct_name}'"
+            )
+            logger.info(f"PROACTIVE_CASING: {type_name} -> {correct_name}")
+
+    return fixed_code, fixes
+
+
 def apply_semantic_microfixes(
     code: str,
     errors: List[str],
@@ -1580,7 +2017,7 @@ def apply_semantic_microfixes(
     0. STREAM_DISPOSAL: Fix premature stream disposal (always applied)
     1. Family-specific proactive fixes (if family specified)
     2. Generic proactive fixes (passwords, directories, ASP.NET, etc.)
-    3. Error-driven fixes (CS0246, CS0103, CS7036, CS0104, CS0117, CS1503)
+    3. Error-driven fixes (CS1513, CS0104, CS0246, CS0234, CS1069, CS0103, CS7036, CS0117, CS1503)
 
     When a catalog (APICatalogService) is provided, CS0117 and CS1503 errors
     can be fixed dynamically using enum member data and constructor signatures
@@ -1666,6 +2103,11 @@ def apply_semantic_microfixes(
     if fix_desc:
         applied_fixes.append(fix_desc)
 
+    # 2c2. Fix deprecated Plugins → LowCode namespace (Aspose 2025+ rename)
+    fixed_code, fix_desc = fix_plugins_to_lowcode(fixed_code)
+    if fix_desc:
+        applied_fixes.append(fix_desc)
+
     # 2d. Fix ASP.NET minimal API boilerplate (inject builder/app)
     fixed_code, fix_desc = fix_aspnet_minimal_boilerplate(fixed_code)
     if fix_desc:
@@ -1701,6 +2143,19 @@ def apply_semantic_microfixes(
     if fix_desc:
         applied_fixes.append(fix_desc)
 
+    # 2i. Proactive catalog-driven validation (HEAL-37)
+    # Scans code for patterns and validates against the API catalog WITHOUT
+    # needing compiler errors. Each catches a category of errors proactively.
+    if catalog:
+        fixed_code, enum_fixes = proactive_validate_enum_members(fixed_code, catalog)
+        applied_fixes.extend(enum_fixes)
+
+        fixed_code, ctor_fixes = proactive_validate_constructors(fixed_code, catalog)
+        applied_fixes.extend(ctor_fixes)
+
+        fixed_code, casing_fixes = proactive_normalize_type_casing(fixed_code, catalog)
+        applied_fixes.extend(casing_fixes)
+
     if not errors:
         return fixed_code, applied_fixes
 
@@ -1716,6 +2171,9 @@ def apply_semantic_microfixes(
     cs1061_members = []  # (type_name, member_name) — new: generic member-not-found
     cs1503_types = []  # type_name (from error context)
     cs1503_raw_errors = []  # raw error strings for generic constructor fix
+    cs0234_types = []  # (type_name, wrong_namespace) — namespace redirect
+    cs1069_types = []  # (type_name, current_namespace) — type forwarding
+    cs1513_detected = False  # missing closing brace
 
     for error in errors:
         error_code = parse_error_code(error)
@@ -1766,7 +2224,27 @@ def apply_semantic_microfixes(
                     cs1503_types.append(target_type)
                 cs1503_raw_errors.append(error)
 
-    # Apply fixes in order: CS0104 -> CS0246 -> CS0103 -> CS7036
+        elif error_code == "CS0234":
+            parsed = parse_cs0234_error(error)
+            if parsed and parsed not in cs0234_types:
+                cs0234_types.append(parsed)
+
+        elif error_code == "CS1069":
+            parsed = parse_cs1069_error(error)
+            if parsed and parsed not in cs1069_types:
+                cs1069_types.append(parsed)
+
+        elif error_code == "CS1513":
+            cs1513_detected = True
+
+    # Apply structural fix first (CS1513), then namespace fixes, then others
+    # 0a. Fix CS1513: Missing closing braces (structural — must come first)
+    if cs1513_detected:
+        fixed_code, fix_desc = fix_cs1513_missing_brace(fixed_code)
+        if fix_desc:
+            applied_fixes.append(fix_desc)
+
+    # Apply fixes in order: CS0104 -> CS0246 -> CS0234 -> CS1069 -> CS0103 -> CS7036
 
     # 0. Fix CS0104: Ambiguous References (fully qualify with Aspose namespace)
     for type_name, fq_name in cs0104_refs:
@@ -1777,6 +2255,18 @@ def apply_semantic_microfixes(
     # 1. Fix CS0246: Missing Using Directives
     for type_name in cs0246_types:
         fixed_code, fix_desc = fix_cs0246_missing_using(fixed_code, type_name, using_directives)
+        if fix_desc:
+            applied_fixes.append(fix_desc)
+
+    # 1b. Fix CS0234: Namespace Redirect (type not in namespace)
+    for type_name, wrong_ns in cs0234_types:
+        fixed_code, fix_desc = fix_cs0234_namespace_missing(fixed_code, type_name, wrong_ns, catalog=catalog)
+        if fix_desc:
+            applied_fixes.append(fix_desc)
+
+    # 1c. Fix CS1069: Type Forwarded to Different Assembly
+    for type_name, ns in cs1069_types:
+        fixed_code, fix_desc = fix_cs1069_type_forwarded(fixed_code, type_name, ns, catalog=catalog)
         if fix_desc:
             applied_fixes.append(fix_desc)
 

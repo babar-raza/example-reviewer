@@ -418,6 +418,90 @@ class TestRetireLowPerformers:
         assert retired == 0
 
 
+class TestApprovePattern:
+    """Tests for pattern approval."""
+
+    def test_approve_pattern(self, service, temp_db):
+        """Test approving a pending pattern."""
+        conn = sqlite3.connect(str(temp_db))
+        conn.execute("""
+            INSERT INTO learned_patterns
+            (family, pattern_type, error_signature, fix_template, auto_approved, source)
+            VALUES ('zip', 'compile_error', 'CS0246', 'Test', FALSE, 'auto_learn')
+        """)
+        conn.commit()
+        conn.close()
+
+        result = service.approve_pattern(1)
+        assert result is True
+
+        conn = sqlite3.connect(str(temp_db))
+        row = conn.execute("SELECT auto_approved FROM learned_patterns WHERE id = 1").fetchone()
+        assert row[0] == 1  # TRUE
+        conn.close()
+
+    def test_approve_nonexistent_pattern(self, service):
+        """Test approving a pattern that doesn't exist."""
+        result = service.approve_pattern(9999)
+        assert result is False
+
+    def test_retire_pattern_with_reason(self, service, temp_db):
+        """Test retiring a pattern with a reason."""
+        conn = sqlite3.connect(str(temp_db))
+        conn.execute("""
+            INSERT INTO learned_patterns
+            (family, pattern_type, error_signature, fix_template, auto_approved, source)
+            VALUES ('zip', 'compile_error', 'CS0246', 'Test', TRUE, 'auto_learn')
+        """)
+        conn.commit()
+        conn.close()
+
+        result = service.retire_pattern(1, "low_performance")
+        assert result is True
+
+        conn = sqlite3.connect(str(temp_db))
+        row = conn.execute("SELECT auto_approved, source FROM learned_patterns WHERE id = 1").fetchone()
+        assert row[0] == 0  # FALSE
+        assert row[1] == "retired_low_performance"
+        conn.close()
+
+    def test_retire_nonexistent_pattern(self, service):
+        """Test retiring a pattern that doesn't exist."""
+        result = service.retire_pattern(9999, "test")
+        assert result is False
+
+    def test_bulk_approve(self, service, temp_db):
+        """Test bulk approving multiple patterns."""
+        conn = sqlite3.connect(str(temp_db))
+        for i in range(5):
+            conn.execute("""
+                INSERT INTO learned_patterns
+                (family, pattern_type, error_signature, fix_template, auto_approved, source)
+                VALUES ('zip', 'compile_error', 'CS0246', ?, FALSE, 'auto_learn')
+            """, (f"Pattern {i}",))
+        conn.commit()
+        conn.close()
+
+        result = service.bulk_approve([1, 2, 3])
+        assert result == 3
+
+        conn = sqlite3.connect(str(temp_db))
+        approved = conn.execute(
+            "SELECT COUNT(*) FROM learned_patterns WHERE auto_approved = TRUE"
+        ).fetchone()[0]
+        assert approved == 3
+        not_approved = conn.execute(
+            "SELECT COUNT(*) FROM learned_patterns WHERE auto_approved = FALSE"
+        ).fetchone()[0]
+        assert not_approved == 2
+        conn.close()
+
+    def test_bulk_approve_empty_list(self, service):
+        """Test bulk approve with empty list."""
+        result = service.bulk_approve([])
+        assert result == 0
+
+
 class TestStorePattern:
     """Tests for pattern storage."""
 
