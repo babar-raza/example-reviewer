@@ -1245,7 +1245,8 @@ class PipelineOrchestrator:
 
                     # C1: Post-run gap analysis — identify catalog fix gaps
                     try:
-                        gap_analysis = self._analyze_catalog_gaps(family, run_id, _catalog if '_catalog' in dir() else None)
+                        _catalog = self.registry.get_api_catalog(family) if (family and self.registry) else None
+                        gap_analysis = self._analyze_catalog_gaps(family, run_id, _catalog)
                         if gap_analysis:
                             logger.info(
                                 f"Catalog gap analysis: {gap_analysis.get('catalog_fix_gaps', 0)} fixable gaps, "
@@ -2881,6 +2882,41 @@ class PipelineOrchestrator:
                 
                 # Copy compilable code to verified for execution
                 example.verified_code = example.compilable_code
+
+                # Proactive required_files resolution: resolve missing required files
+                # via fixture resolver BEFORE the availability check
+                fixture_resolver_pre = self.registry.get_fixture_resolver(family)
+                if fixture_resolver_pre and test_data_path and family_config.runtime_validation.required_files:
+                    for req_file in family_config.runtime_validation.required_files:
+                        req_path = Path(test_data_path) / req_file
+                        if not req_path.exists():
+                            # Check file_aliases first (Dict[str, List[str]])
+                            aliases = getattr(family_config.runtime_validation, 'file_aliases', {}) or {}
+                            alias_targets = aliases.get(req_file, [])
+                            resolved_via_alias = False
+                            for alias_target in alias_targets:
+                                alias_path = Path(test_data_path) / alias_target
+                                if alias_path.exists():
+                                    # Copy aliased file to expected location
+                                    req_path.parent.mkdir(parents=True, exist_ok=True)
+                                    import shutil
+                                    shutil.copy2(alias_path, req_path)
+                                    logger.info(
+                                        f"Resolved required file via alias: {req_file} -> {alias_target}"
+                                    )
+                                    resolved_via_alias = True
+                                    break
+                            if resolved_via_alias:
+                                continue
+
+                            # Fall back to fixture resolver
+                            resolved = fixture_resolver_pre.resolve_missing_file(
+                                req_file, Path(test_data_path), example_id=None
+                            )
+                            if resolved:
+                                logger.info(
+                                    f"Proactive required_file resolution: {req_file} -> {resolved}"
+                                )
 
                 # Pre-flight check: Verify test data availability before runtime execution
                 # This prevents wasting LLM calls on infrastructure issues

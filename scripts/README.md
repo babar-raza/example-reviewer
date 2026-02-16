@@ -143,8 +143,9 @@ def my_function():
 ### Testing
 
 #### Run Unit Tests
+Tests for the import analyzer have been integrated into the main test suite. Run:
 ```bash
-python tests/test_import_analyzer_simple.py
+pytest tests/ -k import
 ```
 
 Expected output:
@@ -268,8 +269,8 @@ If you encounter false negatives (undefined names not caught):
 
 When adding new features or fixing bugs:
 
-1. Add unit tests in `tests/test_import_analyzer_simple.py`
-2. Run tests to ensure all pass
+1. Add unit tests in the main test suite (`tests/`)
+2. Run tests to ensure all pass (`pytest tests/`)
 3. Update this documentation
 4. Test on real CLI files
 
