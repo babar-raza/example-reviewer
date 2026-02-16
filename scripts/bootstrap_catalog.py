@@ -30,6 +30,31 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
+# Known namespace prefix mappings (NuGet package name -> .NET namespace prefix)
+# Some packages have different capitalization in their namespace vs package name
+NAMESPACE_PREFIXES = {
+    "Aspose.PDF": "Aspose.Pdf",
+    "Aspose.PSD": "Aspose.PSD",
+    "Aspose.Words": "Aspose.Words",
+    "Aspose.Zip": "Aspose.Zip",
+    "Aspose.BarCode": "Aspose.BarCode",
+    "Aspose.OCR": "Aspose.OCR",
+    "Aspose.Cells": "Aspose.Cells",
+    "Aspose.Email": "Aspose.Email",
+    "Aspose.Imaging": "Aspose.Imaging",
+    "Aspose.Slides": "Aspose.Slides",
+    "Aspose.Tasks": "Aspose.Tasks",
+    "Aspose.CAD": "Aspose.CAD",
+    "Aspose.3D": "Aspose.ThreeD",
+    "Aspose.HTML": "Aspose.Html",
+    "Aspose.SVG": "Aspose.Svg",
+    "Aspose.Font": "Aspose.Font",
+    "Aspose.Drawing": "Aspose.Drawing",
+    "Aspose.Page": "Aspose.Page",
+    "Aspose.GIS": "Aspose.Gis",
+    "Aspose.TeX": "Aspose.TeX",
+}
+
 
 def invoke_catalog_types(package: str, version: str, namespace_prefix: str) -> dict:
     """
@@ -58,7 +83,7 @@ def invoke_catalog_types(package: str, version: str, namespace_prefix: str) -> d
         "dotnet",
         "run",
         "--project",
-        str(PROJECT_ROOT / "test-examples"),
+        str(PROJECT_ROOT / "test-examples" / "AsposeZipValidator.csproj"),
         "--",
         "catalog-types",
         "--package",
@@ -186,7 +211,8 @@ def main():
     # Derive defaults from family name
     package = args.package or f"Aspose.{family.capitalize()}"
     version = args.version
-    namespace_prefix = args.namespace_prefix or package
+    # Use known mapping for namespace prefix, fall back to package name
+    namespace_prefix = args.namespace_prefix or NAMESPACE_PREFIXES.get(package, package)
 
     output_path = Path(args.output) if args.output else (
         PROJECT_ROOT / "config" / "families" / f"{family}_api_catalog.json"

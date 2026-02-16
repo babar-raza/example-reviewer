@@ -1,7 +1,7 @@
 {
   "llm": {
-    "provider": "openai",
-    "model": "gpt-oss",
+    "provider": "company",
+    "model": "gpt-oss:120b",
     "temperature": 0.2,
     "max_retries": 2,
     "retry_backoff_seconds": 5,
@@ -65,10 +65,10 @@
     "drift_tolerance": 0.02
   },
   "backfill": {
-    "auto_enabled": false,
+    "auto_enabled": true,
     "targets": [
       "test_data",
-      "api_reference",
+      "api_catalog",
       "examples",
       "gist_source_code"
     ],
@@ -141,7 +141,7 @@
     "enabled": false,
     "confidence_threshold": 0.7,
     "provider": "company",
-    "model": "gpt-oss",
+    "model": "gpt-oss:120b",
     "base_url": "https://llm.professionalize.com/v1",
     "api_key_env_var": "litellm_key",
     "timeout_seconds": 60,
@@ -165,8 +165,8 @@
     "llm_call_seconds": 120,
     "code_execution_seconds": 30,
     "per_example_seconds": 300,
-    "per_phase_seconds": 1800,
-    "hard_run_timeout_seconds": 2400,
+    "per_phase_seconds": 14400,
+    "hard_run_timeout_seconds": 21600,
     "allow_timeout_override": false
   },
   "substitution": {
@@ -195,7 +195,7 @@
       "company": {
         "base_url": "https://llm.professionalize.com/v1",
         "api_key_env": "litellm_key",
-        "model": "gpt-oss",
+        "model": "gpt-oss:120b",
         "fallback_to": "ollama",
         "timeout_seconds": 120
       },
@@ -203,13 +203,17 @@
         "base_url": "http://localhost:11434/v1",
         "api_key_env": null,
         "model": "qwen2.5-coder:7b",
-        "timeout_seconds": 120
+        "timeout_seconds": 120,
+        "auto_start": true,
+        "startup_timeout_seconds": 30,
+        "auto_pull_model": true,
+        "pull_timeout_seconds": 600
       }
     },
     "model_tiers": {
-      "small": "gpt-oss",
-      "medium": "gpt-oss",
-      "large": "gpt-oss"
+      "small": "gpt-oss:120b",
+      "medium": "gpt-oss:120b",
+      "large": "gpt-oss:120b"
     },
     "routing_rules": {
       "missing_type": "small",

@@ -329,6 +329,18 @@ namespace TestValidation
                     return;
                 }
 
+                // Register AssemblyResolve handler to load dependencies from the same directory
+                // (needed for packages like Aspose.PDF that have native/managed dependencies)
+                var dllDir = Path.GetDirectoryName(dllPath)!;
+                AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+                {
+                    var depName = new AssemblyName(args.Name).Name + ".dll";
+                    var candidate = Path.Combine(dllDir, depName);
+                    if (File.Exists(candidate))
+                        return Assembly.LoadFrom(candidate);
+                    return null;
+                };
+
                 assembly = Assembly.LoadFrom(dllPath);
             }
 

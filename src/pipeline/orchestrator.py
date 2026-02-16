@@ -14,7 +14,8 @@ from datetime import datetime
 
 from ..core.models import (
     ExampleRecord, ExampleStatus, ScanScope, ScanMode,
-    ReviewResult, ReviewIssue, IssueType, IssueSeverity
+    ReviewResult, ReviewIssue, IssueType, IssueSeverity,
+    SourceType
 )
 from ..core.database import Database
 from ..core.config import ConfigurationManager, FamilyConfig, GlobalConfig
@@ -264,6 +265,17 @@ class PipelineOrchestrator:
             # Wire model routing for fallback support
             if global_config.model_routing.enabled:
                 self._llm_service.set_routing_config(global_config.model_routing.model_dump())
+
+            # Preflight check: verify endpoint availability
+            preflight = self._llm_service.preflight_check()
+            primary_status = "OK" if preflight["primary"]["available"] else f"UNAVAILABLE ({preflight['primary']['error']})"
+            fallback_status = "OK" if preflight["fallback"]["available"] else f"UNAVAILABLE ({preflight['fallback'].get('error', 'not configured')})"
+            logger.info(
+                f"LLM preflight: primary={primary_status} ({preflight['primary']['base_url']}), "
+                f"fallback={fallback_status} ({preflight['fallback'].get('base_url', 'N/A')})"
+            )
+            if not preflight["primary"]["available"] and not preflight["fallback"]["available"]:
+                logger.error("Neither primary nor fallback LLM endpoint is available!")
 
             # Detect provider capabilities on startup (Track 1: Agent F)
             if self._llm_service.is_available():
@@ -1034,7 +1046,40 @@ class PipelineOrchestrator:
                 # Don't fail pipeline if resource detection fails
                 logger.warning(f"Resource detection failed (continuing anyway): {e}")
 
+        cs_file_promoted = 0  # Track CS_FILE auto-promotions for prod DB copy decision
         try:
+            # Phase 0: Ensure API catalog is available (mandatory for namespace resolution)
+            catalog_path = Path(f"config/families/{family}_api_catalog.json")
+            if not catalog_path.exists() or self._is_catalog_invalid(catalog_path):
+                logger.info(f"Phase 0: Generating API catalog for {family}")
+                try:
+                    from ..services.backfill_service import BackfillService
+                    bs = BackfillService(config_manager=self.config_manager)
+                    catalog_result = bs.backfill_api_catalog(family=family, force=True)
+                    if catalog_result.success:
+                        logger.info(
+                            f"Phase 0: Catalog generated for {family} "
+                            f"({catalog_result.files_copied} types)"
+                        )
+                        # Refresh the registry to pick up the new catalog
+                        self.registry = FamilyServiceRegistry(
+                            self.config_manager, self.artifacts_dir
+                        )
+                    else:
+                        logger.warning(
+                            f"Phase 0: Catalog generation failed for {family}: "
+                            f"{catalog_result.error}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Phase 0: Catalog generation error for {family}: {e}")
+            else:
+                try:
+                    data = json.loads(catalog_path.read_text(encoding='utf-8'))
+                    type_count = len(data.get("types", {}))
+                    logger.info(f"Phase 0: API catalog for {family} OK ({type_count} types)")
+                except Exception:
+                    logger.info(f"Phase 0: API catalog for {family} exists")
+
             # Phase A: Discovery
             logger.info(f"Phase A: Discovery for {family}")
             with track_phase_timing(self.db, run_id, family, "discovery"):
@@ -1068,6 +1113,37 @@ class PipelineOrchestrator:
                     learned_service.preload_all_patterns()
                 except Exception as e:
                     logger.warning(f"Failed to preload patterns (continuing): {e}")
+
+            # Phase A.7: Auto-promote CS_FILE examples (reference-only, skip compile/runtime)
+            # CS_FILE examples are canonical source-of-truth from official repos.
+            # They don't need compilation/runtime verification — they serve as
+            # reference material for the vector DB and fixture enhancement.
+            _all_discovered = self.db.get_examples_by_family(
+                family, ExampleStatus.DISCOVERED, run_id=run_id
+            )
+            _cs_file_examples = [
+                ex for ex in (_all_discovered or [])
+                if ex.source_type == SourceType.CS_FILE
+            ]
+            cs_file_promoted = len(_cs_file_examples)
+            if _cs_file_examples:
+                for ex in _cs_file_examples:
+                    self.db.update_example_status(
+                        ex.example_id, ExampleStatus.VERIFIED, run_id=run_id
+                    )
+                    if ex.original_code:
+                        self.db.update_example_code(
+                            ex.example_id,
+                            verified_code=ex.original_code,
+                            run_id=run_id,
+                        )
+                logger.info(
+                    f"Phase A.7: Auto-promoted {cs_file_promoted} CS_FILE examples "
+                    f"to VERIFIED (reference-only, skip compile/runtime)"
+                )
+                results['phases']['cs_file_promotion'] = {
+                    'promoted': cs_file_promoted,
+                }
 
             # Phase B: Compilation
             logger.info(f"Phase B: Compilation verification for {family}")
@@ -1167,15 +1243,6 @@ class PipelineOrchestrator:
                             commit_source="llm",
                         )
 
-                        # Copy to production database (after telemetry has commit_hash)
-                        if self.db.production_db_path:
-                            logger.info(f"Copying run {run_id} to production database...")
-                            success = self.db.copy_run_to_production(run_id, commit_hash)
-                            if success:
-                                logger.info(f"Production database updated for run {run_id}")
-                            else:
-                                logger.warning(f"Failed to update production database for run {run_id}")
-
                     # C1: Post-run gap analysis — identify catalog fix gaps
                     try:
                         gap_analysis = self._analyze_catalog_gaps(family, run_id, _catalog if '_catalog' in dir() else None)
@@ -1213,8 +1280,23 @@ class PipelineOrchestrator:
                         output_summary=f"Verified {db_stats['verified']} examples for {family}",
                     )
                     logger.debug(f"Completed telemetry run: {telemetry_event_id}")
+
+                    # Copy to production database AFTER telemetry is fully populated
+                    # (requires: associate_commit for git_commit_hash, update_run for
+                    #  metrics_json/context_json, complete_run for status/end_time/items)
+                    # Also copy CS_FILE-only runs (no commit needed since they're reference-only)
+                    if self.db.production_db_path and (commit_hash or cs_file_promoted > 0):
+                        logger.info(f"Copying run {run_id} to production database...")
+                        success = self.db.copy_run_to_production(run_id, commit_hash)
+                        if success:
+                            logger.info(f"Production database updated for run {run_id}")
+                        else:
+                            logger.warning(f"Failed to update production database for run {run_id}")
+
                 except Exception as e:
                     logger.warning(f"Failed to complete telemetry run: {e}")
+
+            results['completed_at'] = datetime.now().isoformat()
 
         except Exception as e:
             logger.exception(f"Pipeline failed: {e}")
@@ -1223,7 +1305,7 @@ class PipelineOrchestrator:
 
             self.db.complete_run(run_id, status='failed', family=family, error=str(e))
 
-            # Complete telemetry run (failure)
+            # Complete telemetry run (failure) — include stats from DB
             if telemetry_event_id and global_config.telemetry.internal_enabled:
                 try:
                     # Flush partial LLM metrics even on failure
@@ -1241,16 +1323,58 @@ class PipelineOrchestrator:
                         'metrics_json': llm_metrics_flush,
                         'context_json': context_flush,
                     })
+
+                    # Compute stats from DB even on failure (Fix 3: RC4)
+                    try:
+                        _fail_disc = results.get('phases', {}).get('discovery', {})
+                        _fail_db = self.db.get_run_stats_from_db(family, run_id)
+                    except Exception:
+                        _fail_disc, _fail_db = {}, {}
+
                     self.telemetry_service.complete_run(
                         telemetry_event_id,
                         status='failure',
+                        items_discovered=_fail_disc.get('examples_found', 0),
+                        items_succeeded=_fail_db.get('verified', 0),
+                        items_failed=_fail_db.get('failed', 0),
                         error_summary=str(e)[:200],
                         error_details=str(e),
                     )
                 except Exception:
                     pass  # Don't fail on telemetry error
 
-        results['completed_at'] = datetime.now().isoformat()
+            results['completed_at'] = datetime.now().isoformat()
+
+        finally:
+            # Guaranteed cleanup: if neither try nor except completed normally,
+            # the run is stuck in 'running' state. Mark as 'interrupted'. (Fix 2: RC2)
+            if not results.get('completed_at'):
+                logger.warning(f"Pipeline run {run_id} did not complete normally - marking as interrupted")
+                results['completed_at'] = datetime.now().isoformat()
+                results['success'] = False
+                results['error'] = results.get('error', 'Pipeline interrupted (timeout or signal)')
+
+                try:
+                    self.db.complete_run(run_id, status='interrupted', family=family,
+                                         error='Pipeline interrupted before completion')
+                except Exception:
+                    pass
+
+                if telemetry_event_id:
+                    try:
+                        _int_disc = results.get('phases', {}).get('discovery', {})
+                        _int_db = self.db.get_run_stats_from_db(family, run_id)
+                        self.telemetry_service.complete_run(
+                            telemetry_event_id,
+                            status='interrupted',
+                            items_discovered=_int_disc.get('examples_found', 0),
+                            items_succeeded=_int_db.get('verified', 0),
+                            items_failed=_int_db.get('failed', 0),
+                            error_summary='Pipeline interrupted before completion',
+                        )
+                    except Exception:
+                        pass
+
         return results
     
     def _run_discovery_phase(
@@ -1385,7 +1509,39 @@ class PipelineOrchestrator:
 
         logger.info(f"Strategy configuration: {strategy_config}")
 
-        for example in examples:
+        # Phase and per-example timeout enforcement (Fix 4: RC3)
+        import time as _time
+        _phase_start = _time.time()
+        _phase_timeout = global_config.timeouts.per_phase_seconds    # Default: 1800s (30 min)
+        _per_ex_timeout = global_config.timeouts.per_example_seconds  # Default: 300s (5 min)
+        _total_examples = len(examples)
+        logger.info(f"[Phase B] Starting compilation: {_total_examples} examples, "
+                     f"phase_timeout={_phase_timeout}s, per_example_timeout={_per_ex_timeout}s")
+
+        for _i, example in enumerate(examples):
+            # Phase-level timeout check
+            _elapsed = _time.time() - _phase_start
+            if _elapsed > _phase_timeout:
+                logger.error(
+                    f"[Phase B] Phase timeout exceeded: {_elapsed:.0f}s > {_phase_timeout}s. "
+                    f"Processed {_i}/{_total_examples}. Aborting compilation phase."
+                )
+                stats['phase_timeout'] = True
+                stats['phase_elapsed_seconds'] = int(_elapsed)
+                break
+
+            # Progress logging every 10 examples (or every example if <20 total)
+            _log_interval = 10 if _total_examples >= 20 else 1
+            if _i > 0 and _i % _log_interval == 0:
+                _rate = _i / (_elapsed / 60) if _elapsed > 0 else 0
+                logger.info(
+                    f"[Phase B] {_i}/{_total_examples} ({100*_i/_total_examples:.1f}%) "
+                    f"rate={_rate:.1f}/min elapsed={_elapsed:.0f}s "
+                    f"ok={stats['compiled_first_try']+stats['compiled_with_fix']} "
+                    f"fail={stats['failed']}"
+                )
+
+            _example_start = _time.time()
             stats['total_processed'] += 1
 
             try:
@@ -1565,6 +1721,25 @@ class PipelineOrchestrator:
                         )
                     except Exception:
                         pass
+
+                # Proactive CS discovery fixes (data-dir patterns + namespace collision)
+                if family_config.cs_discovery.enabled:
+                    from ..services.semantic_microfixes import fix_data_dir_patterns, fix_example_namespace_collision
+                    if family_config.cs_discovery.data_dir_replacements:
+                        fixed_code, dir_desc = fix_data_dir_patterns(
+                            example.original_code or "", family_config.cs_discovery.data_dir_replacements
+                        )
+                        if dir_desc:
+                            logger.info(f"CS data-dir fix for {example.example_id}: {dir_desc}")
+                            example.original_code = fixed_code
+
+                    pkg_ns = family_config.get_nuget_package_name().replace('.', '.')
+                    ns_code, ns_desc = fix_example_namespace_collision(
+                        example.original_code or "", pkg_ns
+                    )
+                    if ns_desc:
+                        logger.info(f"CS namespace fix for {example.example_id}: {ns_desc}")
+                        example.original_code = ns_code
 
                 # A6: Proactive fixture resolution before compilation
                 # Scan code for file references and ensure test data files exist
@@ -2055,6 +2230,14 @@ class PipelineOrchestrator:
                 previous_code = None
 
                 for attempt in range(max_retries):
+                    # Per-example timeout guard (Fix 4: RC3)
+                    if _time.time() - _example_start > _per_ex_timeout:
+                        logger.warning(
+                            f"Per-example timeout for {example.example_id}: "
+                            f"{_time.time() - _example_start:.0f}s > {_per_ex_timeout}s"
+                        )
+                        break
+
                     # Track 2: Progressive Enrichment - Determine enrichment tier
                     enrichment_tier = self._get_enrichment_tier(attempt, max_retries)
 
@@ -2544,9 +2727,19 @@ class PipelineOrchestrator:
         if global_config.backfill.auto_enabled:
             test_data_path = resolve_test_data_path(family, family_config)
 
-            # Check if test data is missing
-            if test_data_path is None and family_config.test_data.local_path:
-                logger.info(f"Test data missing for {family}, attempting auto-backfill...")
+            # Determine if backfill is needed:
+            # 1. test_data_path is None (directory doesn't exist at all)
+            # 2. Directory exists but repo test data was never copied (no marker file)
+            _needs_backfill = (test_data_path is None)
+            _marker_missing = False
+            if not _needs_backfill and test_data_path and family_config.example_repo:
+                _backfill_marker = test_data_path / ".backfill_complete"
+                if not _backfill_marker.exists():
+                    _needs_backfill = True
+                    _marker_missing = True  # Directory exists but repo data never copied
+
+            if _needs_backfill and family_config.test_data.local_path:
+                logger.info(f"Test data missing or incomplete for {family}, attempting auto-backfill...")
 
                 try:
                     from ..services.backfill_service import BackfillService
@@ -2556,11 +2749,23 @@ class PipelineOrchestrator:
                         timeout_seconds=global_config.backfill.github_timeout_seconds
                     )
 
-                    result = backfill_service.backfill_test_data(family=family, force=False)
+                    # Force backfill when marker is missing — directory may have only
+                    # fixture-generated placeholders, not real repo test data
+                    result = backfill_service.backfill_test_data(family=family, force=_marker_missing)
 
                     if result.success and not result.skipped:
                         logger.info(f"Auto-backfilled {result.files_copied} test data files for {family}")
                         stats['backfill_files_copied'] = result.files_copied
+                        # Re-resolve test_data_path after backfill
+                        test_data_path = resolve_test_data_path(family, family_config)
+                        # Write marker to prevent redundant backfill on next run
+                        _marker_dir = test_data_path or (Path("artifacts/backfill") / family / "test-data")
+                        _marker_file = _marker_dir / ".backfill_complete"
+                        try:
+                            _marker_dir.mkdir(parents=True, exist_ok=True)
+                            _marker_file.write_text(f"backfilled {result.files_copied} files")
+                        except Exception:
+                            pass
                     elif result.skipped:
                         logger.info(f"Test data backfill skipped: {result.skip_reason}")
                     elif result.error:
@@ -2636,8 +2841,38 @@ class PipelineOrchestrator:
                         logger.warning(f"Failed to load inventory: {e}")
 
         max_retries = global_config.llm.max_retries
-        
-        for example in examples:
+
+        # Phase and per-example timeout enforcement (Fix 4: RC3)
+        import time as _time
+        _rt_phase_start = _time.time()
+        _rt_phase_timeout = global_config.timeouts.per_phase_seconds
+        _rt_per_ex_timeout = global_config.timeouts.per_example_seconds
+        _rt_total = len(examples)
+        logger.info(f"[Phase C] Starting runtime: {_rt_total} examples, "
+                     f"phase_timeout={_rt_phase_timeout}s, per_example_timeout={_rt_per_ex_timeout}s")
+
+        for _ri, example in enumerate(examples):
+            # Phase-level timeout check
+            _rt_elapsed = _time.time() - _rt_phase_start
+            if _rt_elapsed > _rt_phase_timeout:
+                logger.error(
+                    f"[Phase C] Phase timeout exceeded: {_rt_elapsed:.0f}s > {_rt_phase_timeout}s. "
+                    f"Processed {_ri}/{_rt_total}. Aborting runtime phase."
+                )
+                stats['phase_timeout'] = True
+                break
+
+            # Progress logging every 10 examples
+            _rt_log_interval = 10 if _rt_total >= 20 else 1
+            if _ri > 0 and _ri % _rt_log_interval == 0:
+                _rt_rate = _ri / (_rt_elapsed / 60) if _rt_elapsed > 0 else 0
+                logger.info(
+                    f"[Phase C] {_ri}/{_rt_total} ({100*_ri/_rt_total:.1f}%) "
+                    f"rate={_rt_rate:.1f}/min elapsed={_rt_elapsed:.0f}s "
+                    f"ok={stats['passed_first_try']+stats['passed_with_fix']} "
+                    f"fail={stats['failed']}"
+                )
+
             stats['total_processed'] += 1
             
             try:
@@ -3285,7 +3520,16 @@ class PipelineOrchestrator:
                     # Track previous code for no-change detection (runtime)
                     previous_runtime_code = None
 
+                    _rt_ex_start = _time.time()
                     for attempt in range(runtime_max_retries):
+                        # Per-example timeout guard (Fix 4: RC3)
+                        if _time.time() - _rt_ex_start > _rt_per_ex_timeout:
+                            logger.warning(
+                                f"Per-example runtime timeout for {example.example_id}: "
+                                f"{_time.time() - _rt_ex_start:.0f}s > {_rt_per_ex_timeout}s"
+                            )
+                            break
+
                         stats['llm_fix_attempts'] += 1
 
                         # Track 2: Progressive Enrichment - Determine enrichment tier
@@ -3825,6 +4069,47 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         Returns:
             Statistics dictionary
         """
+        # Auto-promote CS_FILE examples past markdown update (no markdown to edit)
+        verified = self.db.get_examples_by_family(family, ExampleStatus.VERIFIED, run_id=run_id)
+        cs_promoted = 0
+        for ex in (verified or []):
+            if ex.source_type == SourceType.CS_FILE:
+                self.db.update_example_status(ex.example_id, ExampleStatus.MD_UPDATED, run_id=run_id)
+                cs_promoted += 1
+        if cs_promoted:
+            logger.info(f"Auto-promoted {cs_promoted} CS_FILE examples past markdown update")
+
+        # Index verified CS_FILE examples in vector DB for knowledge retrieval
+        if self.vector_db_service and cs_promoted > 0:
+            indexed_count = 0
+            for ex in verified:
+                if ex.source_type == SourceType.CS_FILE and ex.verified_code:
+                    # Build rich metadata
+                    metadata = {
+                        "family": family,
+                        "source": "example_repo",
+                        "source_type": "cs_file",
+                        "app_context": ex.app_context or "console",
+                        "topic": ex.topic or "",
+                        "section_heading": ex.section_heading or "",
+                        "file_path": ex.file_path,
+                        "read_only": True,  # Mark as reference-only (never modify)
+                    }
+
+                    try:
+                        self.vector_db_service.add_example(
+                            example_id=ex.example_id,
+                            code=ex.verified_code,
+                            metadata=metadata,
+                            drift_score=0.0,  # Canonical source = zero drift
+                        )
+                        indexed_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to index CS_FILE example {ex.example_id}: {e}")
+
+            if indexed_count > 0:
+                logger.info(f"Indexed {indexed_count} verified CS_FILE examples in vector DB")
+
         # ALWAYS recreate service with correct run_id (fixes run_id mismatch bug)
         global_config = self.config_manager.load_global_config()
         allow_write = allow_md_write or global_config.markdown_write.allow_markdown_write
@@ -3888,7 +4173,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
         for pass_num in range(num_passes):
             # Use dedicated final_review LLM service (C.6)
-            result = self.final_review_llm_service.review_markdown_structured(content, snippets, catalog=catalog)
+            # TASK-FIX-REVIEW-03: Pass family for catalog-based validation
+            result = self.final_review_llm_service.review_markdown_structured(
+                content, snippets, catalog=catalog, family=family
+            )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
                     run_id=run_id, family=family,
@@ -3896,6 +4184,16 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     context_type="markdown_review", phase="final_review",
                 )
             reviews.append(result)
+
+            # High-confidence optimization: skip second pass if first pass approved with high confidence
+            if pass_num == 0 and result.get('approved', False) and result.get('confidence') == 'high':
+                logger.info(f"High-confidence approval (confidence={result.get('confidence')}), skipping second pass")
+                return {
+                    'approved': True,
+                    'issues': [],
+                    'confidence': 'high',
+                    'raw_response': result.get('raw_response', ''),
+                }
 
             # If first pass rejected, we still want second pass to confirm
             # so we don't early-exit here
@@ -3934,7 +4232,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             # Split decision - run tiebreaker
             logger.info("Consensus review: split decision, running tiebreaker")
             # Use dedicated final_review LLM service (C.6)
-            tiebreaker = self.final_review_llm_service.review_markdown_structured(content, snippets, catalog=catalog)
+            # TASK-FIX-REVIEW-03: Pass family for catalog-based validation
+            tiebreaker = self.final_review_llm_service.review_markdown_structured(
+                content, snippets, catalog=catalog, family=family
+            )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
                     run_id=run_id, family=family,
@@ -4216,10 +4517,14 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 return stats
 
         # Get candidate files from FINAL_REVIEW_PASSED examples
-        examples = self.db.get_examples_by_family(family, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
+        # Exclude CS_FILE examples — they are reference-only and live in a different repo
+        all_examples = self.db.get_examples_by_family(family, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
+        examples = [e for e in all_examples if e.source_type != SourceType.CS_FILE]
         candidate_files = list(set(e.file_path for e in examples))
 
         if not candidate_files:
+            if all_examples and not examples:
+                logger.info(f"Git commit skipped: all {len(all_examples)} FINAL_REVIEW_PASSED examples are CS_FILE (reference-only)")
             return stats
 
         # Attempt git commit
@@ -4423,6 +4728,14 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         
         return stats
     
+    def _is_catalog_invalid(self, path: Path) -> bool:
+        """Check if catalog file exists but is empty or corrupt."""
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            return len(data.get("types", {})) == 0
+        except Exception:
+            return True
+
     def _capture_and_store_fingerprint(self, run_id: str, family: str) -> None:
         """
         Capture run fingerprint and store to DB.

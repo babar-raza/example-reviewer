@@ -8,7 +8,7 @@ import json
 import logging
 import hashlib
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
@@ -757,7 +757,7 @@ class Database:
             migration_id: Migration identifier (e.g., "008_run_scoping")
             description: Migration description
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         conn.execute("""
             INSERT OR IGNORE INTO schema_migrations (migration_id, description, applied_at)
             VALUES (?, ?, ?)
@@ -1101,7 +1101,7 @@ class Database:
         # Task 2B: Single-writer protection
         with self._write_lock:
             with self.get_connection() as conn:
-                now = datetime.utcnow().isoformat()
+                now = datetime.now(timezone.utc).isoformat()
                 conn.execute("""
                     UPDATE example_run_state
                     SET status = ?, failure_reason = ?, escalation_reason = ?, updated_at = ?
@@ -1148,7 +1148,7 @@ class Database:
                 return False
 
             updates.append("updated_at = ?")
-            params.append(datetime.utcnow().isoformat())
+            params.append(datetime.now(timezone.utc).isoformat())
             params.extend([run_id, example_id])
 
             conn.execute(
@@ -1179,7 +1179,7 @@ class Database:
                 UPDATE example_records
                 SET original_code = ?, updated_at = ?
                 WHERE example_id = ?
-            """, (original_code, datetime.utcnow().isoformat(), example_id))
+            """, (original_code, datetime.now(timezone.utc).isoformat(), example_id))
             return conn.total_changes > 0
 
     # =========================================================================
@@ -1220,7 +1220,7 @@ class Database:
         # Task 2B: Single-writer protection
         with self._write_lock:
             with self.get_connection() as conn:
-                now = datetime.utcnow().isoformat()
+                now = datetime.now(timezone.utc).isoformat()
                 conn.execute("""
                     INSERT OR REPLACE INTO example_run_state (
                         run_id, example_id, status, failure_reason, escalation_reason,
@@ -1340,7 +1340,7 @@ class Database:
                 status.value,
                 failure_reason,
                 escalation_reason,
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
                 run_id,
                 example_id,
             ))
@@ -1381,7 +1381,7 @@ class Database:
                 return False
 
             updates.append("updated_at = ?")
-            params.append(datetime.utcnow().isoformat())
+            params.append(datetime.now(timezone.utc).isoformat())
             params.extend([run_id, example_id])
 
             conn.execute(
@@ -2093,7 +2093,7 @@ class Database:
                     examples_successful = ?, error = ?
                 WHERE run_id = ?
             """, (
-                datetime.utcnow().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
                 status,
                 examples_processed,
                 examples_verified,
@@ -2918,7 +2918,7 @@ class Database:
                 fingerprint.config_hash,
                 fingerprint.selection_hash,
                 fingerprint.to_json(),
-                fingerprint.timestamp.isoformat() if fingerprint.timestamp else datetime.utcnow().isoformat(),
+                fingerprint.timestamp.isoformat() if fingerprint.timestamp else datetime.now(timezone.utc).isoformat(),
             ))
         return fingerprint.run_id
 
@@ -3016,7 +3016,7 @@ class Database:
                     (
                         result.run_id,
                         result.family,
-                        datetime.utcnow().isoformat(),
+                        datetime.now(timezone.utc).isoformat(),
                         "review",
                         json.dumps([]),
                         0,
@@ -3054,7 +3054,7 @@ class Database:
                     (issue.example_id,),
                 ).fetchone()
                 if not example_row:
-                    now = datetime.utcnow().isoformat()
+                    now = datetime.now(timezone.utc).isoformat()
                     conn.execute(
                         """
                         INSERT OR IGNORE INTO example_records (
@@ -3515,7 +3515,7 @@ class Database:
         - example_records (canonical)
         - example_run_state (run-scoped)
         - compile_attempts, runtime_attempts, markdown_edits
-        - telemetry_runs
+        - telemetry_runs, telemetry_events
         - failure_details, review_results
 
         Args:
@@ -3537,14 +3537,21 @@ class Database:
                         "SELECT * FROM run_records WHERE run_id = ?", (run_id,)
                     ).fetchone()
 
-                    # Get telemetry (verify commit_hash)
-                    telemetry = dev_conn.execute(
-                        "SELECT * FROM telemetry_runs WHERE run_id = ? AND git_commit_hash = ?",
-                        (run_id, commit_hash)
-                    ).fetchone()
+                    # Get telemetry (verify commit_hash if provided)
+                    if commit_hash:
+                        telemetry = dev_conn.execute(
+                            "SELECT * FROM telemetry_runs WHERE run_id = ? AND git_commit_hash = ?",
+                            (run_id, commit_hash)
+                        ).fetchone()
+                    else:
+                        # CS_FILE-only runs have no commit — get telemetry by run_id alone
+                        telemetry = dev_conn.execute(
+                            "SELECT * FROM telemetry_runs WHERE run_id = ?",
+                            (run_id,)
+                        ).fetchone()
 
                     if not telemetry:
-                        logger.warning(f"No telemetry with commit_hash for run {run_id}")
+                        logger.warning(f"No telemetry for run {run_id}")
                         return False
 
                     # Get all example_ids for this run
@@ -3586,6 +3593,10 @@ class Database:
 
                     review_results = dev_conn.execute(
                         "SELECT * FROM review_results WHERE run_id = ?", (run_id,)
+                    ).fetchall()
+
+                    telemetry_events = dev_conn.execute(
+                        "SELECT * FROM telemetry_events WHERE run_id = ?", (run_id,)
                     ).fetchall()
 
                 # 2. Write to production DB in transaction
@@ -3661,6 +3672,14 @@ class Database:
                             tuple(result)
                         )
 
+                    # Insert telemetry_events
+                    for event in telemetry_events:
+                        placeholders = ','.join(['?' for _ in event])
+                        prod_conn.execute(
+                            f"INSERT OR IGNORE INTO telemetry_events VALUES ({placeholders})",
+                            tuple(event)
+                        )
+
             logger.info(f"Successfully copied run {run_id} to production database")
             return True
 
@@ -3732,7 +3751,7 @@ class Database:
                     json.dumps(signature_data.get('method_calls', [])),
                     json.dumps(signature_data.get('constructor_types', [])),
                     json.dumps(signature_data.get('property_assignments', {})),
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                 ))
         return sig_id
 
@@ -3785,7 +3804,7 @@ class Database:
                     drift_score,
                     json.dumps(signature_drift) if signature_drift else None,
                     json.dumps(critical_enum_changes) if critical_enum_changes else None,
-                    datetime.utcnow().isoformat(),
+                    datetime.now(timezone.utc).isoformat(),
                 ))
         return rej_id
 

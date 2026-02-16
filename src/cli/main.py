@@ -9,7 +9,7 @@ import logging
 import os
 import platform
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -68,7 +68,7 @@ def resolve_safe_workspace(safe_root: Optional[str] = None) -> Path:
     if safe_root:
         return Path(safe_root).resolve()
 
-    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
 
     if platform.system() == 'Windows':
         # Windows: Use %LOCALAPPDATA%\ExampleReviewer\workspaces\<timestamp>
@@ -792,7 +792,7 @@ def main() -> int:
     backfill_parser.add_argument('--family', '-f', type=str, required=True,
                                   help='Family identifier')
     backfill_parser.add_argument('--targets', '-t', type=str, nargs='+',
-                                  help='Backfill targets (test_data, examples, examples_files, gist_source_code)')
+                                  help='Backfill targets (test_data, api_catalog, examples, examples_files, gist_source_code)')
     backfill_parser.add_argument('--force', action='store_true',
                                   help='Force re-download even if data exists')
 

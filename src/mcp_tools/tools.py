@@ -538,6 +538,19 @@ class ExampleReviewerTools:
                         'duration_seconds': result.duration_seconds
                     }
 
+                elif target == "api_catalog":
+                    result = backfill_service.backfill_api_catalog(family=family, force=force)
+                    results['api_catalog'] = {
+                        'success': result.success,
+                        'files_copied': result.files_copied,
+                        'source': result.source,
+                        'destination': result.destination,
+                        'skipped': result.skipped,
+                        'skip_reason': result.skip_reason,
+                        'error': result.error,
+                        'duration_seconds': result.duration_seconds
+                    }
+
                 elif target == "examples":
                     # Get vector service if available
                     vector_service = self.orchestrator.vector_db_service

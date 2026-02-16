@@ -16,7 +16,7 @@ import sys
 import platform
 import subprocess
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -80,7 +80,7 @@ class RunFingerprint:
         self.llm_provider_capabilities = llm_provider_capabilities or {}
         self.llm_seed = llm_seed
         self.deterministic_mode = deterministic_mode
-        self.timestamp = timestamp or datetime.utcnow()
+        self.timestamp = timestamp or datetime.now(timezone.utc)
         self.python_version = python_version or self._get_python_version()
         self.platform_info = platform_info or self._get_platform_info()
         self.git_commit_hash = git_commit_hash or self._get_git_commit_hash()
@@ -320,7 +320,7 @@ class RunFingerprint:
                 'base_url': llm_section.get('base_url'),
                 'model': llm_section.get('model'),
                 'model_hash': llm_section.get('model_hash'),
-                'temperature': llm_section.get('temperature'),
+                'temperature': llm_section.get('temperature', 0.0),
                 'timeout_seconds': llm_section.get('timeout_seconds'),
                 'seed_supported': llm_section.get('provider_capabilities', {}).get('seed_supported'),
                 'timeout_supported': llm_section.get('provider_capabilities', {}).get('timeout_supported'),

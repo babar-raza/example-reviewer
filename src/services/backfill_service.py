@@ -250,6 +250,115 @@ class BackfillService:
             duration_seconds=0.0
         )
 
+    def backfill_api_catalog(
+        self,
+        family: str,
+        force: bool = False,
+    ) -> BackfillResult:
+        """
+        Generate API catalog from assembly reflection via bootstrap_catalog.py.
+
+        Args:
+            family: Family identifier
+            force: Force regeneration even if catalog exists
+
+        Returns:
+            BackfillResult with operation details
+        """
+        import json
+        import subprocess
+        import sys
+
+        start_time = datetime.now()
+        catalog_path = Path(f"config/families/{family}_api_catalog.json")
+
+        # Skip if valid catalog exists and not forced
+        if catalog_path.exists() and not force:
+            try:
+                data = json.loads(catalog_path.read_text(encoding='utf-8'))
+                type_count = len(data.get("types", {}))
+                if type_count > 0:
+                    logger.info(f"API catalog for {family} already exists ({type_count} types)")
+                    return BackfillResult(
+                        success=True,
+                        target="api_catalog",
+                        source="existing",
+                        destination=str(catalog_path),
+                        skipped=True,
+                        skip_reason=f"catalog_exists_{type_count}_types",
+                        duration_seconds=(datetime.now() - start_time).total_seconds()
+                    )
+            except (json.JSONDecodeError, Exception):
+                logger.info(f"Existing catalog for {family} is invalid, regenerating")
+
+        try:
+            # Load family config to get package name
+            family_config = self.config_manager.load_family_config(family)
+            pkg_name = family_config.nuget_config.primary_package.name
+
+            # Use bootstrap_catalog.py which handles namespace prefix derivation
+            cmd = [
+                sys.executable,
+                str(Path("scripts/bootstrap_catalog.py")),
+                "--family", family,
+                "--package", pkg_name,
+                "--output", str(catalog_path),
+            ]
+
+            logger.info(f"Generating API catalog for {family} (package: {pkg_name})")
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=180,
+                cwd=str(Path.cwd())
+            )
+
+            if result.returncode != 0:
+                error_msg = result.stderr[-500:] if result.stderr else "Unknown error"
+                logger.error(f"Catalog generation failed for {family}: {error_msg}")
+                return BackfillResult(
+                    success=False,
+                    target="api_catalog",
+                    source="assembly_reflection",
+                    destination=str(catalog_path),
+                    error=error_msg,
+                    duration_seconds=(datetime.now() - start_time).total_seconds()
+                )
+
+            # Validate output
+            data = json.loads(catalog_path.read_text(encoding='utf-8'))
+            type_count = len(data.get("types", {}))
+            ns_count = len(data.get("namespaces", []))
+            logger.info(f"API catalog generated for {family}: {type_count} types, {ns_count} namespaces")
+
+            return BackfillResult(
+                success=True,
+                target="api_catalog",
+                source="assembly_reflection",
+                destination=str(catalog_path),
+                files_copied=type_count,
+                duration_seconds=(datetime.now() - start_time).total_seconds()
+            )
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"Catalog generation timed out for {family}")
+            return BackfillResult(
+                success=False,
+                target="api_catalog",
+                source="assembly_reflection",
+                destination=str(catalog_path),
+                error="Catalog generation timed out after 180 seconds",
+                duration_seconds=(datetime.now() - start_time).total_seconds()
+            )
+        except Exception as e:
+            logger.exception(f"Error generating API catalog for {family}")
+            return BackfillResult(
+                success=False,
+                target="api_catalog",
+                source="assembly_reflection",
+                destination=str(catalog_path),
+                error=str(e),
+                duration_seconds=(datetime.now() - start_time).total_seconds()
+            )
+
     def backfill_examples_to_vector_db(
         self,
         family: str,

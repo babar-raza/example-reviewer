@@ -50,6 +50,7 @@ class VectorDBService:
         persist_directory: Optional[str] = None,
         embedding_model: Optional[str] = None,
         enabled: bool = True,
+        drift_threshold: float = 0.3,
     ):
         """
         Initialize Vector DB service.
@@ -58,10 +59,12 @@ class VectorDBService:
             persist_directory: Directory to persist ChromaDB data
             embedding_model: Sentence-transformers model name
             enabled: Enable/disable vector DB features (config flag)
+            drift_threshold: Maximum drift score for filtering (default 0.3)
         """
         self.persist_directory = persist_directory or "./data/chroma"
         self.embedding_model_name = embedding_model or self.DEFAULT_EMBEDDING_MODEL
         self.enabled = enabled and VECTOR_DB_AVAILABLE
+        self.drift_threshold = drift_threshold
 
         self._client = None
         self._collection = None
@@ -205,19 +208,24 @@ class VectorDBService:
         k: int = 3,
         min_similarity: float = 0.0,
         exclude_high_drift: bool = True,
+        app_context: Optional[str] = None,
     ) -> List[Tuple[str, str, float, Dict[str, Any]]]:
         """
-        Search for similar code examples with drift filtering.
+        Search for similar code examples with drift filtering and architecture awareness.
 
         NEW (ID-05): Can exclude high-drift examples from results
         to prevent drift contagion in fixes.
+
+        NEW (VDB-02): Architecture-aware filtering by app_context
+        and prioritization of cs_file (canonical) examples.
 
         Args:
             query_code: Code to search for
             family: Optional family filter
             k: Number of results to return
             min_similarity: Minimum similarity threshold (0.0 to 1.0)
-            exclude_high_drift: Exclude examples with drift_score >= 0.3 (default True)
+            exclude_high_drift: Exclude examples with drift_score >= threshold (default True)
+            app_context: Optional app_context filter (console, aspnet_minimal, library)
 
         Returns:
             List of tuples: (example_id, code, similarity_score, metadata)
@@ -231,10 +239,21 @@ class VectorDBService:
             # Generate query embedding
             query_embedding = self._embedding_model.encode(query_code).tolist()
 
-            # Build where filter
-            where_filter = None
+            # Build where filter (VDB-02: Added app_context support)
+            # ChromaDB requires explicit $and operator for multiple conditions
+            conditions = []
             if family:
-                where_filter = {"family": family}
+                conditions.append({"family": family})
+            if app_context:
+                conditions.append({"app_context": app_context})
+
+            # Build the where filter
+            if len(conditions) == 0:
+                where_filter = None
+            elif len(conditions) == 1:
+                where_filter = conditions[0]
+            else:
+                where_filter = {"$and": conditions}
 
             # Search both collections (ID-05: Multiple collections)
             all_results = []
@@ -266,7 +285,7 @@ class VectorDBService:
                             # Filter by drift (ID-05: Drift filtering)
                             if exclude_high_drift and 'drift_score' in metadata:
                                 drift_score = metadata['drift_score']
-                                if drift_score >= 0.3:
+                                if drift_score >= self.drift_threshold:
                                     logger.debug(f"Excluding {example_id} from search: drift_score={drift_score:.3f}")
                                     continue
 
@@ -284,26 +303,31 @@ class VectorDBService:
                 if not current or similarity > current[2]:
                     best_by_id[example_id] = (example_id, code, similarity, metadata)
 
-            # Sort deterministically (Track 1: C.7)
-            # Primary: similarity descending (rounded to 4 decimals for stability)
-            # Secondary: example_key or example_id (stable tie-break)
-            # Tertiary: file_path (stable tie-break for same example_key)
-            def sort_key(result: Tuple[str, str, float, Dict[str, Any]]) -> Tuple[float, str, str]:
+            # Sort with architecture awareness (VDB-02)
+            # Primary: source_type preference (cs_file > inline/gist)
+            # Secondary: similarity descending (rounded to 4 decimals for stability)
+            # Tertiary: example_key or example_id (stable tie-break)
+            # Quaternary: file_path (stable tie-break for same example_key)
+            def sort_key(result: Tuple[str, str, float, Dict[str, Any]]) -> Tuple[int, float, str, str]:
                 example_id, code, similarity, metadata = result
+                # Prefer cs_file (canonical) over inline/gist (LLM-modified)
+                source_type = metadata.get('source_type', '')
+                source_priority = 0 if source_type == 'cs_file' else 1
                 # Round distance (1-similarity) to 4 decimals for deterministic tie-breaking
                 rounded_distance = round(1.0 - similarity, 4)
                 # Use example_key if available, else example_id
                 stable_id = metadata.get('example_key', example_id)
-                # Use file_path as tertiary tie-break
+                # Use file_path as quaternary tie-break
                 file_path = metadata.get('file_path', '')
-                return (rounded_distance, stable_id, file_path)
+                return (source_priority, rounded_distance, stable_id, file_path)
 
-            # Sort by rounded distance (ascending), then stable ID, then file path
+            # Sort by source priority, then rounded distance (ascending), then stable ID, then file path
             final_results = sorted(best_by_id.values(), key=sort_key)[:k]
 
             logger.debug(
                 f"Found {len(final_results)} similar examples "
-                f"(k={k}, min_similarity={min_similarity}, family={family}, exclude_high_drift={exclude_high_drift})"
+                f"(k={k}, min_similarity={min_similarity}, family={family}, "
+                f"app_context={app_context}, exclude_high_drift={exclude_high_drift})"
             )
             return final_results
 
