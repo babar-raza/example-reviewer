@@ -59,12 +59,13 @@ class Program
                 var packageName = GetArg(args, "--package");
                 var version = GetArg(args, "--version");
                 var nsPrefix = GetArg(args, "--namespace-prefix");
+                var dllName = GetArg(args, "--dll-name"); // Optional: use if DLL name differs from package name
                 bool includeFull = HasFlag(args, "--full");
                 bool includeEnums = HasFlag(args, "--include-enums") || includeFull;
                 bool includeConstructors = HasFlag(args, "--include-constructors") || includeFull;
                 bool includeMethods = HasFlag(args, "--include-methods") || includeFull;
                 bool includeProperties = HasFlag(args, "--include-properties") || includeFull;
-                CatalogTypes(packageName, version, nsPrefix, includeEnums, includeConstructors, includeMethods, includeProperties);
+                CatalogTypes(packageName, version, nsPrefix, dllName, includeEnums, includeConstructors, includeMethods, includeProperties);
                 break;
             default:
                 Console.WriteLine($"Unknown command: {command}");
@@ -277,8 +278,8 @@ namespace TestValidation
     }
 
     static void CatalogTypes(string packageName, string version, string namespacePrefix,
-        bool includeEnums = false, bool includeConstructors = false, bool includeMethods = false,
-        bool includeProperties = false)
+        string? dllName = null, bool includeEnums = false, bool includeConstructors = false,
+        bool includeMethods = false, bool includeProperties = false)
     {
         try
         {
@@ -288,6 +289,9 @@ namespace TestValidation
                 Environment.Exit(1);
                 return;
             }
+
+            // Use dllName if provided, otherwise fall back to packageName
+            var actualDllName = !string.IsNullOrEmpty(dllName) ? dllName : packageName;
 
             // Try to load assembly dynamically
             Assembly assembly;
@@ -301,7 +305,7 @@ namespace TestValidation
             {
                 // Locate NuGet package and load DLL
                 var packageDir = LocateNuGetPackage(packageName, version);
-                var dllPath = Path.Combine(packageDir, "lib", "net8.0", $"{packageName}.dll");
+                var dllPath = Path.Combine(packageDir, "lib", "net8.0", $"{actualDllName}.dll");
 
                 // Try alternative paths if net8.0 not found
                 if (!File.Exists(dllPath))
@@ -314,7 +318,7 @@ namespace TestValidation
 
                     foreach (var tfm in tfmDirs)
                     {
-                        dllPath = Path.Combine(libDir, tfm!, $"{packageName}.dll");
+                        dllPath = Path.Combine(libDir, tfm!, $"{actualDllName}.dll");
                         if (File.Exists(dllPath))
                         {
                             break;

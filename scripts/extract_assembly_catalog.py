@@ -2,8 +2,9 @@
 """Extract clean JSON catalog from catalog-types command output.
 
 Usage:
-    python extract_assembly_catalog.py <Package> <Version> <NamespacePrefix> [--full]
+    python extract_assembly_catalog.py <Package> <Version> <NamespacePrefix> [--dll-name <DllName>] [--full]
 
+The --dll-name flag specifies a custom DLL name (e.g., for Aspose.Slides.NET package with Aspose.Slides.dll).
 The --full flag enables extraction of enums, constructors, and key methods.
 Without --full, only types and namespaces are extracted (backward compatible).
 """
@@ -17,20 +18,43 @@ sys.stdout.reconfigure(encoding='utf-8')
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
+def get_flag_value(flag_name):
+    """Get the value after a flag like --dll-name."""
+    try:
+        idx = sys.argv.index(flag_name)
+        if idx + 1 < len(sys.argv):
+            return sys.argv[idx + 1]
+    except ValueError:
+        pass
+    return None
+
+
 def main():
-    # Parse positional args
-    positional = [a for a in sys.argv[1:] if not a.startswith("--")]
+    # Parse positional args (exclude flag values)
+    flags_with_values = ["--dll-name"]
+    skip_next = False
+    positional = []
+    for i, arg in enumerate(sys.argv[1:]):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in flags_with_values:
+            skip_next = True
+            continue
+        if not arg.startswith("--"):
+            positional.append(arg)
+
     package = positional[0] if len(positional) > 0 else "Aspose.Words"
     version = positional[1] if len(positional) > 1 else "26.1.0"
     namespace_prefix = positional[2] if len(positional) > 2 else package
 
     # Parse flags
-    flags = [a for a in sys.argv[1:] if a.startswith("--")]
-    include_full = "--full" in flags
-    include_enums = "--include-enums" in flags or include_full
-    include_constructors = "--include-constructors" in flags or include_full
-    include_methods = "--include-methods" in flags or include_full
-    include_properties = "--include-properties" in flags or include_full
+    dll_name = get_flag_value("--dll-name")
+    include_full = "--full" in sys.argv
+    include_enums = "--include-enums" in sys.argv or include_full
+    include_constructors = "--include-constructors" in sys.argv or include_full
+    include_methods = "--include-methods" in sys.argv or include_full
+    include_properties = "--include-properties" in sys.argv or include_full
 
     cmd = [
         "dotnet", "run", "--project", str(PROJECT_ROOT / "test-examples" / "AsposeZipValidator.csproj"),
@@ -39,6 +63,10 @@ def main():
         "--version", version,
         "--namespace-prefix", namespace_prefix
     ]
+
+    # Add dll-name if provided
+    if dll_name:
+        cmd.extend(["--dll-name", dll_name])
 
     # Pass enrichment flags through to dotnet command
     if include_full:
