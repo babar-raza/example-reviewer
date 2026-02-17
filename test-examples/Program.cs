@@ -427,7 +427,11 @@ namespace TestValidation
                 {
                     "Save", "Load", "Extract", "Open", "Create", "Add", "Remove",
                     "SaveSplit", "CreateEntry", "CreateEntries", "DeleteEntry",
-                    "ExtractToDirectory"
+                    "ExtractToDirectory",
+                    // LowCode conversion methods (critical for API preservation)
+                    "ToPdf", "ToTiff", "ToJpeg", "ToPng", "ToSvg", "ToHtml", "ToXps",
+                    "ToOdp", "ToPptx", "ToPpt", "Convert", "Merge", "Compress",
+                    "Collect", "ForEach"
                 };
 
                 methodsDict = new Dictionary<string, List<Dictionary<string, string>>>();

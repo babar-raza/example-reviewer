@@ -7619,6 +7619,20 @@
         "static": "false"
       }
     ],
+    "ILegacyDiagram": [
+      {
+        "name": "ConvertToSmartArt",
+        "params": "",
+        "returns": "ISmartArt",
+        "static": "false"
+      },
+      {
+        "name": "ConvertToGroupShape",
+        "params": "",
+        "returns": "IGroupShape",
+        "static": "false"
+      }
+    ],
     "ImageCollection": [
       {
         "name": "AddImage",
@@ -7815,6 +7829,12 @@
         "params": "string text, IExternalResourceResolver resolver, string uri",
         "returns": "void",
         "static": "false"
+      },
+      {
+        "name": "ExportToHtml",
+        "params": "int firstParagraphIndex, int paragraphsCount, ITextToHtmlConversionOptions options",
+        "returns": "string",
+        "static": "false"
       }
     ],
     "IParagraphFactory": [
@@ -7828,6 +7848,20 @@
         "name": "CreateParagraph",
         "params": "IParagraph paragraph",
         "returns": "IParagraph",
+        "static": "false"
+      }
+    ],
+    "IPictureFillFormat": [
+      {
+        "name": "CompressImage",
+        "params": "bool deleteCroppedAreasOfImage, PicturesCompression resolution",
+        "returns": "bool",
+        "static": "false"
+      },
+      {
+        "name": "CompressImage",
+        "params": "bool deleteCroppedAreasOfImage, float resolution",
+        "returns": "bool",
         "static": "false"
       }
     ],
@@ -8427,6 +8461,14 @@
         "static": "false"
       }
     ],
+    "ITable": [
+      {
+        "name": "MergeCells",
+        "params": "ICell cell1, ICell cell2, bool allowSplitting",
+        "returns": "ICell",
+        "static": "false"
+      }
+    ],
     "ITagCollection": [
       {
         "name": "Add",
@@ -8558,6 +8600,18 @@
       }
     ],
     "LegacyDiagram": [
+      {
+        "name": "ConvertToSmartArt",
+        "params": "",
+        "returns": "ISmartArt",
+        "static": "false"
+      },
+      {
+        "name": "ConvertToGroupShape",
+        "params": "",
+        "returns": "IGroupShape",
+        "static": "false"
+      },
       {
         "name": "RemovePlaceholder",
         "params": "",
@@ -8733,6 +8787,12 @@
         "params": "string text, IExternalResourceResolver resolver, string uri",
         "returns": "void",
         "static": "false"
+      },
+      {
+        "name": "ExportToHtml",
+        "params": "int firstParagraphIndex, int paragraphsCount, ITextToHtmlConversionOptions options",
+        "returns": "string",
+        "static": "false"
       }
     ],
     "ParagraphFactory": [
@@ -8746,6 +8806,20 @@
         "name": "CreateParagraph",
         "params": "IParagraph paragraph",
         "returns": "IParagraph",
+        "static": "false"
+      }
+    ],
+    "PictureFillFormat": [
+      {
+        "name": "CompressImage",
+        "params": "bool deleteCroppedAreasOfImage, PicturesCompression resolution",
+        "returns": "bool",
+        "static": "false"
+      },
+      {
+        "name": "CompressImage",
+        "params": "bool deleteCroppedAreasOfImage, float resolution",
+        "returns": "bool",
         "static": "false"
       }
     ],
@@ -9406,6 +9480,12 @@
       }
     ],
     "Table": [
+      {
+        "name": "MergeCells",
+        "params": "ICell cell1, ICell cell2, bool allowSplitting",
+        "returns": "ICell",
+        "static": "false"
+      },
       {
         "name": "RemovePlaceholder",
         "params": "",
@@ -10263,6 +10343,14 @@
         "static": "false"
       }
     ],
+    "ChartDataWorkbook": [
+      {
+        "name": "GetCellCollection",
+        "params": "string formula, bool skipHiddenCells",
+        "returns": "IChartCellCollection",
+        "static": "false"
+      }
+    ],
     "ChartSeriesCollection": [
       {
         "name": "Add",
@@ -10648,6 +10736,14 @@
         "name": "RemoveAt",
         "params": "int index",
         "returns": "void",
+        "static": "false"
+      }
+    ],
+    "IChartDataWorkbook": [
+      {
+        "name": "GetCellCollection",
+        "params": "string formula, bool skipHiddenCells",
+        "returns": "IChartCellCollection",
         "static": "false"
       }
     ],
@@ -11631,6 +11727,116 @@
       {
         "name": "RemoveUnusedLayoutSlides",
         "params": "Presentation pres",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "CompressEmbeddedFonts",
+        "params": "Presentation pres",
+        "returns": "void",
+        "static": "true"
+      }
+    ],
+    "Convert": [
+      {
+        "name": "ToPdf",
+        "params": "string presPath, string outPath",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToPdf",
+        "params": "string presPath, string outPath, IPdfOptions options",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToPdf",
+        "params": "Presentation pres, string outPath",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToPdf",
+        "params": "Presentation pres, string outPath, IPdfOptions options",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToSvg",
+        "params": "string presPath",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToSvg",
+        "params": "string presPath, GetOutPathCallback getOutPath",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToSvg",
+        "params": "Presentation pres, GetOutPathCallback getOutPath",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToSvg",
+        "params": "Presentation pres, ISVGOptions options",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToSvg",
+        "params": "Presentation pres, GetOutPathCallback getOutPath, ISVGOptions options",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToJpeg",
+        "params": "Presentation pres, string outputFileName",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToJpeg",
+        "params": "Presentation pres, string outputFileName, Size imageSize",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToJpeg",
+        "params": "Presentation pres, string outputFileName, float scale, IRenderingOptions options",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToPng",
+        "params": "Presentation pres, string outputFileName",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToPng",
+        "params": "Presentation pres, string outputFileName, Size imageSize",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToPng",
+        "params": "Presentation pres, string outputFileName, float scale, IRenderingOptions options",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToTiff",
+        "params": "Presentation pres, string outputFileName",
+        "returns": "void",
+        "static": "true"
+      },
+      {
+        "name": "ToTiff",
+        "params": "Presentation pres, string outputFileName, ITiffOptions options, bool multipage",
         "returns": "void",
         "static": "true"
       }
