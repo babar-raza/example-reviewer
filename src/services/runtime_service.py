@@ -138,11 +138,15 @@ class RuntimeService:
                     return candidate
 
         # Tier 3: Case-insensitive basename match with same extension (recursive)
+        # Use rglob("*") + manual suffix check so case-sensitive Linux filesystems
+        # can still match e.g. "plrabn12.rar" -> "PLRABN12.RAR"
         required_basename = Path(required_name).stem.lower()
         required_suffix = Path(required_name).suffix.lower()
 
-        for candidate in source_dir.rglob(f"*{required_suffix}"):
-            if candidate.is_file() and candidate.stem.lower() == required_basename:
+        for candidate in source_dir.rglob("*"):
+            if (candidate.is_file()
+                    and candidate.stem.lower() == required_basename
+                    and candidate.suffix.lower() == required_suffix):
                 return candidate
 
         # Tier 4: Inventory mapping (if provided)
