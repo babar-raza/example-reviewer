@@ -26,7 +26,7 @@ def temp_db():
 
     conn = sqlite3.connect(str(db_path))
 
-    # Create schema
+    # Create schema (V3 with scope column)
     conn.executescript("""
         CREATE TABLE learned_patterns (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,6 +44,8 @@ def temp_db():
             example_before TEXT,
             example_after TEXT,
             source TEXT,
+            scope TEXT DEFAULT 'family',
+            schema_version INTEGER DEFAULT 2,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         );
@@ -566,6 +568,354 @@ class TestExtractErrorSignature:
         # Unclassified runtime errors (not CS codes, not exceptions, not known patterns)
         # are correctly classified as RUNTIME_ERROR
         assert signature == "RUNTIME_ERROR"
+
+
+class TestDeduplication:
+    """Tests for pattern deduplication guards."""
+
+    def test_duplicate_template_blocked(self, temp_db):
+        """Same (family, error_sig, template) inserted twice — second is skipped."""
+        from scripts.patterns.auto_learn import _is_duplicate
+
+        conn = sqlite3.connect(str(temp_db))
+        conn.row_factory = sqlite3.Row
+
+        # Insert first pattern
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template, fix_type, source)
+               VALUES ('zip', 'compile_error', 'CS0246', 'Add using directive', 'template', 'auto_learn')"""
+        )
+        conn.commit()
+
+        # Check duplicate
+        p = {
+            "family": "zip",
+            "error_signature": "CS0246",
+            "fix_type": "template",
+            "fix_code": None,
+        }
+        assert _is_duplicate(conn, p) is True
+        conn.close()
+
+    def test_duplicate_fix_code_blocked(self, temp_db):
+        """Identical fix_code JSON for same triple = duplicate."""
+        from scripts.patterns.auto_learn import _is_duplicate
+
+        conn = sqlite3.connect(str(temp_db))
+        conn.row_factory = sqlite3.Row
+
+        fix_code = json.dumps({"directive": "using Aspose.Zip;", "trigger_type": "Archive"})
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template, fix_type, fix_code, source)
+               VALUES ('zip', 'compile_error', 'CS0246', 'Add using', 'using_directive', ?, 'auto_learn')""",
+            (fix_code,),
+        )
+        conn.commit()
+
+        p = {
+            "family": "zip",
+            "error_signature": "CS0246",
+            "fix_type": "using_directive",
+            "fix_code": {"directive": "using Aspose.Zip;", "trigger_type": "Archive"},
+        }
+        assert _is_duplicate(conn, p) is True
+        conn.close()
+
+    def test_different_fix_code_allowed(self, temp_db):
+        """Different fix_code for same error sig = not a duplicate."""
+        from scripts.patterns.auto_learn import _is_duplicate
+
+        conn = sqlite3.connect(str(temp_db))
+        conn.row_factory = sqlite3.Row
+
+        fix_code = json.dumps({"directive": "using Aspose.Zip;", "trigger_type": "Archive"})
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template, fix_type, fix_code, source)
+               VALUES ('zip', 'compile_error', 'CS0246', 'Add using', 'using_directive', ?, 'auto_learn')""",
+            (fix_code,),
+        )
+        conn.commit()
+
+        p = {
+            "family": "zip",
+            "error_signature": "CS0246",
+            "fix_type": "using_directive",
+            "fix_code": {"directive": "using Aspose.Zip.Saving;", "trigger_type": "ParallelOptions"},
+        }
+        assert _is_duplicate(conn, p) is False
+        conn.close()
+
+    def test_retired_patterns_not_counted_as_duplicates(self, temp_db):
+        """Retired patterns should not block new insertions."""
+        from scripts.patterns.auto_learn import _is_duplicate
+
+        conn = sqlite3.connect(str(temp_db))
+        conn.row_factory = sqlite3.Row
+
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template, fix_type, source)
+               VALUES ('zip', 'compile_error', 'CS0246', 'Add using', 'template', 'retired_duplicate')"""
+        )
+        conn.commit()
+
+        p = {
+            "family": "zip",
+            "error_signature": "CS0246",
+            "fix_type": "template",
+        }
+        assert _is_duplicate(conn, p) is False
+        conn.close()
+
+
+class TestCrossFamilyPatterns:
+    """Tests for cross-family global pattern sharing (Phase 2)."""
+
+    def test_query_returns_global_patterns(self, temp_db):
+        """Global-scope patterns are returned for any family."""
+        conn = sqlite3.connect(str(temp_db))
+
+        # Insert a global pattern (created for ZIP, scope=global)
+        fix_code = json.dumps({"transformer": "fix_stream_disposal"})
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template,
+                fix_type, fix_code, confidence, auto_approved, scope, source)
+               VALUES ('zip', 'runtime_error', 'DISPOSED_STREAM', 'Fix stream disposal',
+                'code_transform', ?, 0.9, TRUE, 'global', 'auto_learn')""",
+            (fix_code,),
+        )
+        conn.execute(
+            "INSERT INTO pattern_performance (pattern_id, family) VALUES (1, 'zip')"
+        )
+        conn.commit()
+        conn.close()
+
+        # Query from a DIFFERENT family — should still find the global pattern
+        svc = LearnedPatternsService("words", db_path=temp_db)
+        patterns = svc.query_patterns("DISPOSED_STREAM", min_confidence=0.5)
+        assert len(patterns) == 1
+        assert patterns[0].scope == "global"
+        assert patterns[0].family == "zip"  # Original family preserved
+        svc.close()
+
+    def test_family_pattern_not_leaked(self, temp_db):
+        """Family-scoped patterns are NOT returned for other families."""
+        conn = sqlite3.connect(str(temp_db))
+
+        fix_code = json.dumps({"directive": "using Aspose.Zip;", "trigger_type": "Archive"})
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template,
+                fix_type, fix_code, confidence, auto_approved, scope, source)
+               VALUES ('zip', 'compile_error', 'CS0246', 'Add using Aspose.Zip',
+                'using_directive', ?, 0.9, TRUE, 'family', 'auto_learn')""",
+            (fix_code,),
+        )
+        conn.execute(
+            "INSERT INTO pattern_performance (pattern_id, family) VALUES (1, 'zip')"
+        )
+        conn.commit()
+        conn.close()
+
+        # Query from Words — should NOT see ZIP-family pattern
+        svc = LearnedPatternsService("words", db_path=temp_db)
+        patterns = svc.query_patterns("CS0246", min_confidence=0.5)
+        assert len(patterns) == 0
+        svc.close()
+
+    def test_preload_includes_global(self, temp_db):
+        """Preload cache includes both family-specific and global patterns."""
+        conn = sqlite3.connect(str(temp_db))
+
+        # Insert a family-specific pattern for Words
+        fc1 = json.dumps({"directive": "using Aspose.Words;", "trigger_type": "Document"})
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template,
+                fix_type, fix_code, confidence, auto_approved, scope, source)
+               VALUES ('words', 'compile_error', 'CS0246', 'Add Words using',
+                'using_directive', ?, 0.9, TRUE, 'family', 'auto_learn')""",
+            (fc1,),
+        )
+        conn.execute("INSERT INTO pattern_performance (pattern_id, family) VALUES (1, 'words')")
+
+        # Insert a global pattern (from ZIP but global scope)
+        fc2 = json.dumps({"transformer": "fix_stream_disposal"})
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template,
+                fix_type, fix_code, confidence, auto_approved, scope, source)
+               VALUES ('zip', 'runtime_error', 'DISPOSED_STREAM', 'Fix disposal',
+                'code_transform', ?, 0.9, TRUE, 'global', 'auto_learn')""",
+            (fc2,),
+        )
+        conn.execute("INSERT INTO pattern_performance (pattern_id, family) VALUES (2, 'zip')")
+        conn.commit()
+        conn.close()
+
+        # Preload for Words — should include both
+        svc = LearnedPatternsService("words", db_path=temp_db)
+        svc.preload_all_patterns()
+        assert "CS0246" in svc._preloaded_cache
+        assert "DISPOSED_STREAM" in svc._preloaded_cache
+        svc.close()
+
+
+class TestScopeClassification:
+    """Tests for _determine_scope in auto_learn.py."""
+
+    def test_generic_transformer_is_global(self):
+        from scripts.patterns.auto_learn import _determine_scope
+        p = {"fix_type": "code_transform", "fix_code": {"transformer": "fix_stream_disposal"}}
+        assert _determine_scope(p) == "global"
+
+    def test_family_transformer_is_family(self):
+        from scripts.patterns.auto_learn import _determine_scope
+        p = {"fix_type": "code_transform", "fix_code": {"transformer": "fix_rar_password"}}
+        assert _determine_scope(p) == "family"
+
+    def test_system_using_directive_is_global(self):
+        from scripts.patterns.auto_learn import _determine_scope
+        p = {"fix_type": "using_directive", "fix_code": {"directive": "using System.IO;"}}
+        assert _determine_scope(p) == "global"
+
+    def test_aspose_using_directive_is_family(self):
+        from scripts.patterns.auto_learn import _determine_scope
+        p = {"fix_type": "using_directive", "fix_code": {"directive": "using Aspose.Zip;"}}
+        assert _determine_scope(p) == "family"
+
+    def test_regex_replace_is_family(self):
+        from scripts.patterns.auto_learn import _determine_scope
+        p = {"fix_type": "regex_replace", "fix_code": {"pattern": "foo", "replacement": "bar"}}
+        assert _determine_scope(p) == "family"
+
+    def test_llm_prompt_is_family(self):
+        from scripts.patterns.auto_learn import _determine_scope
+        p = {"fix_type": "llm_prompt", "fix_code": {"prompt": "fix {code}"}}
+        assert _determine_scope(p) == "family"
+
+    def test_template_is_family(self):
+        from scripts.patterns.auto_learn import _determine_scope
+        p = {"fix_type": "template"}
+        assert _determine_scope(p) == "family"
+
+
+class TestPatternValidation:
+    """Tests for pattern validation on store."""
+
+    def test_valid_regex_passes(self):
+        from scripts.patterns.auto_learn import _validate_pattern_on_store
+        p = {"fix_type": "regex_replace", "fix_code": {"pattern": r"CompressionLevel\.\w+", "replacement": "CompressionLevel.Optimal"}}
+        assert _validate_pattern_on_store(p) is None
+
+    def test_invalid_regex_rejected(self):
+        from scripts.patterns.auto_learn import _validate_pattern_on_store
+        p = {"fix_type": "regex_replace", "fix_code": {"pattern": "[invalid(", "replacement": "fix"}}
+        result = _validate_pattern_on_store(p)
+        assert result is not None
+        assert "Invalid regex" in result
+
+    def test_non_regex_pattern_passes(self):
+        from scripts.patterns.auto_learn import _validate_pattern_on_store
+        p = {"fix_type": "using_directive", "fix_code": {"directive": "using System.IO;"}}
+        assert _validate_pattern_on_store(p) is None
+
+
+class TestConflictDetection:
+    """Tests for detect_conflicts in LearnedPatternsService."""
+
+    def test_conflicting_regex_detected(self, temp_db):
+        """Two regex_replace with same pattern but different replacement = conflict."""
+        conn = sqlite3.connect(str(temp_db))
+
+        fc1 = json.dumps({"pattern": "Foo", "replacement": "Bar"})
+        fc2 = json.dumps({"pattern": "Foo", "replacement": "Baz"})
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template, fix_type, fix_code, confidence, auto_approved, source)
+               VALUES ('zip', 'compile_error', 'CS0246', 'Fix1', 'regex_replace', ?, 0.8, TRUE, 'auto_learn')""",
+            (fc1,),
+        )
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template, fix_type, fix_code, confidence, auto_approved, source)
+               VALUES ('zip', 'compile_error', 'CS0246', 'Fix2', 'regex_replace', ?, 0.8, TRUE, 'auto_learn')""",
+            (fc2,),
+        )
+        conn.execute("INSERT INTO pattern_performance (pattern_id, family) VALUES (1, 'zip')")
+        conn.execute("INSERT INTO pattern_performance (pattern_id, family) VALUES (2, 'zip')")
+        conn.commit()
+        conn.close()
+
+        svc = LearnedPatternsService("zip", db_path=temp_db)
+        conflicts = svc.detect_conflicts("CS0246")
+        assert len(conflicts) == 1
+        assert "Same regex pattern" in conflicts[0][2]
+        svc.close()
+
+    def test_no_conflict_for_same_replacement(self, temp_db):
+        """Two regex_replace with same pattern AND same replacement = no conflict."""
+        conn = sqlite3.connect(str(temp_db))
+
+        fc = json.dumps({"pattern": "Foo", "replacement": "Bar"})
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template, fix_type, fix_code, confidence, auto_approved, source)
+               VALUES ('zip', 'compile_error', 'CS0246', 'Fix1', 'regex_replace', ?, 0.8, TRUE, 'auto_learn')""",
+            (fc,),
+        )
+        conn.execute(
+            """INSERT INTO learned_patterns
+               (family, pattern_type, error_signature, fix_template, fix_type, fix_code, confidence, auto_approved, source)
+               VALUES ('zip', 'compile_error', 'CS0246', 'Fix2', 'regex_replace', ?, 0.8, TRUE, 'auto_learn')""",
+            (fc,),
+        )
+        conn.execute("INSERT INTO pattern_performance (pattern_id, family) VALUES (1, 'zip')")
+        conn.execute("INSERT INTO pattern_performance (pattern_id, family) VALUES (2, 'zip')")
+        conn.commit()
+        conn.close()
+
+        svc = LearnedPatternsService("zip", db_path=temp_db)
+        conflicts = svc.detect_conflicts("CS0246")
+        assert len(conflicts) == 0
+        svc.close()
+
+
+class TestHistoricalBoost:
+    """Tests for cross-run priority boosting."""
+
+    def test_proven_pattern_boosted(self, temp_db):
+        """Pattern with high success rate is reordered ahead of untested one."""
+        conn = sqlite3.connect(str(temp_db))
+
+        # Insert two patterns: untested (id=1) and proven (id=2)
+        for i, (conf, prio) in enumerate([(0.8, 40), (0.7, 50)], 1):
+            fc = json.dumps({"directive": f"using NS{i};", "trigger_type": f"Type{i}"})
+            conn.execute(
+                """INSERT INTO learned_patterns
+                   (family, pattern_type, error_signature, fix_template, fix_type, fix_code,
+                    confidence, auto_approved, priority, source, scope)
+                   VALUES ('zip', 'compile_error', 'CS0246', ?, 'using_directive', ?, ?, TRUE, ?, 'auto_learn', 'family')""",
+                (f"Fix {i}", fc, conf, prio),
+            )
+            conn.execute(
+                "INSERT INTO pattern_performance (pattern_id, family, times_applied, times_succeeded, success_rate) VALUES (?, 'zip', ?, ?, ?)",
+                (i, 0 if i == 1 else 10, 0 if i == 1 else 8, 0.0 if i == 1 else 0.8),
+            )
+        conn.commit()
+        conn.close()
+
+        svc = LearnedPatternsService("zip", db_path=temp_db)
+        patterns = svc.query_patterns("CS0246", min_confidence=0.5)
+
+        # Pattern 2 (proven, 80% success) should come before pattern 1 (untested)
+        assert len(patterns) == 2
+        assert patterns[0].id == 2  # Proven pattern first
+        svc.close()
 
 
 if __name__ == "__main__":

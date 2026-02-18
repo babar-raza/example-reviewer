@@ -197,20 +197,20 @@ class TestRealGlobalConfigFile:
         assert 'pattern_retirement' in data
         retirement_data = data['pattern_retirement']
 
-        # Verify JSON has correct values (matching our defaults)
-        assert retirement_data['enabled'] is False
+        # Verify JSON has correct values (retirement enabled for production)
+        assert retirement_data['enabled'] is True
         assert retirement_data['min_attempts'] == 10
         assert retirement_data['max_success_rate'] == 0.1
         assert retirement_data['max_age_days'] == 90
-        assert retirement_data['dry_run'] is True
+        assert retirement_data['dry_run'] is False
 
         # Verify it loads into RetirementPolicyConfig correctly
         config = RetirementPolicyConfig(**retirement_data)
-        assert config.enabled is False
+        assert config.enabled is True
         assert config.min_attempts == 10
         assert config.max_success_rate == 0.1
         assert config.max_age_days == 90
-        assert config.dry_run is True
+        assert config.dry_run is False
 
     def test_real_global_config_manager_loads_retirement(self):
         """
@@ -225,11 +225,11 @@ class TestRealGlobalConfigFile:
         # Verify pattern_retirement is accessible and correct
         assert hasattr(global_config, 'pattern_retirement')
         assert isinstance(global_config.pattern_retirement, RetirementPolicyConfig)
-        assert global_config.pattern_retirement.enabled is False
+        assert global_config.pattern_retirement.enabled is True
         assert global_config.pattern_retirement.min_attempts == 10
         assert global_config.pattern_retirement.max_success_rate == 0.1
         assert global_config.pattern_retirement.max_age_days == 90
-        assert global_config.pattern_retirement.dry_run is True
+        assert global_config.pattern_retirement.dry_run is False
 
 
 class TestRetirementPolicyEdgeCases:

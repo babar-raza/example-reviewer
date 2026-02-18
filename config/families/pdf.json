@@ -1,7 +1,7 @@
 {
   "family": "pdf",
   "display_name": "Aspose.PDF for .NET",
-  "auto_commit": false,
+  "auto_commit": true,
   "commit_message_template": "fix(pdf): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
     "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/pdf",

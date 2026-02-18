@@ -25,6 +25,7 @@
   },
   "git": {
     "enabled": true,
+    "commit_format": "compact",
     "commit_message_template": "chore({family}): verify {count} examples",
     "commit_description_template": "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}",
     "only_commit_touched_files": true
@@ -235,14 +236,17 @@
     "timeout_seconds": 300
   },
   "pattern_retirement": {
-    "enabled": false,
+    "enabled": true,
     "min_attempts": 10,
     "max_success_rate": 0.1,
     "max_age_days": 90,
-    "dry_run": true
+    "dry_run": false
   },
   "artifact_store_path": "./artifacts",
-  "database_path": "./data/example_reviewer.db",
+  "database": {
+    "path": "./data/example_reviewer.db",
+    "production_path": "./data/example_reviewer_prod.db"
+  },
   "content_url_patterns": {
     "blog.aspose.net": {
       "base_path": "content/blog.aspose.net/{product}",

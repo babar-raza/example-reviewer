@@ -1,2 +1,0 @@
-"""Validation package compatibility layer."""
-

@@ -416,3 +416,272 @@ class TestGenerators:
         dest = test_data_dir / "data.xyz"
         success, msg = generate_file_for_family("data.xyz", dest, test_data_dir, "words")
         assert not success  # Unsupported extension
+
+
+# ---------------------------------------------------------------------------
+# New generator validation tests
+# ---------------------------------------------------------------------------
+
+class TestNewGenerators:
+    """Tests for generator expansion (OOXML, text-based, archive formats)."""
+
+    def test_generate_pptx_valid_zip(self, test_data_dir):
+        import zipfile
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "presentation.pptx"
+        success, msg = generate_file_for_family("presentation.pptx", dest, test_data_dir, "slides")
+        assert success
+        assert dest.exists()
+        with zipfile.ZipFile(dest) as zf:
+            names = zf.namelist()
+            assert "[Content_Types].xml" in names
+            assert "ppt/presentation.xml" in names
+            assert "ppt/slides/slide1.xml" in names
+
+    def test_generate_xlsx_valid_zip(self, test_data_dir):
+        import zipfile
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "workbook.xlsx"
+        success, msg = generate_file_for_family("workbook.xlsx", dest, test_data_dir, "cells")
+        assert success
+        with zipfile.ZipFile(dest) as zf:
+            names = zf.namelist()
+            assert "[Content_Types].xml" in names
+            assert "xl/workbook.xml" in names
+            assert "xl/worksheets/sheet1.xml" in names
+
+    def test_generate_xps_valid(self, test_data_dir):
+        import zipfile
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "output.xps"
+        success, msg = generate_file_for_family("output.xps", dest, test_data_dir, "page")
+        assert success
+        with zipfile.ZipFile(dest) as zf:
+            names = zf.namelist()
+            assert "FixedDocumentSequence.fdseq" in names
+            assert "Documents/1/Pages/1.fpage" in names
+
+    def test_generate_epub_valid(self, test_data_dir):
+        import zipfile
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "book.epub"
+        success, msg = generate_file_for_family("book.epub", dest, test_data_dir, "words")
+        assert success
+        with zipfile.ZipFile(dest) as zf:
+            assert zf.read("mimetype") == b"application/epub+zip"
+            assert "META-INF/container.xml" in zf.namelist()
+            assert "OEBPS/content.opf" in zf.namelist()
+
+    def test_generate_tex_content(self, test_data_dir):
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "sample.tex"
+        success, msg = generate_file_for_family("sample.tex", dest, test_data_dir, "tex")
+        assert success
+        content = dest.read_text(encoding="utf-8")
+        assert "\\documentclass" in content
+        assert "\\begin{document}" in content
+        assert "\\end{document}" in content
+
+    def test_generate_eps_header(self, test_data_dir):
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "image.eps"
+        success, msg = generate_file_for_family("image.eps", dest, test_data_dir, "page")
+        assert success
+        content = dest.read_text(encoding="utf-8")
+        assert "%!PS-Adobe-3.0 EPSF-3.0" in content
+        assert "%%BoundingBox:" in content
+
+    def test_generate_ps_header(self, test_data_dir):
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "doc.ps"
+        success, msg = generate_file_for_family("doc.ps", dest, test_data_dir, "page")
+        assert success
+        content = dest.read_text(encoding="utf-8")
+        assert "%!PS-Adobe-3.0" in content
+        assert "showpage" in content
+
+    def test_generate_ics_valid(self, test_data_dir):
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "event.ics"
+        success, msg = generate_file_for_family("event.ics", dest, test_data_dir, "email")
+        assert success
+        content = dest.read_text(encoding="utf-8")
+        assert "BEGIN:VCALENDAR" in content
+        assert "BEGIN:VEVENT" in content
+        assert "END:VCALENDAR" in content
+
+    def test_generate_dxf_content(self, test_data_dir):
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "drawing.dxf"
+        success, msg = generate_file_for_family("drawing.dxf", dest, test_data_dir, "cad")
+        assert success
+        content = dest.read_text(encoding="utf-8")
+        assert "HEADER" in content
+        assert "EOF" in content
+
+    def test_generate_mhtml_content(self, test_data_dir):
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "page.mhtml"
+        success, msg = generate_file_for_family("page.mhtml", dest, test_data_dir, "html")
+        assert success
+        content = dest.read_text(encoding="utf-8")
+        assert "MIME-Version: 1.0" in content
+        assert "multipart/related" in content
+        assert "<html>" in content
+
+    def test_generate_gif_valid_header(self, test_data_dir):
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "image.gif"
+        success, msg = generate_file_for_family("image.gif", dest, test_data_dir, "imaging")
+        assert success
+        data = dest.read_bytes()
+        assert data[:6] == b"GIF89a"  # Valid GIF header, not PNG
+
+    def test_generate_tiff_valid_header(self, test_data_dir):
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "image.tiff"
+        success, msg = generate_file_for_family("image.tiff", dest, test_data_dir, "imaging")
+        assert success
+        data = dest.read_bytes()
+        assert data[:2] in (b"II", b"MM")  # Valid TIFF byte order mark, not BMP
+
+    def test_generate_zip_archive(self, test_data_dir):
+        import zipfile
+        from src.services.test_data_generator import generate_file_for_family
+        dest = test_data_dir / "archive.zip"
+        # Remove existing archive.zip if any to test generation
+        if dest.exists():
+            dest.unlink()
+        success, msg = generate_file_for_family("archive.zip", dest, test_data_dir, "zip")
+        assert success
+        assert zipfile.is_zipfile(dest)
+
+
+# ---------------------------------------------------------------------------
+# Unresolvable mechanism tests
+# ---------------------------------------------------------------------------
+
+class TestUnresolvable:
+    """Tests for version-based unresolvable staleness and migration."""
+
+    def test_unresolvable_blocks_retry(self, test_data_dir, file_aliases, tmp_path):
+        """Known unresolvable at current version skips all tiers."""
+        registry_path = tmp_path / "fixture-registry.json"
+        # Seed registry with unresolvable entry at current version
+        registry_path.write_text(json.dumps({
+            "version": 1, "family": "words", "fixtures": {},
+            "unresolvable": {
+                "impossible.xyz": {
+                    "recorded_at": "2026-01-01T00:00:00+00:00",
+                    "generator_version": FixtureResolverService._GENERATOR_VERSION,
+                }
+            }
+        }), encoding="utf-8")
+
+        resolver = FixtureResolverService(
+            family="words", test_data_dir=test_data_dir,
+            file_aliases=file_aliases, registry_path=registry_path,
+        )
+        result = resolver.resolve_missing_file("impossible.xyz")
+        assert not result.resolved
+        assert result.method == "cached_unresolvable"
+
+    def test_unresolvable_stale_retries_on_version_bump(self, test_data_dir, file_aliases, tmp_path):
+        """Entry recorded at older generator version triggers retry."""
+        registry_path = tmp_path / "fixture-registry.json"
+        registry_path.write_text(json.dumps({
+            "version": 1, "family": "words", "fixtures": {},
+            "unresolvable": {
+                "sample.txt": {
+                    "recorded_at": "2026-01-01T00:00:00+00:00",
+                    "generator_version": 1,  # Older than current _GENERATOR_VERSION (2)
+                }
+            }
+        }), encoding="utf-8")
+
+        resolver = FixtureResolverService(
+            family="words", test_data_dir=test_data_dir,
+            file_aliases=file_aliases, registry_path=registry_path,
+        )
+        # sample.txt exists in test_data_dir, so tier 1 should find it
+        result = resolver.resolve_missing_file("sample.txt")
+        assert result.resolved
+        assert result.method == "existing"
+
+    def test_unresolvable_stale_when_file_exists(self, test_data_dir, file_aliases, tmp_path):
+        """File that appeared in test-data triggers retry and removes stale entry."""
+        registry_path = tmp_path / "fixture-registry.json"
+        # Record as unresolvable at current version
+        registry_path.write_text(json.dumps({
+            "version": 1, "family": "words", "fixtures": {},
+            "unresolvable": {
+                "alice29.txt": {
+                    "recorded_at": "2026-01-01T00:00:00+00:00",
+                    "generator_version": FixtureResolverService._GENERATOR_VERSION,
+                }
+            }
+        }), encoding="utf-8")
+
+        resolver = FixtureResolverService(
+            family="words", test_data_dir=test_data_dir,
+            file_aliases=file_aliases, registry_path=registry_path,
+        )
+        # alice29.txt exists in test_data_dir, so stale check removes it
+        result = resolver.resolve_missing_file("alice29.txt")
+        assert result.resolved
+
+    def test_unresolvable_auto_migration_from_list(self, test_data_dir, file_aliases, tmp_path):
+        """Old list-based unresolvable format auto-migrates to versioned dict."""
+        registry_path = tmp_path / "fixture-registry.json"
+        # Old format: list of strings
+        registry_path.write_text(json.dumps({
+            "version": 1, "family": "words", "fixtures": {},
+            "unresolvable": ["impossible.abc", "another.xyz", "*.jpg"]
+        }), encoding="utf-8")
+
+        resolver = FixtureResolverService(
+            family="words", test_data_dir=test_data_dir,
+            file_aliases=file_aliases, registry_path=registry_path,
+        )
+        # After load, unresolvable should be dict, not list
+        unresolv = resolver._registry["unresolvable"]
+        assert isinstance(unresolv, dict)
+        # Concrete entries migrated
+        assert "impossible.abc" in unresolv
+        assert unresolv["impossible.abc"]["generator_version"] == 1
+        # Glob patterns dropped during migration
+        assert "*.jpg" not in unresolv
+
+    def test_wildcard_rejected_from_unresolvable(self, test_data_dir, file_aliases, tmp_path):
+        """Glob patterns are not recorded in the unresolvable list."""
+        registry_path = tmp_path / "fixture-registry.json"
+        resolver = FixtureResolverService(
+            family="words", test_data_dir=test_data_dir,
+            file_aliases=file_aliases, registry_path=registry_path,
+        )
+        resolver._record_unresolvable("*.jpg")
+        resolver._record_unresolvable("data?.bin")
+        resolver._record_unresolvable("{file}.txt")
+
+        unresolv = resolver._registry.get("unresolvable", {})
+        assert "*.jpg" not in unresolv
+        assert "data?.bin" not in unresolv
+        assert "{file}.txt" not in unresolv
+
+    def test_tier2_5_recursive_search(self, test_data_dir, file_aliases, tmp_path):
+        """Tier 2.5 finds files in repo subdirectories."""
+        # Create a mock example repo with subdirectories
+        repo_dir = tmp_path / "repo-data"
+        repo_dir.mkdir()
+        (repo_dir / "SubDir").mkdir()
+        (repo_dir / "SubDir" / "deep_file.docx").write_bytes(b"PK\x03\x04" + b"\x00" * 50)
+
+        resolver = FixtureResolverService(
+            family="words", test_data_dir=test_data_dir,
+            file_aliases=file_aliases, registry_path=tmp_path / "fixture-registry.json",
+            example_repo_test_data_dir=repo_dir,
+        )
+        result = resolver._tier2_5_example_repo("deep_file.docx")
+        assert result.resolved
+        assert result.method == "example_repo"
+        assert "recursive" in result.message

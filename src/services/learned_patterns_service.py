@@ -44,6 +44,7 @@ class LearnedPattern:
     example_before: Optional[str]
     example_after: Optional[str]
     source: str  # 'bootstrap', 'auto_learn', 'manual'
+    scope: str = "family"  # 'family' | 'global'
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "LearnedPattern":
@@ -55,6 +56,13 @@ class LearnedPattern:
                 fix_code = json.loads(fix_code_raw)
             except json.JSONDecodeError:
                 logger.warning(f"Invalid fix_code JSON for pattern {row['id']}")
+
+        # V3 scope column may not exist in older databases
+        scope = "family"
+        try:
+            scope = row["scope"] or "family"
+        except (IndexError, KeyError):
+            pass
 
         return cls(
             id=row["id"],
@@ -72,6 +80,7 @@ class LearnedPattern:
             example_before=row["example_before"],
             example_after=row["example_after"],
             source=row["source"] or "unknown",
+            scope=scope,
         )
 
 
@@ -92,12 +101,16 @@ class LearnedPatternsService:
         """
         self.family = family
         self.db_path = db_path or DEFAULT_DB_PATH
-        self._catalog = catalog  # NEW: Store catalog for LLM operations
+        self._catalog = catalog  # Store catalog for LLM operations
         self._connection: Optional[sqlite3.Connection] = None
         # In-run cache: patterns that succeeded during this run get priority boost
         self._run_cache: Dict[str, List[int]] = {}  # error_signature -> [pattern_ids that succeeded]
         # Preloaded patterns cache: error_signature -> List[LearnedPattern]
         self._preloaded_cache: Dict[str, List[LearnedPattern]] = {}
+        # LLM pattern application guard: (pattern_id, code_hash) pairs already attempted
+        self._applied_llm_patterns: set = set()
+        # Whether scope column exists (lazy-detected)
+        self._has_scope_column: Optional[bool] = None
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create database connection."""
@@ -114,21 +127,42 @@ class LearnedPatternsService:
             self._connection.close()
             self._connection = None
 
+    def _check_scope_column(self) -> bool:
+        """Check if the V3 scope column exists in the database."""
+        if self._has_scope_column is not None:
+            return self._has_scope_column
+        try:
+            conn = self._get_connection()
+            cols = [row[1] for row in conn.execute("PRAGMA table_info(learned_patterns)").fetchall()]
+            self._has_scope_column = "scope" in cols
+        except sqlite3.Error:
+            self._has_scope_column = False
+        return self._has_scope_column
+
     def preload_all_patterns(self) -> None:
         """
         Preload all patterns for this family into memory cache.
 
+        Includes global-scope patterns (V3) alongside family-specific ones.
         This is called once after Phase A (discovery) to avoid repeated
         database queries during compilation/runtime loops.
         """
         try:
             conn = self._get_connection()
-            query = """
-                SELECT * FROM learned_patterns
-                WHERE family = ?
-                  AND auto_approved = TRUE
-                ORDER BY error_signature, priority ASC, confidence DESC
-            """
+            if self._check_scope_column():
+                query = """
+                    SELECT * FROM learned_patterns
+                    WHERE (family = ? OR scope = 'global')
+                      AND auto_approved = TRUE
+                    ORDER BY error_signature, priority ASC, confidence DESC
+                """
+            else:
+                query = """
+                    SELECT * FROM learned_patterns
+                    WHERE family = ?
+                      AND auto_approved = TRUE
+                    ORDER BY error_signature, priority ASC, confidence DESC
+                """
             cursor = conn.execute(query, [self.family])
             rows = cursor.fetchall()
 
@@ -189,12 +223,20 @@ class LearnedPatternsService:
         # Fall back to database query if not preloaded
         conn = self._get_connection()
 
-        query = """
-            SELECT * FROM learned_patterns
-            WHERE family = ?
-              AND error_signature = ?
-              AND confidence >= ?
-        """
+        if self._check_scope_column():
+            query = """
+                SELECT * FROM learned_patterns
+                WHERE (family = ? OR scope = 'global')
+                  AND error_signature = ?
+                  AND confidence >= ?
+            """
+        else:
+            query = """
+                SELECT * FROM learned_patterns
+                WHERE family = ?
+                  AND error_signature = ?
+                  AND confidence >= ?
+            """
         params: List[Any] = [self.family, error_signature, min_confidence]
 
         if approved_only:
@@ -219,10 +261,51 @@ class LearnedPatternsService:
                         f"In-run cache boost: {len(boosted)} patterns for '{error_signature}'"
                     )
 
+            # Cross-run historical boost (Phase 3A)
+            patterns = self._boost_by_historical_success(patterns)
+
             return patterns
         except sqlite3.Error as e:
             logger.error(f"Error querying patterns: {e}")
             return []
+
+    def _boost_by_historical_success(self, patterns: List[LearnedPattern]) -> List[LearnedPattern]:
+        """Reorder patterns by historical success rate (cross-run boost).
+
+        Patterns with proven track records are prioritized over untested ones.
+        Uses Bayesian-like smoothing: success_rate * log10(times_applied + 1).
+        """
+        if len(patterns) <= 1:
+            return patterns
+
+        try:
+            import math
+            conn = self._get_connection()
+            pattern_ids = [p.id for p in patterns]
+            placeholders = ",".join("?" for _ in pattern_ids)
+
+            perf_rows = conn.execute(
+                f"SELECT pattern_id, success_rate, times_applied FROM pattern_performance WHERE pattern_id IN ({placeholders})",
+                pattern_ids,
+            ).fetchall()
+
+            perf_map = {row[0]: (row[1], row[2]) for row in perf_rows}
+
+            # Only reorder if we have performance data for at least one pattern
+            has_data = any(perf_map.get(p.id, (0.0, 0))[1] > 0 for p in patterns)
+            if not has_data:
+                return patterns
+
+            def sort_key(p: LearnedPattern):
+                rate, applied = perf_map.get(p.id, (0.0, 0))
+                if applied == 0:
+                    return 0.0  # Untested patterns keep original order
+                return -(rate * math.log10(applied + 1))
+
+            return sorted(patterns, key=sort_key)
+        except (sqlite3.Error, Exception) as e:
+            logger.debug(f"Historical boost skipped: {e}")
+            return patterns
 
     def query_all_patterns(
         self,
@@ -388,6 +471,12 @@ class LearnedPatternsService:
         fix_code = pattern.fix_code
         if not fix_code:
             return code, False, "No fix_code"
+
+        # LLM pattern application guard: avoid wasting LLM calls on already-attempted combos
+        guard_key = (pattern.id, hash(code[:500]))
+        if guard_key in self._applied_llm_patterns:
+            return code, False, "LLM pattern already attempted for this code"
+        self._applied_llm_patterns.add(guard_key)
 
         prompt_template = fix_code.get("prompt")
         system_prompt = fix_code.get("system_prompt", "Fix the following C# code.")
@@ -916,6 +1005,33 @@ class LearnedPatternsService:
         except sqlite3.Error as e:
             logger.error(f"Error storing pattern: {e}")
             raise
+
+    def detect_conflicts(self, error_signature: str) -> List[Tuple["LearnedPattern", "LearnedPattern", str]]:
+        """Detect potentially conflicting patterns for an error signature.
+
+        Returns:
+            List of (pattern_a, pattern_b, reason) tuples describing conflicts.
+        """
+        patterns = self.query_patterns(error_signature, min_confidence=0.0, approved_only=False, limit=50)
+        conflicts: List[Tuple[LearnedPattern, LearnedPattern, str]] = []
+
+        for i, p1 in enumerate(patterns):
+            for p2 in patterns[i + 1:]:
+                # Two regex_replace patterns with same match but different replacement
+                if p1.fix_type == "regex_replace" and p2.fix_type == "regex_replace":
+                    if p1.fix_code and p2.fix_code:
+                        if (p1.fix_code.get("pattern") == p2.fix_code.get("pattern")
+                                and p1.fix_code.get("replacement") != p2.fix_code.get("replacement")):
+                            conflicts.append((p1, p2, "Same regex pattern, different replacement"))
+
+                # Two using_directive patterns for same trigger_type but different directive
+                if p1.fix_type == "using_directive" and p2.fix_type == "using_directive":
+                    if p1.fix_code and p2.fix_code:
+                        if (p1.fix_code.get("trigger_type") == p2.fix_code.get("trigger_type")
+                                and p1.fix_code.get("directive") != p2.fix_code.get("directive")):
+                            conflicts.append((p1, p2, "Same trigger_type, different directive"))
+
+        return conflicts
 
 
 def extract_error_signature(errors: List[str]) -> str:

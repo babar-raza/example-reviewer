@@ -161,7 +161,7 @@
   "example_repo": {
     "url": "https://github.com/aspose-email/Aspose.Email-for-.NET",
     "examples_path": "Examples",
-    "test_data_path": "Data",
+    "test_data_path": "Examples/Data",
     "ref": "master"
   }
 }

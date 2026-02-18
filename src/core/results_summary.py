@@ -2,7 +2,7 @@
 Results summary export for determinism verification.
 
 Exports run results in a structured format suitable for comparison across runs.
-Used by tools/verify_determinism.py to validate reproducibility.
+Used by scripts/validation/verify_determinism.py to validate reproducibility.
 """
 
 import json

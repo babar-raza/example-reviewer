@@ -168,15 +168,17 @@ _SYSTEM_PREFERRED_TYPES = {
 }
 
 
-def parse_cs0104_error(error: str) -> Optional[Tuple[str, str]]:
+def parse_cs0104_error(error: str, catalog=None) -> Optional[Tuple[str, str]]:
     """
     Parse CS0104 error to extract ambiguous type and preferred namespace.
 
     Error format: "'ParallelOptions' is an ambiguous reference between
     'Aspose.Zip.Saving.ParallelOptions' and 'System.Threading.Tasks.ParallelOptions'"
 
-    For common BCL types (Path, Directory, File, etc.), prefers System namespace.
-    For Aspose-specific types, prefers Aspose namespace.
+    Resolution priority:
+    1. Family API catalog (if provided and type is unambiguous in catalog)
+    2. Well-known System types (_SYSTEM_PREFERRED_TYPES)
+    3. Aspose namespace fallback
 
     Returns:
         Tuple of (type_name, fully_qualified) or None
@@ -188,13 +190,24 @@ def parse_cs0104_error(error: str) -> Optional[Tuple[str, str]]:
     if match:
         type_name = match.group(1)
         ref1, ref2 = match.group(2), match.group(3)
-        # For well-known System types, prefer the System namespace
+
+        # Priority 1: Catalog-driven resolution (family-specific)
+        if catalog and catalog.has_type(type_name) and not catalog.is_ambiguous(type_name):
+            catalog_ns = catalog.get_namespace_for_type(type_name)
+            if catalog_ns:
+                catalog_fq = f"{catalog_ns}.{type_name}"
+                if ref1 == catalog_fq:
+                    return (type_name, ref1)
+                elif ref2 == catalog_fq:
+                    return (type_name, ref2)
+
+        # Priority 2: Well-known System types
         if type_name in _SYSTEM_PREFERRED_TYPES:
             if ref1.startswith("System."):
                 return (type_name, ref1)
             elif ref2.startswith("System."):
                 return (type_name, ref2)
-        # Otherwise prefer the Aspose namespace
+        # Priority 3: Prefer the Aspose namespace
         if ref1.startswith("Aspose."):
             return (type_name, ref1)
         elif ref2.startswith("Aspose."):
@@ -2172,6 +2185,27 @@ def apply_semantic_microfixes(
     _PROACTIVE_QUALIFICATIONS = {
         'Task': 'System.Threading.Tasks.Task',
     }
+
+    # Catalog-driven override: if a type in _SYSTEM_PREFERRED_TYPES also exists
+    # in the family catalog, check code usage context to determine which to prefer
+    if catalog:
+        for _type_name in list(_SYSTEM_PREFERRED_TYPES):
+            if _type_name in fixed_code and catalog.has_type(_type_name) and not catalog.is_ambiguous(_type_name):
+                _cat_ns = catalog.get_namespace_for_type(_type_name)
+                if _cat_ns:
+                    cat_methods = catalog.get_method_signatures(_type_name)
+                    cat_method_names = {m['name'] for m in cat_methods} if cat_methods else set()
+                    usage_methods = set(re.findall(
+                        rf'(?<![.\w]){re.escape(_type_name)}\.(\w+)', fixed_code
+                    ))
+                    # Only override if code uses catalog-specific methods AND no System methods
+                    if usage_methods and cat_method_names and usage_methods <= cat_method_names:
+                        _PROACTIVE_QUALIFICATIONS[_type_name] = f"{_cat_ns}.{_type_name}"
+                        logger.info(
+                            f"PROACTIVE_CS0104: Catalog override for '{_type_name}' -> "
+                            f"'{_cat_ns}.{_type_name}' (methods: {usage_methods & cat_method_names})"
+                        )
+
     for _type_name, _fq_name in _PROACTIVE_QUALIFICATIONS.items():
         if _type_name in fixed_code:
             fixed_code, fix_desc = fix_cs0104_ambiguous_reference(fixed_code, _type_name, _fq_name)
@@ -2321,7 +2355,7 @@ def apply_semantic_microfixes(
                 cs7036_params.append(param_name)
 
         elif error_code == "CS0104":
-            parsed = parse_cs0104_error(error)
+            parsed = parse_cs0104_error(error, catalog=catalog)
             if parsed and parsed not in cs0104_refs:
                 cs0104_refs.append(parsed)
 

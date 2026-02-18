@@ -22,12 +22,12 @@ class TestWorkspaceCopyMode:
         """Test that read-only paths are correctly identified."""
         # Test all protected prefixes
         assert is_read_only_path("test-data/zip/sample.zip")
-        assert is_read_only_path("test-content/docs/example.md")
+        assert is_read_only_path("tests/fixtures/content/docs/example.md")
         assert is_read_only_path("test-examples/Program.cs")
-        assert is_read_only_path("test-reference/api.json")
+        assert is_read_only_path("tests/fixtures/reference/api.json")
 
         # Test absolute paths
-        assert is_read_only_path("/home/user/repo/test-content/docs/example.md")
+        assert is_read_only_path("/home/user/repo/tests/fixtures/content/docs/example.md")
         assert is_read_only_path("c:\\Users\\user\\test-data\\file.txt")
 
         # Test non-protected paths
@@ -40,7 +40,7 @@ class TestWorkspaceCopyMode:
         run_id = "test123"
 
         # Test relative path
-        original = "test-content/docs/example.md"
+        original = "tests/fixtures/content/docs/example.md"
         workspace = get_workspace_path(original, workspace_root, run_id)
 
         # Normalize to forward slashes for cross-platform comparison
@@ -52,7 +52,7 @@ class TestWorkspaceCopyMode:
         run_id = "test123"
 
         # Test absolute path (Unix-style)
-        original = "/home/user/repo/test-content/docs/example.md"
+        original = "/home/user/repo/tests/fixtures/content/docs/example.md"
         workspace = get_workspace_path(original, workspace_root, run_id)
 
         # Normalize to forward slashes for cross-platform comparison
@@ -74,7 +74,7 @@ class TestWorkspaceCopyMode:
     def test_write_guard_blocks_readonly_paths(self):
         """Test that write guard blocks writes to read-only paths."""
         with pytest.raises(PermissionError, match="WRITE BLOCKED"):
-            assert_write_allowed("test-content/docs/example.md", "test write")
+            assert_write_allowed("tests/fixtures/content/docs/example.md", "test write")
 
     def test_markdown_service_workspace_copy_integration(self, temp_db, tmp_path):
         """Test markdown service integration with workspace copy mode."""
@@ -91,7 +91,7 @@ class TestWorkspaceCopyMode:
         assert service.use_workspace_copy is True
 
         # Test path mapping
-        original_path = "test-content/docs/example.md"
+        original_path = "tests/fixtures/content/docs/example.md"
         target_path = service._get_write_target_path(original_path)
 
         # Should be redirected to workspace
@@ -128,8 +128,8 @@ class TestWorkspacePathStructure:
         run_id = "abc123"
 
         test_cases = [
-            ("test-content/docs/guide.md", "artifacts/workspace/abc123/content/docs/guide.md"),
-            ("test-content/api/reference.md", "artifacts/workspace/abc123/content/api/reference.md"),
+            ("tests/fixtures/content/docs/guide.md", "artifacts/workspace/abc123/content/docs/guide.md"),
+            ("tests/fixtures/content/api/reference.md", "artifacts/workspace/abc123/content/api/reference.md"),
             ("test-data/zip/sample.zip", "artifacts/workspace/abc123/content/zip/sample.zip"),
         ]
 
@@ -141,7 +141,7 @@ class TestWorkspacePathStructure:
     def test_workspace_run_isolation(self):
         """Test that different runs get isolated workspaces."""
         workspace_root = Path("artifacts/workspace")
-        original = "test-content/docs/example.md"
+        original = "tests/fixtures/content/docs/example.md"
 
         # Run 1
         workspace1 = get_workspace_path(original, workspace_root, "run_001")

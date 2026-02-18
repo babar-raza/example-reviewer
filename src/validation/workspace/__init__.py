@@ -1,2 +1,0 @@
-"""Workspace compatibility package."""
-

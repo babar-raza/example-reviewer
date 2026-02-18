@@ -15,7 +15,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from tools.validate_strict_context_mode import StrictContextValidator
+from scripts.validation.validate_strict_context_mode import StrictContextValidator
 
 
 def test_validator_no_examples():

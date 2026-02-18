@@ -122,6 +122,7 @@ class GitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
+    commit_format: str = "compact"  # "minimal" | "compact" | "detailed" | "structured"
     commit_message_template: str = "chore({family}): verify {count} examples"
     commit_description_template: str = "Automated verification of {count} examples.\n\nRunId: {run_id}\nFamily: {family}"
     only_commit_touched_files: bool = True
@@ -765,6 +766,20 @@ class CSDiscoveryConfig(BaseModel):
     )
 
 
+class PipelineOverrides(BaseModel):
+    """Per-family overrides for pipeline behavior (compile/runtime retry tuning)."""
+    model_config = ConfigDict(extra="forbid")
+
+    max_compile_retries: Optional[int] = Field(
+        default=None, ge=1, le=10,
+        description="Override global max_retries for compile-phase LLM fixes"
+    )
+    max_runtime_retries: Optional[int] = Field(
+        default=None, ge=1, le=5,
+        description="Override global max_retries for runtime-phase LLM fixes"
+    )
+
+
 class FamilyConfig(BaseModel):
     """Per-family configuration settings."""
     model_config = ConfigDict(extra="forbid")
@@ -811,6 +826,9 @@ class FamilyConfig(BaseModel):
 
     # Learned patterns (auto-learn module)
     learned_patterns: Dict[str, Any] = Field(default_factory=dict)
+
+    # Pipeline overrides (per-family compile/runtime retry tuning)
+    pipeline_overrides: Optional[PipelineOverrides] = None
 
     def get_nuget_package_name(self) -> str:
         """Get primary NuGet package name."""
@@ -878,7 +896,10 @@ class ConfigurationManager:
         
         if 'git' in data:
             parsed['git'] = GitConfig(**data['git'])
-        
+
+        if 'markdown_write' in data:
+            parsed['markdown_write'] = MarkdownWriteConfig(**data['markdown_write'])
+
         if 'gist' in data:
             gist_data = data['gist'].copy()
             if 'auth' in gist_data:
@@ -1087,6 +1108,10 @@ class ConfigurationManager:
         # File exclude patterns
         if 'file_exclude_patterns' in data:
             parsed['file_exclude_patterns'] = data['file_exclude_patterns']
+
+        # Pipeline overrides (per-family compile/runtime retry tuning)
+        if 'pipeline_overrides' in data:
+            parsed['pipeline_overrides'] = PipelineOverrides(**data['pipeline_overrides'])
 
         return FamilyConfig(**parsed)
     

@@ -771,14 +771,46 @@ _FAMILY_GENERATORS: Dict[str, Any] = {
     ".jpg": lambda dest, td, _: _generate_jpeg(dest),
     ".jpeg": lambda dest, td, _: _generate_jpeg(dest),
     ".bmp": lambda dest, td, _: _generate_bmp(dest),
-    ".gif": lambda dest, td, _: _generate_png(dest),  # PNG as fallback for GIF
-    ".tiff": lambda dest, td, _: _generate_bmp(dest),  # BMP as fallback for TIFF
-    ".tif": lambda dest, td, _: _generate_bmp(dest),
+    ".gif": lambda dest, td, _: _generate_gif(dest),
+    ".tiff": lambda dest, td, _: _generate_tiff(dest),
+    ".tif": lambda dest, td, _: _generate_tiff(dest),
     ".svg": lambda dest, td, _: _generate_svg(dest),
     # Email formats (generate minimal valid content)
     ".eml": lambda dest, td, _: _generate_eml(dest),
     ".msg": lambda dest, td, _: _generate_msg_as_eml(dest),
     ".mbox": lambda dest, td, _: _generate_mbox(dest),
+    ".ics": lambda dest, td, _: _generate_ics(dest),
+    # Archive formats (generate or copy-canonical)
+    ".zip": lambda dest, td, _: _generate_zip_for_family(dest, td),
+    ".7z": lambda dest, td, _: _generate_7z_for_family(dest, td),
+    ".gz": lambda dest, td, _: _generate_gz_for_family(dest, td),
+    ".rar": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".rar"),
+    # Office formats (OOXML via stdlib zipfile)
+    ".pptx": lambda dest, td, _: _generate_pptx(dest),
+    ".xlsx": lambda dest, td, _: _generate_xlsx(dest),
+    ".xls": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".xls"),
+    ".pot": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".pot"),
+    # Document conversion formats
+    ".xps": lambda dest, td, _: _generate_xps(dest),
+    ".epub": lambda dest, td, _: _generate_epub(dest),
+    ".mhtml": lambda dest, td, _: _generate_mhtml(dest),
+    ".mht": lambda dest, td, _: _generate_mhtml(dest),
+    ".chm": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".chm"),
+    ".mobi": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".mobi"),
+    # Page / TeX formats
+    ".tex": lambda dest, td, _: _generate_tex(dest),
+    ".ltx": lambda dest, td, _: _generate_tex(dest),
+    ".ps": lambda dest, td, _: _generate_ps(dest),
+    ".eps": lambda dest, td, _: _generate_eps(dest),
+    # CAD formats
+    ".dxf": lambda dest, td, _: _generate_dxf(dest),
+    ".dwg": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".dwg"),
+    ".dwf": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".dwf"),
+    # Project formats (binary, copy-canonical only)
+    ".mpp": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".mpp"),
+    ".mpt": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".mpt"),
+    # Outlook data (binary, copy-canonical only)
+    ".pst": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".pst"),
     # Image/design formats (copy from canonical in test-data)
     ".psd": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".psd"),
     ".psb": lambda dest, td, _: _copy_canonical_by_ext(dest, td, ".psb"),
@@ -868,6 +900,380 @@ def _generate_svg(dest: Path) -> Tuple[bool, str]:
         encoding="utf-8",
     )
     return (True, f"Generated minimal SVG {dest.name}")
+
+
+# Minimal valid GIF89a: 1x1 transparent pixel (43 bytes)
+_MINIMAL_GIF_BYTES = (
+    b'GIF89a'           # Header
+    b'\x01\x00\x01\x00'  # 1x1 logical screen
+    b'\x80\x00\x00'      # GCT flag, 2 colors
+    b'\xff\xff\xff'       # Color 0: white
+    b'\x00\x00\x00'       # Color 1: black
+    b'\x21\xf9\x04'       # Graphic Control Extension
+    b'\x01\x00\x00\x00'   # Transparent index 0
+    b'\x00'
+    b'\x2c'               # Image Descriptor
+    b'\x00\x00\x00\x00'   # Left, top
+    b'\x01\x00\x01\x00'   # 1x1
+    b'\x00'               # No local color table
+    b'\x02\x02\x4c\x01\x00'  # LZW min code size 2, data
+    b'\x3b'               # Trailer
+)
+
+# Minimal valid TIFF: 1x1 white pixel, little-endian
+_MINIMAL_TIFF_BYTES = (
+    b'\x49\x49'           # Little-endian byte order (II)
+    b'\x2a\x00'           # TIFF magic number 42
+    b'\x08\x00\x00\x00'   # Offset to first IFD
+    # IFD with 6 entries
+    b'\x06\x00'           # 6 directory entries
+    # Entry 1: ImageWidth = 1 (tag 256)
+    b'\x00\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00'
+    # Entry 2: ImageLength = 1 (tag 257)
+    b'\x01\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00'
+    # Entry 3: BitsPerSample = 8 (tag 258)
+    b'\x02\x01\x03\x00\x01\x00\x00\x00\x08\x00\x00\x00'
+    # Entry 4: PhotometricInterpretation = 1 (BlackIsZero) (tag 262)
+    b'\x06\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00'
+    # Entry 5: StripOffsets = 86 (tag 273)
+    b'\x11\x01\x03\x00\x01\x00\x00\x00\x56\x00\x00\x00'
+    # Entry 6: RowsPerStrip = 1 (tag 278)
+    b'\x16\x01\x03\x00\x01\x00\x00\x00\x01\x00\x00\x00'
+    # Next IFD offset = 0 (no more IFDs)
+    b'\x00\x00\x00\x00'
+    # Pixel data at offset 86: one white pixel
+    b'\xff'
+)
+
+
+def _generate_gif(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid GIF89a file (1x1 transparent pixel)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(_MINIMAL_GIF_BYTES)
+    return (True, f"Generated minimal GIF {dest.name}")
+
+
+def _generate_tiff(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid TIFF file (1x1 white pixel)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(_MINIMAL_TIFF_BYTES)
+    return (True, f"Generated minimal TIFF {dest.name}")
+
+
+def _generate_pptx(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid .pptx file (OOXML via stdlib zipfile)."""
+    import zipfile
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>'
+        '<Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
+        '</Types>'
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>'
+        '</Relationships>'
+    )
+    presentation = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst>'
+        '</p:presentation>'
+    )
+    ppt_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>'
+        '</Relationships>'
+    )
+    slide1 = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+        '<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+        '<p:grpSpPr/></p:spTree></p:cSld></p:sld>'
+    )
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr('[Content_Types].xml', content_types)
+        zf.writestr('_rels/.rels', rels)
+        zf.writestr('ppt/presentation.xml', presentation)
+        zf.writestr('ppt/_rels/presentation.xml.rels', ppt_rels)
+        zf.writestr('ppt/slides/slide1.xml', slide1)
+    return (True, f"Generated minimal PPTX {dest.name}")
+
+
+def _generate_xlsx(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid .xlsx file (OOXML via stdlib zipfile)."""
+    import zipfile
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '</Types>'
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '</Relationships>'
+    )
+    workbook = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>'
+        '</workbook>'
+    )
+    xl_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        '</Relationships>'
+    )
+    sheet1 = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData>'
+        '</worksheet>'
+    )
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr('[Content_Types].xml', content_types)
+        zf.writestr('_rels/.rels', rels)
+        zf.writestr('xl/workbook.xml', workbook)
+        zf.writestr('xl/_rels/workbook.xml.rels', xl_rels)
+        zf.writestr('xl/worksheets/sheet1.xml', sheet1)
+    return (True, f"Generated minimal XLSX {dest.name}")
+
+
+def _generate_xps(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid .xps file (Open XPS via stdlib zipfile)."""
+    import zipfile
+
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="fdseq" ContentType="application/vnd.ms-package.xps-fixeddocumentsequence+xml"/>'
+        '<Default Extension="fdoc" ContentType="application/vnd.ms-package.xps-fixeddocument+xml"/>'
+        '<Default Extension="fpage" ContentType="application/vnd.ms-package.xps-fixedpage+xml"/>'
+        '</Types>'
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Type="http://schemas.microsoft.com/xps/2005/06/fixedrepresentation" Target="/FixedDocumentSequence.fdseq" Id="rId1"/>'
+        '</Relationships>'
+    )
+    fdseq = (
+        '<FixedDocumentSequence xmlns="http://schemas.microsoft.com/xps/2005/06">'
+        '<DocumentReference Source="/Documents/1/FixedDocument.fdoc"/>'
+        '</FixedDocumentSequence>'
+    )
+    fdoc = (
+        '<FixedDocument xmlns="http://schemas.microsoft.com/xps/2005/06">'
+        '<PageContent Source="/Documents/1/Pages/1.fpage"/>'
+        '</FixedDocument>'
+    )
+    fpage = (
+        '<FixedPage xmlns="http://schemas.microsoft.com/xps/2005/06" '
+        'Width="816" Height="1056" xml:lang="en-US">'
+        '<Glyphs OriginX="96" OriginY="96" FontRenderingEmSize="16" '
+        'UnicodeString="Sample XPS Document"/>'
+        '</FixedPage>'
+    )
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr('[Content_Types].xml', content_types)
+        zf.writestr('_rels/.rels', rels)
+        zf.writestr('FixedDocumentSequence.fdseq', fdseq)
+        zf.writestr('Documents/1/FixedDocument.fdoc', fdoc)
+        zf.writestr('Documents/1/Pages/1.fpage', fpage)
+    return (True, f"Generated minimal XPS {dest.name}")
+
+
+def _generate_epub(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid .epub file (EPUB 3 via stdlib zipfile)."""
+    import zipfile
+
+    container_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+        '<rootfiles>'
+        '<rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>'
+        '</rootfiles></container>'
+    )
+    content_opf = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        '<dc:title>Sample</dc:title><dc:language>en</dc:language>'
+        '<dc:identifier id="uid">urn:uuid:00000000-0000-0000-0000-000000000000</dc:identifier>'
+        '</metadata>'
+        '<manifest><item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/></manifest>'
+        '<spine><itemref idref="ch1"/></spine>'
+        '</package>'
+    )
+    chapter1 = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE html>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Chapter 1</title></head>'
+        '<body><h1>Sample Chapter</h1><p>Sample content for testing.</p></body></html>'
+    )
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest, 'w', compression=zipfile.ZIP_STORED) as zf:
+        # mimetype MUST be first entry with no compression
+        zf.writestr('mimetype', 'application/epub+zip')
+        zf.writestr('META-INF/container.xml', container_xml)
+        zf.writestr('OEBPS/content.opf', content_opf)
+        zf.writestr('OEBPS/chapter1.xhtml', chapter1)
+    return (True, f"Generated minimal EPUB {dest.name}")
+
+
+def _generate_mhtml(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid .mhtml file (MIME multipart with HTML)."""
+    content = (
+        "MIME-Version: 1.0\r\n"
+        "Content-Type: multipart/related;\r\n"
+        '\ttype="text/html";\r\n'
+        '\tboundary="----=_NextPart_000"\r\n'
+        "\r\n"
+        "------=_NextPart_000\r\n"
+        "Content-Type: text/html; charset=utf-8\r\n"
+        "Content-Transfer-Encoding: 7bit\r\n"
+        "\r\n"
+        "<html><head><title>Sample MHTML Document</title></head>\r\n"
+        "<body><p>Sample content for testing.</p></body></html>\r\n"
+        "\r\n"
+        "------=_NextPart_000--\r\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated minimal MHTML {dest.name}")
+
+
+def _generate_tex(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid LaTeX (.tex) file."""
+    content = (
+        "\\documentclass{article}\n"
+        "\\begin{document}\n"
+        "Hello World. This is a sample \\LaTeX\\ document for testing.\n"
+        "\\end{document}\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated minimal TeX {dest.name}")
+
+
+def _generate_ps(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid PostScript (.ps) file."""
+    content = (
+        "%!PS-Adobe-3.0\n"
+        "%%Pages: 1\n"
+        "%%EndComments\n"
+        "%%Page: 1 1\n"
+        "/Helvetica findfont 12 scalefont setfont\n"
+        "72 720 moveto\n"
+        "(Sample PostScript Document) show\n"
+        "showpage\n"
+        "%%EOF\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated minimal PS {dest.name}")
+
+
+def _generate_eps(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid Encapsulated PostScript (.eps) file."""
+    content = (
+        "%!PS-Adobe-3.0 EPSF-3.0\n"
+        "%%BoundingBox: 0 0 100 100\n"
+        "%%EndComments\n"
+        "/Helvetica findfont 10 scalefont setfont\n"
+        "10 50 moveto\n"
+        "(Sample EPS) show\n"
+        "showpage\n"
+        "%%EOF\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated minimal EPS {dest.name}")
+
+
+def _generate_ics(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid iCalendar (.ics) file."""
+    content = (
+        "BEGIN:VCALENDAR\r\n"
+        "VERSION:2.0\r\n"
+        "PRODID:-//Test//Test//EN\r\n"
+        "BEGIN:VEVENT\r\n"
+        "DTSTART:20240101T000000Z\r\n"
+        "DTEND:20240101T010000Z\r\n"
+        "SUMMARY:Sample Event\r\n"
+        "DESCRIPTION:Sample calendar event for testing.\r\n"
+        "UID:00000000-0000-0000-0000-000000000000\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated minimal ICS {dest.name}")
+
+
+def _generate_dxf(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid AutoCAD DXF (.dxf) file (ASCII format)."""
+    content = (
+        "  0\nSECTION\n  2\nHEADER\n"
+        "  9\n$ACADVER\n  1\nAC1014\n"
+        "  0\nENDSEC\n"
+        "  0\nSECTION\n  2\nENTITIES\n"
+        "  0\nLINE\n  8\n0\n"
+        " 10\n0.0\n 20\n0.0\n 30\n0.0\n"
+        " 11\n100.0\n 21\n100.0\n 31\n0.0\n"
+        "  0\nENDSEC\n"
+        "  0\nEOF\n"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    return (True, f"Generated minimal DXF {dest.name}")
+
+
+def _generate_zip_for_family(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
+    """Generate a ZIP file via the existing generate_empty_zip function."""
+    success = generate_empty_zip(dest)
+    if success:
+        return (True, f"Generated ZIP {dest.name}")
+    return (False, f"Failed to generate ZIP {dest.name}")
+
+
+def _generate_7z_for_family(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
+    """Generate a 7z file via the existing generate_7z_archive function."""
+    success = generate_7z_archive(dest)
+    if success:
+        return (True, f"Generated 7z {dest.name}")
+    return (False, f"Failed to generate 7z {dest.name}")
+
+
+def _generate_gz_for_family(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
+    """Generate a gzip file via the existing generate_gzip function."""
+    success = generate_gzip(dest)
+    if success:
+        return (True, f"Generated gzip {dest.name}")
+    return (False, f"Failed to generate gzip {dest.name}")
 
 
 def generate_file_for_family(

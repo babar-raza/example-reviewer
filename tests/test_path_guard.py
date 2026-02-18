@@ -34,8 +34,8 @@ class TestNormalizePath:
 
     def test_normalize_pathlib_path(self):
         """Test normalization of Path objects."""
-        normalized = normalize_path(Path("test-content/docs/page.md"))
-        assert normalized == "test-content/docs/page.md"
+        normalized = normalize_path(Path("tests/fixtures/content/docs/page.md"))
+        assert normalized == "tests/fixtures/content/docs/page.md"
 
     def test_normalize_absolute_path(self):
         """Test normalization of absolute paths."""
@@ -53,9 +53,9 @@ class TestIsReadOnlyPath:
         assert is_read_only_path("test-data/nested/deep/file.md")
 
     def test_test_content_relative(self):
-        """Test detection of test-content/ paths (newly protected)."""
-        assert is_read_only_path("test-content/docs/page.md")
-        assert is_read_only_path("test-content/index.md")
+        """Test detection of tests/fixtures/content/ paths (newly protected)."""
+        assert is_read_only_path("tests/fixtures/content/docs/page.md")
+        assert is_read_only_path("tests/fixtures/content/index.md")
 
     def test_test_examples_relative(self):
         """Test detection of test-examples/ paths."""
@@ -63,24 +63,24 @@ class TestIsReadOnlyPath:
         assert is_read_only_path("test-examples/nested/file.cs")
 
     def test_test_reference_relative(self):
-        """Test detection of test-reference/ paths."""
-        assert is_read_only_path("test-reference/api.xml")
+        """Test detection of tests/fixtures/reference/ paths."""
+        assert is_read_only_path("tests/fixtures/reference/api.xml")
 
     def test_absolute_paths(self):
         """Test detection of read-only paths in absolute form."""
         assert is_read_only_path("/home/user/project/test-data/file.txt")
-        assert is_read_only_path("/home/user/project/test-content/docs/page.md")
+        assert is_read_only_path("/home/user/project/tests/fixtures/content/docs/page.md")
         assert is_read_only_path("C:/Users/Dev/project/test-examples/Example.cs")
 
     def test_windows_paths(self):
         """Test detection with Windows-style paths."""
         assert is_read_only_path("test-data\\zip\\sample.zip")
-        assert is_read_only_path("test-content\\docs\\page.md")
+        assert is_read_only_path("tests\\fixtures\\content\\docs\\page.md")
 
     def test_pathlib_paths(self):
         """Test detection with Path objects."""
         assert is_read_only_path(Path("test-data/file.txt"))
-        assert is_read_only_path(Path("test-content/docs/page.md"))
+        assert is_read_only_path(Path("tests/fixtures/content/docs/page.md"))
 
     def test_allowed_paths(self):
         """Test that non-protected paths are allowed."""
@@ -97,7 +97,7 @@ class TestIsReadOnlyPath:
 
     def test_all_protected_prefixes_covered(self):
         """Ensure all required prefixes are protected."""
-        expected_prefixes = {'test-data/', 'test-examples/', 'test-reference/', 'test-content/'}
+        expected_prefixes = {'test-data/', 'test-examples/', 'tests/fixtures/reference/', 'tests/fixtures/content/'}
         assert set(READ_ONLY_PREFIXES) == expected_prefixes
 
 
@@ -110,9 +110,9 @@ class TestAssertWriteAllowed:
             assert_write_allowed("test-data/zip/sample.zip", "test write")
 
     def test_blocks_test_content(self):
-        """Test that writes to test-content/ are blocked (newly protected)."""
+        """Test that writes to tests/fixtures/content/ are blocked (newly protected)."""
         with pytest.raises(PermissionError, match="WRITE BLOCKED"):
-            assert_write_allowed("test-content/docs/page.md", "markdown update")
+            assert_write_allowed("tests/fixtures/content/docs/page.md", "markdown update")
 
     def test_blocks_test_examples(self):
         """Test that writes to test-examples/ are blocked."""
@@ -120,9 +120,9 @@ class TestAssertWriteAllowed:
             assert_write_allowed("test-examples/Example.cs", "test write")
 
     def test_blocks_test_reference(self):
-        """Test that writes to test-reference/ are blocked."""
+        """Test that writes to tests/fixtures/reference/ are blocked."""
         with pytest.raises(PermissionError, match="WRITE BLOCKED"):
-            assert_write_allowed("test-reference/api.xml", "test write")
+            assert_write_allowed("tests/fixtures/reference/api.xml", "test write")
 
     def test_allows_workspace_writes(self):
         """Test that writes to workspace are allowed."""
@@ -152,14 +152,14 @@ class TestAssertWriteAllowed:
     def test_error_message_contains_reason(self):
         """Test that error message contains the reason for write."""
         with pytest.raises(PermissionError) as exc_info:
-            assert_write_allowed("test-content/docs/page.md", "markdown update")
+            assert_write_allowed("tests/fixtures/content/docs/page.md", "markdown update")
 
         assert "markdown update" in str(exc_info.value)
 
     def test_error_message_suggests_workspace(self):
         """Test that error message suggests workspace copy mode."""
         with pytest.raises(PermissionError) as exc_info:
-            assert_write_allowed("test-content/docs/page.md", "test write")
+            assert_write_allowed("tests/fixtures/content/docs/page.md", "test write")
 
         assert "--use-workspace-copy" in str(exc_info.value) or "workspace" in str(exc_info.value)
 
@@ -168,11 +168,11 @@ class TestGetWorkspacePath:
     """Test workspace path generation."""
 
     def test_test_content_to_workspace(self):
-        """Test mapping test-content/ to workspace."""
+        """Test mapping tests/fixtures/content/ to workspace."""
         workspace_root = Path("artifacts/workspace")
         run_id = "abc123def456"
 
-        original = "test-content/docs/example.md"
+        original = "tests/fixtures/content/docs/example.md"
         workspace_path = get_workspace_path(original, workspace_root, run_id)
 
         expected = Path("artifacts/workspace/abc123def456/content/docs/example.md")
@@ -205,7 +205,7 @@ class TestGetWorkspacePath:
         workspace_root = Path("workspace")
         run_id = "run123"
 
-        original = "test-content/docs/nested/deep/file.md"
+        original = "tests/fixtures/content/docs/nested/deep/file.md"
         workspace_path = get_workspace_path(original, workspace_root, run_id)
 
         expected = Path("workspace/run123/content/docs/nested/deep/file.md")
@@ -236,7 +236,7 @@ class TestGetWorkspacePath:
         workspace_root = Path("workspace")
         run_id = "run123"
 
-        original = Path("test-content/docs/page.md")
+        original = Path("tests/fixtures/content/docs/page.md")
         workspace_path = get_workspace_path(original, workspace_root, run_id)
 
         expected = Path("workspace/run123/content/docs/page.md")
@@ -247,7 +247,7 @@ class TestGetWorkspacePath:
         workspace_root = Path("workspace")
         run_id = "run123"
 
-        original = "test-content/docs/page.md"
+        original = "tests/fixtures/content/docs/page.md"
         workspace_path = get_workspace_path(original, workspace_root, run_id)
 
         expected = Path("workspace/run123/content/docs/page.md")
@@ -256,7 +256,7 @@ class TestGetWorkspacePath:
     def test_different_run_ids(self):
         """Test that different run IDs create different workspace paths."""
         workspace_root = Path("workspace")
-        original = "test-content/docs/page.md"
+        original = "tests/fixtures/content/docs/page.md"
 
         workspace_path_1 = get_workspace_path(original, workspace_root, "run1")
         workspace_path_2 = get_workspace_path(original, workspace_root, "run2")
@@ -270,7 +270,7 @@ class TestGetWorkspacePath:
         workspace_root = Path("workspace")
         run_id = "run123"
 
-        original = "test-content/docs/page.md"
+        original = "tests/fixtures/content/docs/page.md"
         workspace_path = get_workspace_path(original, workspace_root, run_id)
 
         # Workspace path should not be read-only
@@ -282,7 +282,7 @@ class TestIntegration:
 
     def test_workflow_detect_and_remap(self):
         """Test typical workflow: detect read-only, then remap to workspace."""
-        original_path = "test-content/docs/example.md"
+        original_path = "tests/fixtures/content/docs/example.md"
 
         # Step 1: Detect it's read-only
         assert is_read_only_path(original_path)
@@ -309,8 +309,8 @@ class TestIntegration:
         protected_paths = [
             "test-data/file.txt",
             "test-examples/file.cs",
-            "test-reference/file.xml",
-            "test-content/file.md",
+            "tests/fixtures/reference/file.xml",
+            "tests/fixtures/content/file.md",
         ]
 
         for path in protected_paths:

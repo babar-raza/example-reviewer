@@ -55,7 +55,7 @@ class ExampleReviewerTools:
             prod_db_path: Path to production database (optional, enables dual-database mode)
             workspace_dir: Working directory
             cli_overrides: CLI override dictionary for config hash computation
-            use_workspace_copy: Enable workspace copy mode (for test-content/ writes)
+            use_workspace_copy: Enable workspace copy mode (for tests/fixtures/content/ writes)
             sqlite_config: SQLite configuration (busy_timeout_ms, wal_enabled)
         """
         self.config_dir = config_dir or Path("config/families")

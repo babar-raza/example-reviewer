@@ -2,7 +2,7 @@ name: CLI Tests
 
 on:
   push:
-    branches: [main, develop, opus-example-reviewer-pipeline]
+    branches: [main, develop]
   pull_request:
     branches: [main]
 
@@ -20,19 +20,19 @@ jobs:
           python-version: '3.10'
 
       - name: Run static import analyzer on CLI
-        run: python scripts/analyze_cli_imports.py src/cli/main.py
+        run: python scripts/validation/analyze_cli_imports.py src/cli/main.py
 
       - name: Analyze orchestrator imports
-        run: python scripts/analyze_cli_imports.py src/pipeline/orchestrator.py
+        run: python scripts/validation/analyze_cli_imports.py src/pipeline/orchestrator.py
 
       - name: Analyze database imports
-        run: python scripts/analyze_cli_imports.py src/core/database.py
+        run: python scripts/validation/analyze_cli_imports.py src/core/database.py
 
       - name: Analyze LLM service imports
-        run: python scripts/analyze_cli_imports.py src/services/llm_service.py
+        run: python scripts/validation/analyze_cli_imports.py src/services/llm_service.py
 
-  smoke-tests:
-    name: CLI Smoke Tests
+  unit-tests:
+    name: Unit Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -47,32 +47,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install pytest pytest-timeout
           pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
-      - name: Run smoke tests
-        run: echo "Smoke tests temporarily disabled - test files removed in commit 02508b3"
-
-  matrix-tests:
-    name: CLI Matrix Tests (PR only)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install pytest pytest-timeout
-          pip install -r requirements.txt
-
-      - name: Run matrix tests
-        run: pytest tests/test_cli_matrix.py -v --timeout=120
-        continue-on-error: true
+      - name: Run unit tests
+        run: pytest tests/ -v --timeout=120 -x

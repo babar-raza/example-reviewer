@@ -69,13 +69,25 @@ _MISSING_DIR_PATTERNS = [
 
 # File extensions that indicate a file reference in code string literals
 _CODE_FILE_EXTENSIONS = (
+    # Document formats
     ".docx", ".doc", ".pdf", ".html", ".htm", ".txt", ".csv", ".xml",
-    ".rtf", ".odt", ".xlsx", ".xls", ".pptx", ".png", ".jpg", ".jpeg",
-    ".bmp", ".gif", ".svg", ".tiff", ".tif", ".zip", ".7z", ".gz",
-    ".rar", ".epub", ".mobi", ".chm", ".mhtml", ".xps",
-    # Image/design formats (PSD family and others)
+    ".rtf", ".odt", ".xls", ".xlsx", ".pptx", ".pot",
+    # Image formats
+    ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".svg", ".tiff", ".tif",
     ".psd", ".psb", ".ai", ".dicom", ".dcm", ".djvu", ".webp",
     ".emf", ".wmf", ".dng", ".j2k", ".jp2",
+    # Archive formats
+    ".zip", ".7z", ".gz", ".rar",
+    # E-book / document conversion
+    ".epub", ".mobi", ".chm", ".mhtml", ".mht", ".xps",
+    # Email formats
+    ".eml", ".msg", ".mbox", ".pst", ".ics",
+    # CAD formats
+    ".dwg", ".dxf", ".dwf",
+    # Page / TeX formats
+    ".ps", ".eps", ".tex", ".ltx",
+    # Project formats
+    ".mpp", ".mpt",
 )
 
 # Pattern to extract string literals from C# code
@@ -175,6 +187,10 @@ class FixtureResolverService:
     in a per-family fixture registry for future reuse.
     """
 
+    # Bump this when generators are added or improved. Entries in the
+    # unresolvable list recorded at an older version are retried.
+    _GENERATOR_VERSION = 2
+
     def __init__(
         self,
         family: str,
@@ -229,6 +245,15 @@ class FixtureResolverService:
             return ResolveResult(
                 resolved=False, filename=filename,
                 method="skipped", message=f"Skipped: matches output pattern",
+            )
+
+        # Early exit: known-unresolvable at current generator version
+        if self._is_known_unresolvable(filename):
+            self._stats["failed"] += 1
+            return ResolveResult(
+                resolved=False, filename=filename,
+                method="cached_unresolvable",
+                message=f"Previously unresolvable (generator v{self._GENERATOR_VERSION})",
             )
 
         # Tier 1: Existing file in test-data (exact, alias, case-insensitive)
@@ -431,10 +456,11 @@ class FixtureResolverService:
         return ResolveResult(resolved=False, filename=filename)
 
     def _tier2_5_example_repo(self, filename: str) -> ResolveResult:
-        """Tier 2.5: Check example repo test data directory."""
+        """Tier 2.5: Check example repo test data directory (recursive)."""
         if not self._example_repo_test_data_dir or not self._example_repo_test_data_dir.exists():
             return ResolveResult(resolved=False, filename=filename)
 
+        # Exact match first
         candidate = self._example_repo_test_data_dir / filename
         if candidate.exists() and candidate.is_file():
             return ResolveResult(
@@ -442,6 +468,27 @@ class FixtureResolverService:
                 source_path=candidate, method="example_repo",
                 message=f"Found in example repo test data: {filename}",
             )
+
+        # Recursive search (repos often organize data in subdirectories)
+        for f in self._example_repo_test_data_dir.rglob(filename):
+            if f.is_file():
+                rel = f.relative_to(self._example_repo_test_data_dir)
+                return ResolveResult(
+                    resolved=True, filename=filename,
+                    source_path=f, method="example_repo",
+                    message=f"Found in example repo (recursive): {rel}",
+                )
+
+        # Case-insensitive fallback
+        filename_lower = filename.lower()
+        for f in self._example_repo_test_data_dir.rglob("*"):
+            if f.is_file() and f.name.lower() == filename_lower:
+                rel = f.relative_to(self._example_repo_test_data_dir)
+                return ResolveResult(
+                    resolved=True, filename=filename,
+                    source_path=f, method="example_repo",
+                    message=f"Found in example repo (case-insensitive): {rel}",
+                )
 
         return ResolveResult(resolved=False, filename=filename)
 
@@ -578,15 +625,35 @@ class FixtureResolverService:
             shutil.copy2(source_path, target)
 
     def _load_registry(self) -> Dict[str, Any]:
-        """Load fixture registry from JSON file."""
+        """Load fixture registry from JSON file, auto-migrating old formats."""
         if self._registry_path.exists():
             try:
                 data = json.loads(self._registry_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
+                    # Auto-migrate old list-based unresolvable format to versioned dict
+                    self._migrate_unresolvable_list(data)
                     return data
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning(f"Failed to load fixture registry: {e}")
-        return {"version": 1, "family": self._family, "fixtures": {}, "unresolvable": []}
+        return {"version": 1, "family": self._family, "fixtures": {}, "unresolvable": {}}
+
+    @staticmethod
+    def _migrate_unresolvable_list(data: Dict[str, Any]):
+        """Convert old list-based unresolvable to versioned dict (in-place)."""
+        unresolvable = data.get("unresolvable")
+        if isinstance(unresolvable, list):
+            migrated = {}
+            for entry in unresolvable:
+                if not isinstance(entry, str):
+                    continue
+                # Drop glob/wildcard patterns during migration
+                if any(c in entry for c in ('*', '?', '{')):
+                    continue
+                migrated[entry] = {
+                    "recorded_at": None,
+                    "generator_version": 1,  # Assume old version
+                }
+            data["unresolvable"] = migrated
 
     def _save_registry(self):
         """Persist fixture registry to JSON file."""
@@ -622,12 +689,56 @@ class FixtureResolverService:
             fixtures[filename]["usage_count"] = fixtures[filename].get("usage_count", 0) + 1
             self._save_registry()
 
+    def _is_known_unresolvable(self, filename: str) -> bool:
+        """Check if filename is known-unresolvable and not stale.
+
+        Returns True (skip resolution) only if:
+        - Entry exists for this filename
+        - Entry's generator_version matches current version
+        - File doesn't now exist in test-data or example repo
+        """
+        unresolvable = self._registry.get("unresolvable", {})
+        if not isinstance(unresolvable, dict):
+            return False
+        entry = unresolvable.get(filename)
+        if not entry:
+            return False
+
+        # Stale if generator version changed (new generators may handle it)
+        if entry.get("generator_version") != self._GENERATOR_VERSION:
+            return False
+
+        # Stale if file now exists in test-data (externally backfilled)
+        if (self._test_data_dir / filename).exists():
+            unresolvable.pop(filename, None)
+            return False
+
+        # Stale if file now exists in example repo (repo was cloned/updated)
+        if self._example_repo_test_data_dir and self._example_repo_test_data_dir.exists():
+            for f in self._example_repo_test_data_dir.rglob(filename):
+                if f.is_file():
+                    unresolvable.pop(filename, None)
+                    return False
+
+        return True
+
     def _record_unresolvable(self, filename: str):
-        """Record a filename that couldn't be resolved."""
-        unresolvable = self._registry.setdefault("unresolvable", [])
-        if filename not in unresolvable:
-            unresolvable.append(filename)
-            self._save_registry()
+        """Record a filename that couldn't be resolved (versioned dict format)."""
+        # Reject glob/wildcard patterns — only record concrete filenames
+        if any(c in filename for c in ('*', '?', '{')):
+            return
+
+        unresolvable = self._registry.setdefault("unresolvable", {})
+        # Force migration if still in old list format
+        if isinstance(unresolvable, list):
+            self._migrate_unresolvable_list(self._registry)
+            unresolvable = self._registry["unresolvable"]
+
+        unresolvable[filename] = {
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "generator_version": self._GENERATOR_VERSION,
+        }
+        self._save_registry()
 
     def mine_fixtures_from_cs_examples(self, family: str, db) -> Dict[str, List[str]]:
         """Extract file references from verified CS_FILE examples.

@@ -127,7 +127,7 @@ class PipelineOrchestrator:
             workspace_dir: Working directory for compilation/runtime
             artifacts_dir: Directory for storing artifacts
             cli_overrides: CLI override dictionary for config hash computation
-            use_workspace_copy: Enable workspace copy mode (for test-content/ writes)
+            use_workspace_copy: Enable workspace copy mode (for tests/fixtures/content/ writes)
             sqlite_config: SQLite configuration (busy_timeout_ms, wal_enabled)
         """
         self.config_dir = config_dir or Path("config/families")
@@ -907,6 +907,33 @@ class PipelineOrchestrator:
             return True
         return False
 
+    def _is_error_regression(self, before_errors: List[str], after_errors: List[str]) -> bool:
+        """Detect if a deterministic fix made compilation errors worse.
+
+        A regression is detected when:
+        1. Error count increased by >50% AND by at least 2, OR
+        2. Two or more new error categories (CS codes) appeared
+
+        Args:
+            before_errors: Errors before the fix was applied
+            after_errors: Errors after the fix was applied
+
+        Returns:
+            True if the fix made things worse
+        """
+        if not before_errors:
+            return bool(after_errors)
+        before_count = len(before_errors)
+        after_count = len(after_errors)
+        # Rule 1: Error count increased significantly (>50% AND >=2 more)
+        if after_count > before_count * 1.5 and after_count >= before_count + 2:
+            return True
+        # Rule 2: Two or more NEW error categories appeared
+        def _codes(errs):
+            return {m.group(1) for e in errs for m in [re.search(r'\b(CS\d+)\b', e)] if m}
+        new_cats = _codes(after_errors) - _codes(before_errors)
+        return len(new_cats) >= 2
+
     def _load_api_context(
         self,
         family: str,
@@ -1193,7 +1220,10 @@ class PipelineOrchestrator:
             # Phase F: Telemetry and Commit
             logger.info(f"Phase F: Finalization for {family}")
             with track_phase_timing(self.db, run_id, family, "finalization"):
-                final_stats = self._run_finalization_phase(family, run_id, dry_run, allow_commit=allow_commit)
+                final_stats = self._run_finalization_phase(
+                    family, run_id, dry_run, allow_commit=allow_commit,
+                    phase_results=results.get('phases', {}),
+                )
             results['phases']['finalization'] = final_stats
 
             # Phase F.5: Auto-Learn (extract patterns from failures)
@@ -1499,6 +1529,11 @@ class PipelineOrchestrator:
 
         global_config = self.config_manager.load_global_config()
         max_retries = global_config.llm.max_retries
+        # Per-family override for compile-phase retries
+        if family_config and getattr(family_config, 'pipeline_overrides', None):
+            if family_config.pipeline_overrides.max_compile_retries is not None:
+                max_retries = family_config.pipeline_overrides.max_compile_retries
+                logger.info(f"Per-family max_compile_retries override: {max_retries}")
 
         # Initialize strategy configuration
         # If no strategy_config provided, enable all strategies (default behavior)
@@ -1835,6 +1870,8 @@ class PipelineOrchestrator:
                     except Exception:
                         pass
                     quick_fix_applied = True
+                    pre_qf_errors = result.errors[:] if result and result.errors else []
+                    pre_qf_code = current_code
                     current_code = fixed_code
 
                     # Try recompiling with quick fixes
@@ -1867,6 +1904,15 @@ class PipelineOrchestrator:
                         logger.info(f"Quick fix succeeded for {example.example_id}")
                         continue
 
+                    # Regression guard: rollback if quick fix made errors worse
+                    if self._is_error_regression(pre_qf_errors, result.errors):
+                        logger.warning(
+                            f"Quick fix regression for {example.example_id}: "
+                            f"{len(pre_qf_errors)} -> {len(result.errors)} errors. Rolling back."
+                        )
+                        current_code = pre_qf_code
+                        example.compilable_code = pre_qf_code
+
                 # E4: Semantic Micro-Fixes - Try diagnostic-driven fixes
                 if not success and strategy_config.get('enable_semantic_microfixes', False):
                     logger.info(f"Attempting semantic micro-fixes for {example.example_id}")
@@ -1892,6 +1938,8 @@ class PipelineOrchestrator:
                             )
                         except Exception:
                             pass
+                        pre_smf_errors = result.errors[:] if result and result.errors else []
+                        pre_smf_code = current_code
                         current_code = fixed_code
 
                         # Try recompiling with semantic fixes
@@ -1923,6 +1971,15 @@ class PipelineOrchestrator:
                             )
                             logger.info(f"Semantic micro-fixes succeeded for {example.example_id}")
                             continue
+
+                        # Regression guard: rollback if semantic microfixes made errors worse
+                        if self._is_error_regression(pre_smf_errors, result.errors):
+                            logger.warning(
+                                f"Semantic microfix regression for {example.example_id}: "
+                                f"{len(pre_smf_errors)} -> {len(result.errors)} errors. Rolling back."
+                            )
+                            current_code = pre_smf_code
+                            example.compilable_code = pre_smf_code
 
                 # E4.5: Learned Patterns - Try patterns from auto-learn (2026-02-06)
                 if not success and strategy_config.get('enable_learned_patterns', False):
@@ -1971,6 +2028,10 @@ class PipelineOrchestrator:
                                 )
 
                                 if applied and fixed_code != current_code:
+                                    # Save pre-pattern state for regression guard
+                                    pre_lp_errors = result.errors[:] if result and result.errors else []
+                                    pre_lp_code = current_code
+
                                     # Try compiling with pattern fix
                                     example.compilable_code = fixed_code
                                     success, result = self.get_compilation_service(family).compile_example(
@@ -2015,8 +2076,17 @@ class PipelineOrchestrator:
                                         )
                                         break
 
-                                    # Pattern didn't compile, but use improved code for next attempt
-                                    current_code = fixed_code
+                                    # Regression guard: rollback if pattern made errors worse
+                                    if self._is_error_regression(pre_lp_errors, result.errors):
+                                        logger.warning(
+                                            f"Learned pattern {pattern.id} regression for {example.example_id}: "
+                                            f"{len(pre_lp_errors)} -> {len(result.errors)} errors. Rolling back."
+                                        )
+                                        current_code = pre_lp_code
+                                        example.compilable_code = pre_lp_code
+                                    else:
+                                        # Pattern didn't compile, but use improved code for next attempt
+                                        current_code = fixed_code
 
                             learned_service.close()
 
@@ -2199,7 +2269,7 @@ class PipelineOrchestrator:
                     _gate_catalog = self.registry.get_api_catalog(family) if self.registry else None
                 except Exception:
                     _gate_catalog = None
-                unfixable_types = self._check_unfixable_types(result.errors, _gate_catalog)
+                unfixable_types = self._check_unfixable_types(result.errors, _gate_catalog, code=current_code)
                 if unfixable_types:
                     _unfixable_str = ', '.join(unfixable_types)
                     logger.warning(
@@ -2867,6 +2937,11 @@ class PipelineOrchestrator:
                         logger.warning(f"Failed to load inventory: {e}")
 
         max_retries = global_config.llm.max_retries
+        # Per-family override for runtime-phase retries
+        if family_config and getattr(family_config, 'pipeline_overrides', None):
+            if family_config.pipeline_overrides.max_runtime_retries is not None:
+                max_retries = family_config.pipeline_overrides.max_runtime_retries
+                logger.info(f"Per-family max_runtime_retries override: {max_retries}")
 
         # Phase and per-example timeout enforcement (Fix 4: RC3)
         import time as _time
@@ -2936,7 +3011,7 @@ class PipelineOrchestrator:
 
                             # Fall back to fixture resolver
                             resolved = fixture_resolver_pre.resolve_missing_file(
-                                req_file, Path(test_data_path), example_id=None
+                                req_file, Path(test_data_path)
                             )
                             if resolved:
                                 logger.info(
@@ -3520,8 +3595,8 @@ class PipelineOrchestrator:
                     if runtime_pattern_fixed:
                         continue  # Patterns fixed it, move to next example
 
-                # Task 5: Limit runtime LLM fixes to 1 iteration
-                runtime_max_retries = min(max_retries, 1)
+                # Task 5: Limit runtime LLM fixes (default: 1, overridable per-family)
+                runtime_max_retries = max_retries
 
                 # Runtime still failed - try LLM fixes if enabled
                 # BLOCKER-002: Skip LLM runtime fixes if flag is set (prevents hallucinations)
@@ -4532,12 +4607,384 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
         return stats
     
+    # ── Commit message helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _plural(count: int, singular: str, plural: str = "") -> str:
+        """Return '1 file' or 'N files'."""
+        if not plural:
+            plural = singular + "s"
+        return f"{count} {singular}" if count == 1 else f"{count} {plural}"
+
+    def _compute_commit_stats(
+        self,
+        committed_examples: list,
+        run_id: str,
+    ) -> Dict[str, Any]:
+        """Compute accurate commit stats from DB for committed examples.
+
+        Classifies each example's compile and runtime outcome as
+        first-try / deterministic / llm / fixture-resolved.
+        """
+        stats: Dict[str, int] = {
+            "compile_first_try": 0,
+            "compile_deterministic": 0,
+            "compile_llm": 0,
+            "runtime_first_try": 0,
+            "runtime_deterministic": 0,
+            "runtime_llm": 0,
+            "runtime_fixture": 0,
+            "runtime_total": 0,
+        }
+
+        for ex in committed_examples:
+            # ── Compile classification ──
+            attempts = self.db.get_compile_attempts(ex.example_id, run_id=run_id)
+            if len(attempts) <= 1:
+                stats["compile_first_try"] += 1
+            elif ex.example_id in self._llm_fixed_example_ids:
+                stats["compile_llm"] += 1
+            else:
+                stats["compile_deterministic"] += 1
+
+            # ── Runtime classification ──
+            rt_attempts = self.db.get_runtime_attempts(ex.example_id, run_id=run_id)
+            if not rt_attempts:
+                continue  # runtime not executed for this example
+            stats["runtime_total"] += 1
+
+            # Use last successful attempt's scenario for classification
+            successful = [a for a in rt_attempts if a.success]
+            if successful:
+                scenario = successful[-1].scenario or ""
+            else:
+                # All failed — still count as processed
+                scenario = (rt_attempts[-1].scenario or "") if rt_attempts else ""
+
+            if scenario == "first_try" or (len(rt_attempts) == 1 and rt_attempts[0].success):
+                stats["runtime_first_try"] += 1
+            elif scenario.startswith("fixture_resolved"):
+                stats["runtime_fixture"] += 1
+            elif scenario.startswith("deterministic_fix"):
+                stats["runtime_deterministic"] += 1
+            elif scenario.startswith("llm_fix"):
+                stats["runtime_llm"] += 1
+            else:
+                # Fallback: single successful attempt = first-try
+                if len(rt_attempts) == 1 and rt_attempts[0].success:
+                    stats["runtime_first_try"] += 1
+                else:
+                    stats["runtime_deterministic"] += 1
+
+        # ── Collect applied fix names from telemetry events ──
+        fix_names: set = set()
+        try:
+            with self.db.get_connection() as conn:
+                rows = conn.execute(
+                    """SELECT metadata FROM telemetry_events
+                       WHERE run_id = ?
+                         AND event_type IN ('semantic_microfix_applied', 'quick_fix_applied')
+                         AND success = 1""",
+                    (run_id,),
+                ).fetchall()
+            for row in rows:
+                import json as _json
+                meta = _json.loads(row["metadata"] or "{}")
+                for fix in meta.get("fixes", []):
+                    if isinstance(fix, str) and fix:
+                        fix_names.add(fix)
+        except Exception:
+            pass  # Non-fatal: telemetry may not be available
+
+        stats["fix_names"] = sorted(fix_names)  # type: ignore[assignment]
+        return stats
+
+    def _categorize_staged_files(
+        self,
+        staged_files: List[str],
+        committed_examples: list,
+        family_config,
+    ) -> Dict[str, List[str]]:
+        """Categorize staged files by content root (blog, kb, docs, etc.).
+
+        Uses ExampleRecord.topic when available, falls back to filename stem.
+        Returns {category: [topic_strings]}.
+        """
+        content_roots = family_config.content_roots or []
+        content_pattern = family_config.content_pattern or {}
+
+        # Map files to categories
+        categorized: Dict[str, List[str]] = {}
+        for category, root in zip(content_pattern.keys(), content_roots):
+            categorized[category] = []
+            norm_root = str(Path(root).resolve())
+            for file_path in staged_files:
+                norm_file = str(Path(file_path).resolve())
+                if norm_file.startswith(norm_root):
+                    categorized[category].append(file_path)
+
+        # Build topic summaries per category
+        # Index examples by file for topic lookup
+        topics_by_file: Dict[str, set] = {}
+        for ex in committed_examples:
+            key = str(Path(ex.file_path).resolve())
+            if key not in topics_by_file:
+                topics_by_file[key] = set()
+            if ex.topic:
+                topics_by_file[key].add(ex.topic)
+
+        result: Dict[str, List[str]] = {}
+        for category, files in categorized.items():
+            if not files:
+                continue
+            topics: set = set()
+            for fp in files:
+                key = str(Path(fp).resolve())
+                if key in topics_by_file and topics_by_file[key]:
+                    topics.update(topics_by_file[key])
+                else:
+                    stem = Path(fp).stem
+                    if stem not in ("index", "_index"):
+                        cleaned = stem.replace("-", " ").replace("_", " ").strip()
+                        if cleaned:
+                            topics.add(cleaned)
+            result[category] = sorted(topics)[:5]
+
+        return result
+
+    def _build_commit_message(
+        self,
+        family: str,
+        run_id: str,
+        committed_examples: list,
+        staged_files: List[str],
+        commit_stats: Dict[str, Any],
+        phase_results: Dict[str, Any],
+        categorized_topics: Dict[str, List[str]],
+        format_name: str = "compact",
+    ) -> str:
+        """Build the full commit message using the chosen format."""
+        formatters = {
+            "minimal": self._format_minimal,
+            "compact": self._format_compact,
+            "detailed": self._format_detailed,
+            "structured": self._format_structured,
+        }
+        formatter = formatters.get(format_name, self._format_compact)
+        body = formatter(
+            family, run_id, committed_examples, staged_files,
+            commit_stats, phase_results, categorized_topics,
+        )
+        co_author = "Example Reviewer <example-reviewer@aspose.net>"
+        return f"{body}\n\nCo-Authored-By: {co_author}"
+
+    # ── Format: minimal ───────────────────────────────────────────────
+
+    def _format_minimal(
+        self, family, run_id, committed_examples, staged_files,
+        commit_stats, phase_results, categorized_topics,
+    ) -> str:
+        n = len(committed_examples)
+        m = len(staged_files)
+        discovered = phase_results.get("discovery", {}).get("examples_found", n)
+        title = f"fix({family}): verify {self._plural(n, 'C# example')} in {self._plural(m, 'file')}"
+        return f"{title}\n\nVFV pipeline run {run_id[:16]} ({discovered} discovered, {n} committed)"
+
+    # ── Format: compact ───────────────────────────────────────────────
+
+    def _format_compact(
+        self, family, run_id, committed_examples, staged_files,
+        commit_stats, phase_results, categorized_topics,
+    ) -> str:
+        n = len(committed_examples)
+        m = len(staged_files)
+        discovered = phase_results.get("discovery", {}).get("examples_found", n)
+        title = f"fix({family}): verify {self._plural(n, 'C# example')} in {self._plural(m, 'file')}"
+
+        lines = [
+            title,
+            "",
+            f"VFV pipeline run {run_id[:16]} ({discovered} discovered, {n} committed)",
+        ]
+
+        # Compile line
+        compile_parts = []
+        if commit_stats["compile_first_try"]:
+            compile_parts.append(f"{commit_stats['compile_first_try']} first-try")
+        if commit_stats["compile_deterministic"]:
+            compile_parts.append(f"{commit_stats['compile_deterministic']} deterministic")
+        if commit_stats["compile_llm"]:
+            compile_parts.append(f"{commit_stats['compile_llm']} LLM-fixed")
+        if compile_parts:
+            lines.append(f"- Compile: {', '.join(compile_parts)}")
+
+        # Runtime line
+        rt_parts = []
+        if commit_stats["runtime_first_try"]:
+            rt_parts.append(f"{commit_stats['runtime_first_try']} first-try")
+        if commit_stats["runtime_deterministic"]:
+            rt_parts.append(f"{commit_stats['runtime_deterministic']} deterministic")
+        if commit_stats["runtime_llm"]:
+            rt_parts.append(f"{commit_stats['runtime_llm']} LLM-fixed")
+        if commit_stats["runtime_fixture"]:
+            rt_parts.append(f"{commit_stats['runtime_fixture']} fixture-resolved")
+        if rt_parts:
+            lines.append(f"- Runtime: {', '.join(rt_parts)}")
+
+        # Fix names
+        fix_names = commit_stats.get("fix_names", [])
+        if fix_names:
+            lines.append(f"- Fixes: {', '.join(fix_names)}")
+
+        # Categories
+        cat_lines = self._format_category_lines(categorized_topics)
+        if cat_lines:
+            lines.append("")
+            lines.extend(cat_lines)
+
+        return "\n".join(lines)
+
+    # ── Format: detailed ──────────────────────────────────────────────
+
+    def _format_detailed(
+        self, family, run_id, committed_examples, staged_files,
+        commit_stats, phase_results, categorized_topics,
+    ) -> str:
+        n = len(committed_examples)
+        m = len(staged_files)
+        discovery = phase_results.get("discovery", {})
+        discovered = discovery.get("examples_found", n)
+        files_scanned = discovery.get("files_processed", 0)
+        title = f"fix({family}): verify {self._plural(n, 'C# example')} in {self._plural(m, 'file')}"
+
+        lines = [title, "", f"VFV pipeline run {run_id[:16]}"]
+
+        # Discovery line
+        pct = int(100 * n / discovered) if discovered > 0 else 100
+        if files_scanned > 0:
+            lines.append(
+                f"Discovery: {discovered} found in {self._plural(files_scanned, 'file')}, "
+                f"{n} committed ({pct}%)"
+            )
+        else:
+            lines.append(f"Discovery: {discovered} found, {n} committed ({pct}%)")
+
+        # Compilation section
+        compile_total = commit_stats["compile_first_try"] + commit_stats["compile_deterministic"] + commit_stats["compile_llm"]
+        if compile_total > 0:
+            lines.append("")
+            lines.append(f"Compilation ({compile_total} processed):")
+            if commit_stats["compile_first_try"]:
+                cp = int(100 * commit_stats["compile_first_try"] / compile_total)
+                lines.append(f"  {commit_stats['compile_first_try']} first-try ({cp}%)")
+            if commit_stats["compile_deterministic"]:
+                fix_names = commit_stats.get("fix_names", [])
+                suffix = f": {', '.join(fix_names)}" if fix_names else ""
+                lines.append(f"  {commit_stats['compile_deterministic']} deterministic{suffix}")
+            if commit_stats["compile_llm"]:
+                lines.append(f"  {self._plural(commit_stats['compile_llm'], 'LLM fix', 'LLM fixes')}")
+
+        # Runtime section
+        rt_total = commit_stats["runtime_total"]
+        if rt_total > 0:
+            all_first = (commit_stats["runtime_first_try"] == rt_total)
+            lines.append("")
+            if all_first:
+                lines.append(f"Runtime: {rt_total} first-try (100%)")
+            else:
+                lines.append(f"Runtime ({rt_total} processed):")
+                if commit_stats["runtime_first_try"]:
+                    rp = int(100 * commit_stats["runtime_first_try"] / rt_total)
+                    lines.append(f"  {commit_stats['runtime_first_try']} first-try ({rp}%)")
+                if commit_stats["runtime_deterministic"]:
+                    lines.append(f"  {self._plural(commit_stats['runtime_deterministic'], 'deterministic fix', 'deterministic fixes')}")
+                if commit_stats["runtime_fixture"]:
+                    lines.append(f"  {commit_stats['runtime_fixture']} fixture-resolved")
+                if commit_stats["runtime_llm"]:
+                    lines.append(f"  {self._plural(commit_stats['runtime_llm'], 'LLM fix', 'LLM fixes')}")
+
+        # Categories
+        cat_lines = self._format_category_lines(categorized_topics)
+        if cat_lines:
+            lines.append("")
+            lines.extend(cat_lines)
+
+        return "\n".join(lines)
+
+    # ── Format: structured ────────────────────────────────────────────
+
+    def _format_structured(
+        self, family, run_id, committed_examples, staged_files,
+        commit_stats, phase_results, categorized_topics,
+    ) -> str:
+        n = len(committed_examples)
+        m = len(staged_files)
+        discovered = phase_results.get("discovery", {}).get("examples_found", n)
+        title = f"fix({family}): verify {self._plural(n, 'C# example')} in {self._plural(m, 'file')}"
+
+        lines = [
+            title,
+            "",
+            f"VFV pipeline run {run_id[:16]} ({discovered} discovered, {n} committed)",
+            "",
+        ]
+
+        # Compile line
+        ct = commit_stats["compile_first_try"] + commit_stats["compile_deterministic"] + commit_stats["compile_llm"]
+        if ct:
+            parts = []
+            parts.append(f"{commit_stats['compile_first_try']}/{ct} first-try")
+            parts.append(f"{commit_stats['compile_deterministic']}/{ct} deterministic")
+            parts.append(f"{commit_stats['compile_llm']}/{ct} llm")
+            lines.append(f"compile: {', '.join(parts)}")
+
+        # Runtime line
+        rt = commit_stats["runtime_total"]
+        if rt:
+            parts = [f"{commit_stats['runtime_first_try']}/{rt} first-try"]
+            parts.append(f"{commit_stats['runtime_deterministic']}/{rt} deterministic")
+            parts.append(f"{commit_stats['runtime_llm']}/{rt} llm")
+            if commit_stats["runtime_fixture"]:
+                parts.append(f"{commit_stats['runtime_fixture']}/{rt} fixture")
+            lines.append(f"runtime: {', '.join(parts)}")
+
+        # Fix names
+        fix_names = commit_stats.get("fix_names", [])
+        if fix_names:
+            # Normalize to snake_case for machine readability
+            normalized = [f.lower().replace(" ", "_").replace("-", "_") for f in fix_names]
+            lines.append(f"fixes: [{', '.join(normalized)}]")
+
+        # File categories
+        if categorized_topics:
+            cat_parts = [f"{cat}={len(topics)}" for cat, topics in categorized_topics.items()]
+            lines.append(f"files: {', '.join(cat_parts)}")
+
+        return "\n".join(lines)
+
+    # ── Shared: category line builder ─────────────────────────────────
+
+    @staticmethod
+    def _format_category_lines(categorized_topics: Dict[str, List[str]]) -> List[str]:
+        """Build category summary lines from {category: [topics]}."""
+        lines = []
+        for category, topics in categorized_topics.items():
+            if topics:
+                topic_list = ", ".join(topics)
+                count = len(topics)
+                lines.append(f"{category.title()}: {count} {'file' if count == 1 else 'files'} ({topic_list})")
+            # Omit categories with no topics
+        return lines
+
+    # ── End commit message helpers ────────────────────────────────────
+
     def _run_finalization_phase(
         self,
         family: str,
         run_id: str,
         dry_run: bool,
         allow_commit: bool = False,
+        phase_results: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run Phase F: Persist, Telemetry, Commit."""
         stats = {
@@ -4674,89 +5121,22 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
             logger.info(f"Commit will include {len(committed_examples)} examples across {len(staged_files)} files")
 
-            # Calculate statistics from COMMITTED examples only (not entire run)
-            committed_example_ids = [ex.example_id for ex in committed_examples]
+            # Compute accurate commit stats from DB
+            commit_stats = self._compute_commit_stats(committed_examples, run_id)
 
-            # Count compilation attempts for committed examples
-            compile_attempts = 0
-            compile_success = 0
-            for example_id in committed_example_ids:
-                attempts = self.db.get_compile_attempts(example_id, run_id=run_id)
-                if attempts:
-                    compile_attempts += len(attempts)
-                    compile_success += sum(1 for a in attempts if a.success)
-
-            # LLM fixes = examples that needed multiple compile attempts
-            llm_fixes = compile_attempts - len(committed_examples) if compile_attempts > len(committed_examples) else 0
-
-            # Calculate first-try successes
-            first_try_success = len(committed_examples) - llm_fixes
-
-            total_examples = len(committed_examples)
-            verified_count = len(committed_examples)  # All committed examples are verified by definition
-
-            # Get family config for categorization
+            # Categorize staged files by content root
             family_config = self.config_manager.load_family_config(family)
-            content_roots = family_config.content_roots or []
-            content_pattern = family_config.content_pattern or {}
+            categorized_topics = self._categorize_staged_files(
+                staged_files, committed_examples, family_config,
+            )
 
-            # Categorize STAGED files by content root (blog, kb, docs, etc.)
-            categorized_files = {}
-            for category, root in zip(content_pattern.keys(), content_roots):
-                categorized_files[category] = []
-                norm_root = str(Path(root).resolve())
-                for file_path in staged_files:  # Use staged_files, not candidate_files
-                    norm_file = str(Path(file_path).resolve())
-                    if norm_file.startswith(norm_root):
-                        categorized_files[category].append(Path(file_path).name)
-
-            # Build category summaries
-            category_lines = []
-            for category, files in categorized_files.items():
-                if files:
-                    # Extract unique topics from filenames (remove extension, take stems)
-                    topics = []
-                    for f in files[:5]:  # First 5 as sample
-                        stem = Path(f).stem
-                        # Clean up common patterns (index, etc.)
-                        if stem != 'index':
-                            topics.append(stem.replace('-', ' ').replace('_', ' '))
-
-                    if topics:
-                        topic_list = ', '.join(sorted(set(topics)))
-                        category_lines.append(f"{category.title()}: {len(files)} files updated ({topic_list})")
-                    else:
-                        category_lines.append(f"{category.title()}: {len(files)} files updated")
-
-            # Build commit message with ACCURATE counts
-            message_title = f"fix({family}): verify and update {verified_count} C# code examples across {len(staged_files)} markdown files"
-
-            # Build detailed description
-            description_lines = [
-                f"VFV pipeline run {run_id[:16]}:",
-                f"- {total_examples} examples verified and committed",
-            ]
-
-            # Add compilation details
-            if compile_success > 0:
-                if llm_fixes > 0:
-                    description_lines.append(f"- {first_try_success} compiled first-try, {llm_fixes} fixed via LLM")
-                else:
-                    description_lines.append(f"- {compile_success} compiled first-try")
-
-            # Add deterministic fixes mention
-            description_lines.append("- Deterministic fixes applied: stream disposal, using directives, context harness")
-
-            # Add blank line before category details
-            if category_lines:
-                description_lines.append("")
-                description_lines.extend(category_lines)
-
-            description = '\n'.join(description_lines)
-
-            # Hardcoded co-author per project policy (NEVER use Claude model name)
-            co_author = "Example Reviewer <example-reviewer@aspose.net>"
-            full_message = f"{message_title}\n\n{description}\n\nCo-Authored-By: {co_author}"
+            # Build commit message using configured format
+            global_config = self.config_manager.load_global_config()
+            commit_format = getattr(global_config.git, "commit_format", "compact")
+            full_message = self._build_commit_message(
+                family, run_id, committed_examples, staged_files,
+                commit_stats, phase_results or {}, categorized_topics, commit_format,
+            )
 
             result = subprocess.run(
                 ["git", "commit", "-m", full_message],
@@ -4831,15 +5211,26 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 f"Filtered default_usings: {family_config.code_defaults.default_usings}"
             )
 
-    def _check_unfixable_types(self, errors: List[str], catalog_service) -> List[str]:
+    def _check_unfixable_types(self, errors: List[str], catalog_service, code: str = "") -> List[str]:
         """Check if CS0246 errors reference types not in the catalog.
 
         Returns a list of type names from CS0246 errors that are not present
-        in the API catalog and are not well-known BCL types. These represent
-        types that cannot be fixed by adding using directives.
+        in the API catalog, are not well-known BCL types, and are not
+        user-defined types declared within the example code itself.
         """
         if not catalog_service:
             return []
+
+        # Extract user-defined type names from the code (class, struct, etc.)
+        user_defined_types = set()
+        if code:
+            for line in code.split('\n'):
+                stripped = line.split('//')[0]  # Strip single-line comments (CS0260 lesson)
+                for m in re.finditer(
+                    r'\b(?:class|struct|interface|enum|record)\s+(\w+)', stripped
+                ):
+                    user_defined_types.add(m.group(1))
+
         unfixable = []
         bcl_types = {
             'String', 'Int32', 'Boolean', 'Object', 'Exception', 'DateTime',
@@ -4854,6 +5245,11 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             if m:
                 type_name = m.group(1)
                 if type_name in bcl_types:
+                    continue
+                if type_name in user_defined_types:
+                    logger.debug(
+                        f"Skipping UNFIXABLE_API for user-defined type '{type_name}'"
+                    )
                     continue
                 if not catalog_service.has_type(type_name):
                     unfixable.append(type_name)

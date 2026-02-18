@@ -38,7 +38,7 @@ Tests for the path guard module that enforces read-only constraints on test-* di
 - Integration workflows
 
 **Key Tests:**
-- ✅ test-content/, test-data/, test-examples/, test-reference/ are all protected
+- tests/fixtures/content/, test-data/, test-examples/, tests/fixtures/reference/ are all protected
 - ✅ Absolute and relative paths handled correctly
 - ✅ Windows and Unix path separators normalized
 - ✅ Workspace paths generated correctly

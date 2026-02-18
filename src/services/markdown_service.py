@@ -82,7 +82,7 @@ class MarkdownUpdateService:
 
     SAFETY: This service enforces strict write guards:
     1. Markdown writes require explicit allow_markdown_write=True
-    2. All test-* paths (test-data/, test-examples/, test-reference/, test-content/) are strictly read-only
+    2. All test-* paths (test-data/, test-examples/, tests/fixtures/reference/, tests/fixtures/content/) are strictly read-only
     3. Use --use-workspace-copy to work with copies instead of originals
 
     Read-only enforcement is handled by src/core/path_guard.py

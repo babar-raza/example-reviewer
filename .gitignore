@@ -14,7 +14,7 @@ __pycache__/
 /test-examples/**/obj/
 /test-examples/**/.vs/
 
-# Runtime/generated directories (root-scoped)
+# Runtime/generated directories
 /artifacts/
 /cache/
 /data/
@@ -36,12 +36,9 @@ __pycache__/
 /reports/
 /plans/
 /test-data/
-/test-content/
 /test_determinism/
+/content/
 /%LOCALAPPDATA%/
-/tools/api-index-generator/
-/tools/create_phase*.py
-/tools/fix_phase*.py
 
 # Generated config derivatives
 /config/families/*_api_catalog*.json
@@ -69,7 +66,6 @@ Thumbs.db
 /*.json
 /NUL
 /pipeline_full.log
-/zip_catalog_stderr.txt
 
 !/requirements.txt
 !/requirements-dev.txt
@@ -105,6 +101,3 @@ Thumbs.db
 *.markdown_backup
 *.backup_*
 *.backup
-/local-telemetry
-/report
-/runs

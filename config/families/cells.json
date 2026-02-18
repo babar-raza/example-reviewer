@@ -1,7 +1,7 @@
 {
   "family": "cells",
   "display_name": "Aspose.Cells for .NET",
-  "auto_commit": false,
+  "auto_commit": true,
   "commit_message_template": "fix(cells): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
     "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/cells",
@@ -140,5 +140,10 @@
   "dependency_resolution": {
     "enabled": true,
     "confidence_threshold": 0.7
+  },
+  "fixture_resolver": {
+    "enabled": true,
+    "max_generations_per_run": 50,
+    "registry_path": "artifacts/backfill/cells/fixture-registry.json"
   }
 }

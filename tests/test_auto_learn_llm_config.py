@@ -90,7 +90,7 @@ class TestAutoLearnLLMConfig:
     def test_auto_learn_script_loads_config(self):
         """Test: auto_learn.py can load and access config."""
         # Import the script module
-        auto_learn_path = PROJECT_ROOT / "scripts" / "auto_learn.py"
+        auto_learn_path = PROJECT_ROOT / "scripts" / "patterns" / "auto_learn.py"
         assert auto_learn_path.exists(), "auto_learn.py should exist"
 
         # Verify we can load config the same way the script does

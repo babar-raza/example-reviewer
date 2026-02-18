@@ -16,7 +16,7 @@ from unittest.mock import Mock, MagicMock
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.auto_learn import LLMPatternExtractor
+from scripts.patterns.auto_learn import LLMPatternExtractor
 
 
 class MockLLMService:
@@ -462,9 +462,9 @@ class TestLLMPatternExtractor:
         assert patterns[0]["auto_approved"] is False  # 0.8 is NOT enough for llm_prompt (needs 0.85)
 
     def test_known_transformers_registry(self):
-        """Test: KNOWN_TRANSFORMERS constant is defined and contains expected transformers."""
-        assert hasattr(LLMPatternExtractor, "KNOWN_TRANSFORMERS")
-        transformers = LLMPatternExtractor.KNOWN_TRANSFORMERS
+        """Test: KNOWN_TRANSFORMERS is accessible and contains expected transformers."""
+        extractor = LLMPatternExtractor(MockLLMService("{}"), catalog=None)
+        transformers = extractor.KNOWN_TRANSFORMERS
 
         # Should contain transformers from semantic_microfixes.py
         assert "fix_stream_disposal" in transformers

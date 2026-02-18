@@ -147,7 +147,7 @@
   "example_repo": {
     "url": "https://github.com/aspose-html/Aspose.HTML-for-.NET",
     "examples_path": "Examples",
-    "test_data_path": "Data",
+    "test_data_path": "Examples/data",
     "ref": "master"
   }
 }

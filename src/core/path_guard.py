@@ -1,6 +1,6 @@
 """
 Path guard for write protection in Example Reviewer Pipeline.
-Enforces read-only constraints on test-* directories.
+Enforces read-only constraints on test directories.
 
 This module provides centralized path validation to prevent accidental
 writes to test data directories, ensuring data integrity and preventing
@@ -15,12 +15,11 @@ logger = logging.getLogger(__name__)
 
 # Read-only path prefixes (normalized to forward slashes)
 # These paths are STRICTLY read-only - no writes allowed under any circumstances
-# CRITICAL: test-content/ is now PROTECTED (was missing from MarkdownUpdateService)
 READ_ONLY_PREFIXES = (
     'test-data/',
     'test-examples/',
-    'test-reference/',
-    'test-content/',  # NEW - prevents manual edits to test content
+    'tests/fixtures/reference/',
+    'tests/fixtures/content/',
 )
 
 
@@ -40,8 +39,8 @@ def normalize_path(path: Union[str, Path]) -> str:
     Example:
         >>> normalize_path("test-data\\file.txt")
         'test-data/file.txt'
-        >>> normalize_path(Path("/home/user/test-content/doc.md"))
-        '/home/user/test-content/doc.md'
+        >>> normalize_path(Path("/home/user/tests/fixtures/content/doc.md"))
+        '/home/user/tests/fixtures/content/doc.md'
     """
     # Convert to string and replace all backslashes with forward slashes
     # This handles Windows-style paths on Unix systems correctly
@@ -78,7 +77,7 @@ def is_read_only_path(path: Union[str, Path]) -> bool:
     Example:
         >>> is_read_only_path("test-data/zip/sample.zip")
         True
-        >>> is_read_only_path("test-content/docs/page.md")
+        >>> is_read_only_path("tests/fixtures/content/docs/page.md")
         True
         >>> is_read_only_path("artifacts/backfill/zip/test-data/file.txt")
         False  # test-data here is just a folder name, not at project root
@@ -106,21 +105,19 @@ def is_read_only_path(path: Union[str, Path]) -> bool:
     # But NOT:
     #   /home/user/project/artifacts/backfill/test-data/...
 
-    # Look for the first occurrence of test-* in the path components
-    # and check if it's preceded only by what looks like system paths
-    for i, part in enumerate(parts):
-        for prefix_with_slash in READ_ONLY_PREFIXES:
-            prefix = prefix_with_slash.rstrip('/')
-            if part == prefix:
-                # Found test-* component. Check if it's at project root level.
+    # For absolute paths: check if any suffix of the path starts with a read-only prefix
+    # This handles paths like /home/user/project/test-data/file.txt
+    # and also multi-component prefixes like tests/fixtures/content/
+    for i in range(len(parts)):
+        suffix = '/'.join(parts[i:])
+        for prefix in READ_ONLY_PREFIXES:
+            if suffix.startswith(prefix):
+                # Found a matching prefix. Check if it's at project root level.
                 # Heuristic: if ANY ancestor is 'artifacts', 'workspace', etc., it's NOT at root
                 if i > 0:
-                    # Check all ancestors before this component
                     ancestors = parts[:i]
                     if any(ancestor in ('artifacts', 'workspace', '.cache', 'cache', 'backfill') for ancestor in ancestors):
-                        # This is a nested test-* folder, not at project root
                         return False
-                # Otherwise, this looks like a root-level test-* directory
                 return True
 
     return False
@@ -145,7 +142,7 @@ def assert_write_allowed(path: Union[str, Path], reason: str = "") -> None:
         >>> assert_write_allowed("workspace/output.txt", "compilation artifact")
         # No exception - write allowed
 
-        >>> assert_write_allowed("test-content/docs/page.md", "markdown update")
+        >>> assert_write_allowed("tests/fixtures/content/docs/page.md", "markdown update")
         PermissionError: WRITE BLOCKED: Cannot write to read-only test path...
     """
     if is_read_only_path(path):
@@ -182,7 +179,7 @@ def get_workspace_path(
     directory name.
 
     Args:
-        original_path: Original file path (may be in test-content/)
+        original_path: Original file path (may be in tests/fixtures/content/)
         workspace_root: Workspace root directory (e.g., artifacts/workspace)
         run_id: Current run ID for isolation (e.g., abc123def456)
 
@@ -191,14 +188,14 @@ def get_workspace_path(
 
     Example:
         >>> get_workspace_path(
-        ...     "test-content/docs/example.md",
+        ...     "tests/fixtures/content/docs/example.md",
         ...     Path("artifacts/workspace"),
         ...     "abc123"
         ... )
         PosixPath('artifacts/workspace/abc123/content/docs/example.md')
 
         >>> get_workspace_path(
-        ...     "/home/user/repo/test-content/docs/example.md",
+        ...     "/home/user/repo/tests/fixtures/content/docs/example.md",
         ...     Path("artifacts/workspace"),
         ...     "abc123"
         ... )
@@ -213,7 +210,7 @@ def get_workspace_path(
     """
     original = Path(original_path)
 
-    # If in test-content/, create workspace copy path
+    # If in read-only test path, create workspace copy path
     if is_read_only_path(original_path):
         # Normalize to forward slashes for consistent handling
         normalized = normalize_path(original_path)
@@ -223,15 +220,15 @@ def get_workspace_path(
             prefix_clean = prefix.rstrip('/')
 
             # Try to extract relative path after the protected directory
-            # Handle both relative paths (test-content/...) and absolute paths (.../test-content/...)
+            # Handle both relative paths and absolute paths
             if normalized.startswith(prefix_clean + '/'):
-                # Relative path case: test-content/docs/file.md
+                # Relative path case: tests/fixtures/content/docs/file.md
                 relative_str = normalized[len(prefix_clean) + 1:]
                 relative = Path(relative_str)
                 return workspace_root / run_id / "content" / relative
             elif f"/{prefix_clean}/" in normalized:
-                # Absolute path case: /home/user/repo/test-content/docs/file.md
-                # Extract everything after "test-content/"
+                # Absolute path case: /home/user/repo/tests/fixtures/content/docs/file.md
+                # Extract everything after the protected prefix
                 idx = normalized.index(f"/{prefix_clean}/")
                 relative_str = normalized[idx + len(f"/{prefix_clean}/"):]
                 relative = Path(relative_str)

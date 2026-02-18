@@ -653,7 +653,7 @@ def main() -> int:
     parser.add_argument('--artifacts-dir', type=str, default='artifacts',
                         help='Path to artifacts directory')
     parser.add_argument('--use-workspace-copy', '--workspace-copy', action='store_true',
-                        help='Enable workspace copy mode (required for test-content/ writes)')
+                        help='Enable workspace copy mode (required for tests/fixtures/content/ writes)')
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Enable verbose output')
     parser.add_argument('--json', action='store_true',
