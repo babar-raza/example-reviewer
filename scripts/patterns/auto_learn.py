@@ -30,11 +30,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent  # scripts/patterns/ -> scripts/ -> repo root
 MAIN_DB = PROJECT_ROOT / "data" / "example_reviewer.db"
 CATALOG_DB = PROJECT_ROOT / "data" / "api_catalog.db"
 
