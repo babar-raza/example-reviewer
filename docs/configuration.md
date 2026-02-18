@@ -139,4 +139,90 @@ Each family config declares:
 - Runtime validation rules (required files, aliases)
 - Optional external sources (example repo, API reference sources)
 
-See `KB/04-family-config-reference.md` for a full field-level reference.
+### Top-Level Fields
+
+- **family** (required, string): Short identifier for the product family. Used for directory names and database keys. Example: `"zip"`, `"words"`, `"pdf"`.
+- **display_name** (optional, string): Human-readable name for UI/reporting. Example: `"Aspose.ZIP for .NET"`.
+- **content_roots** (required, array): Directories containing markdown blog posts to scan.
+
+### nuget_config
+
+Configuration for NuGet packages required for compilation.
+
+- **primary_package.name** (required, string): Main NuGet package. Example: `"Aspose.Zip"`.
+- **primary_package.version_strategy** (required, string): `"latest_stable"` or `"pinned"`.
+- **primary_package.pinned_version** (conditional, string): Required if `version_strategy` is `"pinned"`.
+- **additional_packages** (optional, array): Additional NuGet packages (`name` + `version`).
+- **target_frameworks** (optional, array): .NET target frameworks. Defaults to `["net8.0"]`.
+
+### code_defaults
+
+- **default_usings** (optional, array): `using` directives injected into generated Program.cs.
+- **safe_usings** (optional, array): Namespaces always safe to add during error fixing.
+
+### api_catalog
+
+- **catalog_path** (required, string): Path to assembly-reflected API catalog JSON.
+- **dll_name** (optional, string): Assembly DLL name for reflection.
+
+### runtime_validation
+
+- **required_files** (optional, array): Files to stage before execution.
+- **file_aliases** (optional, object): Filename aliases (e.g., `"sample.zip": ["input.zip"]`).
+- **required_dirs** (optional, array): Directories that must exist in test-data.
+- **expected_outputs** (optional, array): Glob patterns for expected output files.
+
+### fixture_resolver
+
+- **enabled** (optional, boolean): Enable intelligent fixture resolution.
+- **canonical_files** (optional, object): Canonical source files for generation.
+- **registry_path** (optional, string): Path to persistent fixture registry JSON.
+
+### learned_patterns
+
+- **db_path** (required, string): Path to learned patterns database.
+- **min_confidence** (optional, float): Minimum confidence to apply a pattern.
+
+### compilation / runtime
+
+- **timeout_seconds** (optional, integer): Timeout for compile/run operations.
+- **max_retries** (optional, integer): Maximum retry attempts.
+
+### Validation Rules
+
+1. `family` must be non-empty lowercase alphanumeric with hyphens.
+2. `nuget_config.primary_package.name` must be a valid NuGet package identifier.
+3. If `version_strategy` is `"pinned"`, `pinned_version` must be provided.
+4. `target_frameworks` must contain at least one valid .NET target framework moniker.
+
+### Example: Aspose.ZIP Family Config
+
+```json
+{
+  "family": "zip",
+  "display_name": "Aspose.ZIP for .NET",
+  "content_roots": ["D:/content/blog.aspose.net/content/"],
+  "nuget_config": {
+    "primary_package": {
+      "name": "Aspose.Zip",
+      "version_strategy": "latest_stable"
+    },
+    "target_frameworks": ["net8.0"]
+  },
+  "code_defaults": {
+    "default_usings": ["Aspose.Zip", "Aspose.Zip.Saving"]
+  },
+  "safe_usings": ["System", "System.IO", "Aspose.Zip", "Aspose.Zip.Saving"],
+  "api_catalog": {
+    "catalog_path": "config/families/zip_api_catalog.json"
+  },
+  "runtime_validation": {
+    "required_files": ["sample.zip", "sample_dir"],
+    "file_aliases": {
+      "sample.zip": ["input.zip", "archive.zip", "example.zip"]
+    }
+  }
+}
+```
+
+See individual family configs in `config/families/` for complete examples.

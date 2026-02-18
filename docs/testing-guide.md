@@ -1068,32 +1068,47 @@ When changing code:
 2. Add new tests for new functionality
 3. Remove obsolete tests
 
-### Refactor Tests
+---
 
-Apply DRY principle to tests:
+## CLI Testing System
 
-```python
-# Before: Repeated setup
-def test_a():
-    db = Database(":memory:")
-    db.init_schema()
-    # ... test logic
+The project includes a multi-layer CLI testing system that catches import errors, runtime errors, and validates option combinations before they reach users.
 
-def test_b():
-    db = Database(":memory:")
-    db.init_schema()
-    # ... test logic
+### Static Import Analyzer
 
-# After: Using fixture
-@pytest.fixture
-def db():
-    db = Database(":memory:")
-    db.init_schema()
-    yield db
+**File:** `scripts/validation/analyze_cli_imports.py`
 
-def test_a(db):
-    # ... test logic
+Uses AST analysis to detect undefined names in Python functions **before runtime**. This catches hidden `NameError` or `ImportError` bugs in lazy-import code paths that static type checkers miss.
 
-def test_b(db):
-    # ... test logic
+```bash
+# Run on a single module
+python scripts/validation/analyze_cli_imports.py src/cli/main.py
+
+# Exit 0 = no undefined names
+# Exit 1 = undefined names found (prints details)
 ```
+
+**How it works:**
+1. Parses Python source into AST
+2. Tracks all names defined at module level (imports, classes, functions, assignments)
+3. For each function, tracks parameters, local assignments, local imports, comprehension variables, nested function names, and closure names
+4. Reports names used but not defined in any accessible scope
+
+**Scope rules:** Names are considered available if they come from module-level imports, function parameters, local assignments/imports, comprehension variables, nested function names, closure scope, Python builtins, or common typing names.
+
+### CI Integration
+
+**File:** `.github/workflows/cli_tests.yml`
+
+Two CI jobs run on every push:
+
+1. **Static Import Analysis** - Runs `analyze_cli_imports.py` on core modules (`main.py`, `orchestrator.py`, `database.py`, `llm_service.py`)
+2. **Unit Tests** - Runs `pytest tests/ -v --timeout=120 -x`
+
+### Adding New CLI Options
+
+When adding new CLI commands or options:
+
+1. Run static analysis: `python scripts/validation/analyze_cli_imports.py src/cli/main.py`
+2. Run tests: `pytest tests/ -v --timeout=120`
+3. Verify CI passes after push

@@ -1,27 +1,25 @@
-# Archive Directory
+# archive/ - Historical Files
 
-This directory contains archived files from repository cleanup operations.
-
-## Purpose
-
-As the project evolves, temporary analysis scripts and old documentation accumulate in the root directory. This archive preserves these files while keeping the root directory clean and navigable.
+Files preserved for git history but no longer actively used.
 
 ## Contents
 
-### analysis-scripts/
-Temporary analysis, validation, and debugging scripts created during development and troubleshooting. These scripts were useful for specific investigations but are not part of the core codebase.
+| Directory | What's archived |
+|-----------|----------------|
+| `docs/` | Superseded documentation (quickstart, hardening notes, implementation plans) |
+| `specs/` | Outdated specification files (v1 architecture, database schema, API reference) |
+| `tools/` | One-time migration scripts, packaging tools, diagnostic utilities |
+| `scripts/` | Deprecated script subdirs (packaging, maintenance, debug) |
+| `tests/` | Legacy integration test stubs and demos |
+| `migrations/` | Legacy database migrations (004-006) |
+| `src_legacy/` | Compatibility wrappers for refactored modules |
 
-### old-summaries/
-Historical summary documents and reports that have been superseded by newer documentation or are no longer actively referenced.
+These files are not loaded by any active code. They exist only for reference.
 
 ## Recovery
 
-All files here were moved using `git mv` to preserve git history. To view a file's history:
+All files were moved using `git mv` to preserve history. To view a file's history:
 
 ```bash
-git log --follow archive/analysis-scripts/<filename>
+git log --follow archive/<path>/<filename>
 ```
-
-## Cleanup History
-
-- 2026-01-16: Initial cleanup (Task IH-04) - Moved 21 analysis scripts and 2 old summary files
