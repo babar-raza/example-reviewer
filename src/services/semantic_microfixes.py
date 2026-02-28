@@ -1420,19 +1420,44 @@ def fix_extract_output_directory(code: str) -> Tuple[str, str]:
     return fixed_code, fix_desc
 
 
-def fix_plugins_to_lowcode(code: str) -> Tuple[str, str]:
+# Families where Aspose has confirmed the .Plugins -> .LowCode namespace rename (2025+ migration).
+# Only these families should have their .Plugins references rewritten.
+# Verified against assembly reflection (api_catalog.json) — DO NOT add a family unless its
+# catalog confirms Aspose.*.LowCode types are present in the shipped assembly:
+#   words:  Aspose.Words.LowCode  — confirmed (words_api_catalog.json)
+#   cells:  Aspose.Cells.LowCode  — confirmed (cells_api_catalog.json)
+#   slides: Aspose.Slides.LowCode — confirmed (slides_api_catalog.json)
+# Excluded families still using .Plugins:
+#   pdf: Aspose.Pdf.Plugins only in v25.5.0.0 — no LowCode yet (re-check on catalog regen)
+#   tex: Aspose.TeX.Plugins — migration planned but not shipped
+_PLUGINS_TO_LOWCODE_FAMILIES: frozenset = frozenset({'words', 'cells', 'slides'})
+
+
+def fix_plugins_to_lowcode(code: str, family: str = None) -> Tuple[str, str]:
     """
-    Fix deprecated Aspose.*.Plugins namespace → Aspose.*.LowCode.
+    Fix deprecated Aspose.*.Plugins namespace -> Aspose.*.LowCode.
 
-    Starting in 2025, Aspose products renamed the Plugins namespace to LowCode:
-    - Aspose.Pdf.Plugins → Aspose.Pdf.LowCode
-    - Aspose.Words.Plugins → Aspose.Words.LowCode
-    - Aspose.Cells.Plugins → Aspose.Cells.LowCode
-    etc.
+    Starting in 2025, some Aspose products renamed the Plugins namespace to LowCode:
+    - Aspose.Pdf.Plugins -> Aspose.Pdf.LowCode
+    - Aspose.Words.Plugins -> Aspose.Words.LowCode
+    - Aspose.Cells.Plugins -> Aspose.Cells.LowCode
+    - Aspose.Slides.Plugins -> Aspose.Slides.LowCode
 
-    Blog/doc examples may still reference the old Plugins namespace.
+    IMPORTANT: This rename only applies to families listed in _PLUGINS_TO_LOWCODE_FAMILIES.
+    For Aspose.TeX and other families not in the list, .Plugins is still the current,
+    valid namespace and must NOT be renamed.
+
+    Args:
+        code: C# source code to fix.
+        family: Product family identifier (e.g. 'pdf', 'words', 'tex'). If None or
+                not in _PLUGINS_TO_LOWCODE_FAMILIES, the fix is skipped entirely.
     """
     if '.Plugins' not in code:
+        return code, ""
+
+    # Only rename for families where .LowCode namespace is confirmed valid.
+    # If family is unknown (None) we also skip — safer than a wrong rename.
+    if not family or family.lower() not in _PLUGINS_TO_LOWCODE_FAMILIES:
         return code, ""
 
     # Replace Aspose.*.Plugins with Aspose.*.LowCode
@@ -2258,8 +2283,8 @@ def apply_semantic_microfixes(
     if fix_desc:
         applied_fixes.append(fix_desc)
 
-    # 2c2. Fix deprecated Plugins → LowCode namespace (Aspose 2025+ rename)
-    fixed_code, fix_desc = fix_plugins_to_lowcode(fixed_code)
+    # 2c2. Fix deprecated Plugins -> LowCode namespace (Aspose 2025+ rename, family-gated)
+    fixed_code, fix_desc = fix_plugins_to_lowcode(fixed_code, family=family)
     if fix_desc:
         applied_fixes.append(fix_desc)
 
