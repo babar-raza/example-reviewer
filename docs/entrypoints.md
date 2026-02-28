@@ -2,68 +2,78 @@
 
 The system is exposed through two primary entry points:
 
-1. **CLI Entry Point**
-   - File: `src/cli/main.py`
-   - The CLI constructs an `ExampleReviewerTools` instance and dispatches subcommands.
+1. CLI entry point: `src/cli/main.py`
+2. MCP server entry point: `src/mcp_tools/server.py`
 
-2. **MCP Server Entry Point**
-   - File: `src/mcp_tools/server.py`
-   - The MCP server exposes tools via JSON-RPC.
+Both paths dispatch into the same `ExampleReviewerTools` layer, so the CLI,
+MCP, and HTTP wrappers share the same core behavior.
 
-## CLI Entry Point
+## CLI
 
-### Global CLI Options
+### Global Options
 
-- `--config-dir`: Defaults to `config/families`
-- `--db-path`: Defaults to `data/example_reviewer.db`
-- `--workspace-dir`: Defaults to `workspace`
+- `--config-dir` (default: `config/families`)
+- `--db-path` (default: `data/example_reviewer.db`)
+- `--workspace-dir` (default: `workspace`)
 - `--verbose` / `-v`
-- `--json`: Print tool output in JSON format
+- `--json`
 
-### Primary Subcommands
+### Primary Commands
 
-These subcommands map to pipeline phases:
+- `scan`
+- `extract`
+- `compile-verify`
+- `compile-fix`
+- `runtime-verify`
+- `runtime-fix`
+- `md-update`
+- `final-review`
+- `commit`
+- `run`
 
-- `scan`: Locate markdown files to process
-- `extract`: Extract code blocks and gist references (Phase A)
-- `compile-verify`: Compile examples without LLM fixes (Phase B)
-- `compile-fix`: Compile examples with LLM fixes (Phase B)
-- `runtime-verify`: Execute examples without LLM fixes (Phase C)
-- `runtime-fix`: Execute examples with LLM fixes (Phase C)
-- `md-update`: Apply verified code back to markdown files (Phase D)
-- `final-review`: LLM review of updated markdown (Phase E)
-- `commit`: Commit changes (Phase F)
-- `run`: Run the full pipeline end-to-end
-
-### Additional Operational Subcommands
+### Additional Commands
 
 - `list-families`
-- `backfill`: Populate missing API refs, test data, examples, and gist source
-- `clean-vector-db`: Remove high-drift examples from the vector DB
+- `backfill`
+- `clean-vector-db`
 - `visualize-drift`
 - `drift-trends`
 
-### Safety Guard: Markdown Writes
+### Markdown Write Guard
 
-The `md-update` and `run` subcommands require explicit authorization to write markdown:
+The `md-update` and `run` commands require explicit authorization before they
+write markdown files:
 
-- Global config: `config/global.json` -> `markdown_write.allow_markdown_write: true`
+- global config: `config/global.json` -> `markdown_write.allow_markdown_write`
 - CLI flag: `--allow-md-write`
 
-If not enabled, the markdown update phase is treated as a dry-run, and any actual write will raise `MarkdownWriteGuardError`.
+If not enabled, the markdown update phase behaves like a dry run.
 
-## MCP Server Entry Point
+### Content Roots Override
 
-The MCP server exposes tools via JSON-RPC:
+`scan`, `extract`, and `run` can override the family config's `content_roots`
+without editing the JSON file:
 
-- `tools/list`: Returns tool definitions
-- `tools/call`: Runs a tool with structured arguments
+```bash
+PYTHONPATH=. python -m src.cli.main scan --family zip --content-roots C:/content/zip
 
-Tools are implemented by `ExampleReviewerTools` in `src/mcp_tools/tools.py`.
+PYTHONPATH=. python -m src.cli.main run --family zip \
+    --content-roots C:/content/blog/zip C:/content/docs/zip
+```
 
-### Tool Surface
+## MCP
 
-Tool names are camel/underscore variants of the CLI commands:
+The MCP server exposes tools via JSON-RPC over stdio:
+
+- `tools/list`
+- `tools/call`
+- `initialize`
+- `notifications/initialized`
+- `ping`
+
+### Tool Names
+
+The MCP tool names mirror the CLI commands with underscore-style naming:
 
 - `scan`
 - `extract`
@@ -77,16 +87,26 @@ Tool names are camel/underscore variants of the CLI commands:
 - `backfill`
 - `status`
 - `run_pipeline`
+- `validate_code_snippet`
 
-## Recommended Run Patterns
+### Deployment Model
 
-Because this archive is missing packaging metadata, these examples assume you run from the repo root and set `PYTHONPATH` so `src/` resolves as a package.
+The MCP server always runs as a local subprocess of the MCP client. That means:
 
-- **CLI as module**:
-  ```bash
-  PYTHONPATH=. python -m src.cli.main list-families
-  ```
+- the server and client are on the same machine
+- local content folders are directly accessible
+- local `dotnet`, git, and SQLite resources are used directly
 
-- **MCP server as module**:
-  ```bash
-  PYTHONPATH=. python -m src.mcp_tools.server --verbose
+Example MCP override payload:
+
+```json
+{
+  "name": "run_pipeline",
+  "arguments": {
+    "family": "zip",
+    "content_roots": ["C:/content/blog/zip", "C:/content/docs/zip"]
+  }
+}
+```
+
+For the full protocol and HTTP wrapper details, see [MCP Server Reference](mcp.md).

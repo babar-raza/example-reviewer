@@ -1,40 +1,40 @@
 # Documentation Index
 
-Welcome to the Example Reviewer documentation. This index provides an overview of the available documentation files and their purposes.
+This index summarizes the primary documentation entry points for the repository.
 
 ## Overview
 
-- [Overview](overview.md): An introduction to the Example Reviewer pipeline, its key features, and high-level architecture.
+- [Overview](overview.md): high-level introduction to the pipeline and system goals.
 
 ## Entry Points
 
-- [Entry Points](entrypoints.md): Details on the CLI and MCP server entry points, including global options, subcommands, and safety guards.
+- [Entry Points](entrypoints.md): CLI and MCP entry points, command surface, and write guards.
+- [MCP Reference](mcp.md): protocol lifecycle, tool surface, HTTP wrapper, and test guidance.
 
 ## Pipeline
 
-- [Pipeline](pipeline.md): A comprehensive guide to the pipeline phases, core entities, and data flow.
+- [Pipeline](pipeline.md): pipeline phases, entities, and runtime flow.
 
 ## Configuration
 
-- [Configuration](configuration.md): Information on global and family configuration settings, including LLM, markdown write guards, vector DB, drift control, telemetry, and backfill.
+- [Configuration](configuration.md): global and family config settings.
 
 ## Safety
 
-- [Safety](safety.md): Descriptions of safety mechanisms, including markdown write guards, read-only test paths, drift controls, and operational guardrails.
+- [Safety](safety.md): operational safeguards, write guards, and drift controls.
 
 ## Telemetry
 
-- [Telemetry](telemetry.md): Explanation of telemetry recording, phase timing, exporting run telemetry, and artifact references.
+- [Telemetry](telemetry.md): telemetry recording and exported artifacts.
 
 ## Backfill
 
-- [Backfill](backfill.md): Details on the backfill mechanism for populating local caches with test data, API references, examples, and gist source code.
+- [Backfill](backfill.md): how local caches are populated for test data and references.
 
 ## Known Gaps
 
-- [Known Gaps](known-gaps.md): A checklist of known gaps and issues in the current archive, including missing source files, configuration mismatches, and test coverage.
+- [Known Gaps](known-gaps.md): known issues, archive constraints, and missing pieces.
 
 ## Additional Resources
 
-- [KB/](../KB/): Knowledge base files providing detailed insights into the system's architecture, configuration, and operational guidelines.
-- [Specs/](../specs/): Technical specifications and design documents for the system.
+- [Specs/](../specs/): technical design and planning documents.
