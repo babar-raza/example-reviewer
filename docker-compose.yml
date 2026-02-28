@@ -1,0 +1,27 @@
+# Example Reviewer API docker-compose entrypoint
+#
+# Exposes the lightweight HTTP API on port 18800.
+
+services:
+  example-reviewer-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.light
+    ports:
+      - "${EXAMPLE_REVIEWER_PORT:-18800}:18800"
+    volumes:
+      - ./data:/app/data
+      - ./config/families:/app/config/families
+    environment:
+      - EXAMPLE_REVIEWER_PORT=18800
+      - EXAMPLE_REVIEWER_API_KEY=${EXAMPLE_REVIEWER_API_KEY:-}
+      - DB_PATH=/app/data/example_reviewer.db
+      - CONFIG_DIR=/app/config/families
+      - WORKSPACE_DIR=/app/workspace
+      - litellm_key=${litellm_key:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:18800/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
