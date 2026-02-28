@@ -35,12 +35,12 @@
   },
   "gist": {
     "enabled": true,
-    "target_account": "aspose-com-gists",
+    "target_account": "aspose-net",
     "auth": {
-      "method": "none",
-      "pat_env_var": "GIST_PAT"
+      "method": "pat",
+      "pat_env_var": "GITHUB_GIST_TOKEN"
     },
-    "upload_mode": "inline-only",
+    "upload_mode": "upload-on-change",
     "is_public": true,
     "description_template": "Verified example from {family} - {file_path}"
   },

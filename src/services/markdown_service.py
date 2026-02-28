@@ -100,6 +100,7 @@ class MarkdownUpdateService:
         workspace_root: Optional[Path] = None,
         run_id: Optional[str] = None,
         unsafe_first_block: bool = False,
+        gist_readme_service: Optional[Any] = None,
     ):
         """
         Initialize markdown update service.
@@ -115,6 +116,7 @@ class MarkdownUpdateService:
             workspace_root: Root directory for workspace copies (default: artifacts/workspace)
             run_id: Run ID for workspace isolation
             unsafe_first_block: If True, allow replacement of first block when no signature exists (UNSAFE)
+            gist_readme_service: Optional GistReadmeService for generating README.md in gists
         """
         self.db = db
         self.artifacts_dir = artifacts_dir or Path("artifacts/diffs")
@@ -127,6 +129,7 @@ class MarkdownUpdateService:
         self.workspace_root = workspace_root or Path("artifacts/workspace")
         self.run_id = run_id or "default"
         self.unsafe_first_block = unsafe_first_block
+        self.gist_readme_service = gist_readme_service
 
     def _get_write_target_path(self, file_path: str) -> str:
         """
@@ -710,6 +713,10 @@ class MarkdownUpdateService:
         """
         Upload code to gist and update shortcode with new gist ID.
 
+        If a GistReadmeService is available, generates a README.md and uploads
+        it alongside the code as a multi-file gist. After upload, validates the
+        gist URL is accessible.
+
         Args:
             content: Original markdown content
             example: ExampleRecord with verified code
@@ -727,17 +734,57 @@ class MarkdownUpdateService:
         if self.gist_upload_mode == "upload-on-change":
             old_gist_id = example.gist.gist_id
 
-        # Publish gist
-        result = self.gist_publisher.publish_gist(
-            code_content=example.verified_code,
-            filename=filename,
-            description=description,
-            old_gist_id=old_gist_id,
-        )
+        # Generate README if service is available
+        readme_content = ""
+        if self.gist_readme_service:
+            try:
+                readme_content = self.gist_readme_service.generate_readme(
+                    code=example.verified_code,
+                    example_key=example.example_key,
+                    family=example.family,
+                    file_path=example.file_path,
+                    description=description,
+                )
+                if readme_content:
+                    logger.info(f"Generated README ({len(readme_content)} chars) for {example.example_id}")
+            except Exception as e:
+                logger.warning(f"README generation failed for {example.example_id}: {e}")
+                readme_content = ""
+
+        # Publish gist (with README if available)
+        if readme_content and hasattr(self.gist_publisher, 'publish_gist_with_readme'):
+            result = self.gist_publisher.publish_gist_with_readme(
+                code_content=example.verified_code,
+                filename=filename,
+                readme_content=readme_content,
+                description=description,
+                old_gist_id=old_gist_id,
+            )
+        else:
+            result = self.gist_publisher.publish_gist(
+                code_content=example.verified_code,
+                filename=filename,
+                description=description,
+                old_gist_id=old_gist_id,
+            )
 
         if not result.success:
             logger.warning(f"Gist upload failed: {result.error}, falling back to inline")
             return self._convert_gist_to_inline(content, example, match)
+
+        # Validate gist URL is accessible
+        url_validated = False
+        if result.html_url and hasattr(self.gist_publisher, 'validate_gist_url'):
+            try:
+                url_valid, status_code, msg = self.gist_publisher.validate_gist_url(result.html_url)
+                url_validated = url_valid
+                if not url_valid:
+                    logger.warning(
+                        f"Gist URL validation failed for {example.example_id}: "
+                        f"status={status_code}, msg={msg}"
+                    )
+            except Exception as e:
+                logger.warning(f"Gist URL validation error for {example.example_id}: {e}")
 
         # Build new shortcode with updated gist ID
         target_account = self.gist_target_account or example.gist.owner
@@ -755,6 +802,8 @@ class MarkdownUpdateService:
             'old_gist_id': example.gist.gist_id,
             'new_gist_id': result.gist_id,
             'new_gist_url': result.html_url,
+            'has_readme': bool(readme_content),
+            'url_validated': url_validated,
         }
     
     def _generate_diff(

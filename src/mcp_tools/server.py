@@ -42,7 +42,11 @@ class MCPServer:
             db_path=db_path,
             workspace_dir=workspace_dir,
         )
-        
+
+        # Protocol state
+        self._initialized: bool = False
+        self._client_info: Optional[Dict[str, Any]] = None
+
         # Map tool names to methods
         self._tool_handlers = {
             "scan": self.tools.scan,
@@ -50,12 +54,14 @@ class MCPServer:
             "compile_verify": self.tools.compile_verify,
             "compile_fix": self.tools.compile_fix,
             "runtime_verify": self.tools.runtime_verify,
+            "runtime_fix": self.tools.runtime_fix,
             "md_update": self.tools.md_update,
             "final_review": self.tools.final_review,
             "commit": self.tools.commit,
             "backfill": self.tools.backfill,
             "status": self.tools.status,
             "run_pipeline": self.tools.run_pipeline,
+            "validate_code_snippet": self.tools.validate_code_snippet,
         }
     
     def get_tools(self) -> list:
@@ -73,22 +79,60 @@ class MCPServer:
             MCP response object
         """
         method = request.get("method", "")
-        params = request.get("params", {})
+        params = request.get("params", {}) or {}
         request_id = request.get("id")
-        
-        if method == "tools/list":
+
+        # Notifications (no "id") must not receive a response per JSON-RPC spec
+        is_notification = "id" not in request
+        if is_notification and method.startswith("notifications/"):
+            if method == "notifications/initialized":
+                self._initialized = True
+            logger.debug("Received notification: %s", method)
+            return None
+
+        if method == "initialize":
+            self._client_info = params.get("clientInfo")
+            client_version = params.get("protocolVersion", "2024-11-05")
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "protocolVersion": client_version,
+                    "capabilities": {
+                        "tools": {"listChanged": False}
+                    },
+                    "serverInfo": {
+                        "name": "example-reviewer",
+                        "version": "0.1.0"
+                    }
+                }
+            }
+
+        elif method == "initialized":
+            # Some clients send this as a method (not a notification path)
+            self._initialized = True
+            return None
+
+        elif method == "ping":
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {}
+            }
+
+        elif method == "tools/list":
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "result": {"tools": self.get_tools()}
             }
-        
+
         elif method == "tools/call":
             tool_name = params.get("name", "")
             arguments = params.get("arguments", {})
-            
+
             result = self.call_tool(tool_name, arguments)
-            
+
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -102,23 +146,7 @@ class MCPServer:
                     "isError": not result.success
                 }
             }
-        
-        elif method == "initialize":
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {}
-                    },
-                    "serverInfo": {
-                        "name": "example-reviewer",
-                        "version": "0.1.0"
-                    }
-                }
-            }
-        
+
         else:
             return {
                 "jsonrpc": "2.0",
@@ -177,7 +205,8 @@ class MCPServer:
             try:
                 request = json.loads(line)
                 response = self.handle_request(request)
-                print(json.dumps(response), flush=True)
+                if response is not None:
+                    print(json.dumps(response), flush=True)
                 
             except json.JSONDecodeError as e:
                 error_response = {

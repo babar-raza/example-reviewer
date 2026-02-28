@@ -6,7 +6,7 @@ Publishes verified code to GitHub Gists via the GitHub API.
 import os
 import logging
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 # requests is used for GitHub API calls
 try:
@@ -124,22 +124,22 @@ class GistPublisher:
         elif '.' not in filename:
             filename = f"{filename}.cs"
 
+        files = {filename: code_content}
+
         if old_gist_id:
-            return self._update_gist(old_gist_id, filename, code_content, description)
-        return self._create_gist(filename, code_content, description)
+            return self._update_gist(old_gist_id, files, description)
+        return self._create_gist(files, description)
 
     def _create_gist(
         self,
-        filename: str,
-        content: str,
+        files: Dict[str, str],
         description: str,
     ) -> GistPublishResult:
         """
         Create a new gist via POST /gists.
 
         Args:
-            filename: Filename for the gist file
-            content: Code content
+            files: Mapping of filename to content string
             description: Gist description
 
         Returns:
@@ -150,9 +150,8 @@ class GistPublisher:
                 "description": description,
                 "public": self.is_public,
                 "files": {
-                    filename: {
-                        "content": content
-                    }
+                    fname: {"content": fcontent}
+                    for fname, fcontent in files.items()
                 }
             }
 
@@ -194,8 +193,7 @@ class GistPublisher:
     def _update_gist(
         self,
         gist_id: str,
-        filename: str,
-        content: str,
+        files: Dict[str, str],
         description: str,
     ) -> GistPublishResult:
         """
@@ -203,8 +201,7 @@ class GistPublisher:
 
         Args:
             gist_id: ID of the gist to update
-            filename: Filename for the gist file
-            content: New code content
+            files: Mapping of filename to content string
             description: Updated description
 
         Returns:
@@ -216,9 +213,8 @@ class GistPublisher:
             payload = {
                 "description": description,
                 "files": {
-                    filename: {
-                        "content": content
-                    }
+                    fname: {"content": fcontent}
+                    for fname, fcontent in files.items()
                 }
             }
 
@@ -233,11 +229,15 @@ class GistPublisher:
                 data = response.json()
                 return self._parse_gist_response(data, response.status_code)
 
-            # Handle error responses
-            if response.status_code == 404:
-                # Gist not found, fall back to creating new
-                logger.warning(f"Gist {gist_id} not found, creating new gist instead")
-                return self._create_gist(filename, content, description)
+            # Handle error responses — fall back to creating new gist
+            # 404: gist not found (deleted or wrong ID)
+            # 403: gist owned by different account (PAT lacks permission)
+            if response.status_code in (403, 404):
+                logger.warning(
+                    f"Gist {gist_id} not accessible ({response.status_code}), "
+                    "creating new gist instead"
+                )
+                return self._create_gist(files, description)
 
             return GistPublishResult(
                 success=False,
@@ -261,6 +261,115 @@ class GistPublisher:
                 success=False,
                 error=f"Unexpected error: {str(e)}"
             )
+
+    def publish_gist_with_readme(
+        self,
+        code_content: str,
+        filename: str,
+        readme_content: str,
+        description: str,
+        old_gist_id: Optional[str] = None,
+    ) -> GistPublishResult:
+        """
+        Create or update a gist with both a code file and a README.md.
+
+        Args:
+            code_content: The code to publish
+            filename: Filename for the code file (e.g., "Example.cs")
+            readme_content: Markdown content for README.md
+            description: Gist description
+            old_gist_id: If provided, update this gist instead of creating new
+
+        Returns:
+            GistPublishResult with operation details
+        """
+        if not REQUESTS_AVAILABLE:
+            return GistPublishResult(
+                success=False,
+                error="Requests library not available"
+            )
+
+        if not self.token:
+            return GistPublishResult(
+                success=False,
+                error="No authentication token"
+            )
+
+        if not code_content or not code_content.strip():
+            return GistPublishResult(
+                success=False,
+                error="Cannot publish empty code content"
+            )
+
+        # Ensure filename has extension
+        if not filename:
+            filename = "example.cs"
+        elif '.' not in filename:
+            filename = f"{filename}.cs"
+
+        files = {filename: code_content, "README.md": readme_content or ""}
+
+        if old_gist_id:
+            return self._update_gist(old_gist_id, files, description)
+        return self._create_gist(files, description)
+
+    def validate_gist_url(self, html_url: str) -> Tuple[bool, int, str]:
+        """
+        Validate that a gist URL is accessible.
+
+        Tries HEAD first for efficiency. Falls back to GET if HEAD fails
+        or returns 405 (Method Not Allowed).
+
+        Args:
+            html_url: The gist HTML URL to validate
+
+        Returns:
+            Tuple of (is_valid, status_code, message)
+        """
+        if not REQUESTS_AVAILABLE:
+            return (False, 0, "Requests library not available")
+
+        try:
+            # Try HEAD first (lightweight)
+            head_resp = requests.head(
+                html_url,
+                timeout=self.timeout_seconds,
+                allow_redirects=True,
+            )
+
+            if head_resp.status_code == 200:
+                return (True, 200, "OK")
+
+            # Fall back to GET if HEAD failed or returned 405
+            if head_resp.status_code == 405 or head_resp.status_code >= 400:
+                get_resp = requests.get(
+                    html_url,
+                    timeout=self.timeout_seconds,
+                    allow_redirects=True,
+                )
+
+                if get_resp.status_code == 200:
+                    return (True, 200, "OK")
+
+                return (
+                    False,
+                    get_resp.status_code,
+                    f"GET returned {get_resp.status_code}",
+                )
+
+            # Non-200 but not an error that warrants GET fallback (e.g. 3xx handled by redirects)
+            return (
+                False,
+                head_resp.status_code,
+                f"HEAD returned {head_resp.status_code}",
+            )
+
+        except requests.exceptions.Timeout:
+            return (False, 0, f"Request timed out after {self.timeout_seconds}s")
+        except requests.exceptions.RequestException as e:
+            return (False, 0, f"Request failed: {str(e)}")
+        except Exception as e:
+            return (False, 0, f"Unexpected error: {str(e)}")
 
     def _get_headers(self) -> Dict[str, str]:
         """Get HTTP headers for GitHub API requests."""

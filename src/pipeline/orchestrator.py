@@ -969,6 +969,7 @@ class PipelineOrchestrator:
         allow_md_write: bool = False,
         allow_commit: bool = False,
         strategy_config: Optional[dict] = None,
+        content_roots: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Run the full pipeline for a family.
@@ -983,6 +984,8 @@ class PipelineOrchestrator:
             allow_md_write: Override global config to allow markdown writes
             allow_commit: Override global config to allow git commit
             strategy_config: Dict controlling which fix strategies to enable
+            content_roots: Override content_roots from family config (paths to
+                markdown directories). If omitted the family config paths are used.
 
         Returns:
             Pipeline results dictionary
@@ -1004,6 +1007,11 @@ class PipelineOrchestrator:
             results['success'] = False
             results['error'] = f"Family config not found: {family}"
             return results
+
+        # Apply content_roots override (allows MCP/CLI consumers to specify paths without
+        # editing the family config JSON on disk)
+        if content_roots:
+            family_config = family_config.model_copy(update={"content_roots": content_roots})
 
         # Create run record
         run_id = self.db.create_run(family, "full_pipeline")
@@ -4250,6 +4258,32 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         global_config = self.config_manager.load_global_config()
         allow_write = allow_md_write or global_config.markdown_write.allow_markdown_write
 
+        # Initialize gist publisher + readme service if gist upload is configured
+        gist_publisher = None
+        gist_readme_service = None
+        gist_upload_mode = "inline-only"
+        gist_target_account = ""
+
+        gist_config = global_config.gist
+        if gist_config and gist_config.enabled:
+            gist_upload_mode = gist_config.upload_mode
+            gist_target_account = gist_config.target_account
+
+            if gist_upload_mode != "inline-only":
+                from ..services.gist_publisher import GistPublisher
+                gist_publisher = GistPublisher.from_config(gist_config)
+
+                if gist_publisher.is_available() and gist_config.readme_generation:
+                    try:
+                        from ..services.gist_readme_service import GistReadmeService
+                        gist_readme_service = GistReadmeService(
+                            llm_service=self._llm_service,
+                            family=family,
+                        )
+                        logger.info("GistReadmeService initialized for README generation")
+                    except Exception as e:
+                        logger.warning(f"GistReadmeService init failed (continuing without): {e}")
+
         self._markdown_service = MarkdownUpdateService(
             self.db,
             artifacts_dir=self.artifacts_dir / "diffs",
@@ -4257,6 +4291,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             use_workspace_copy=self.use_workspace_copy,
             workspace_root=self.artifacts_dir / "workspace",
             run_id=run_id,  # Always use current run_id, not "default"
+            gist_publisher=gist_publisher,
+            gist_upload_mode=gist_upload_mode,
+            gist_target_account=gist_target_account,
+            gist_readme_service=gist_readme_service,
         )
 
         if allow_md_write:
@@ -4704,11 +4742,12 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         staged_files: List[str],
         committed_examples: list,
         family_config,
-    ) -> Dict[str, List[str]]:
+        git_root: Optional[Path] = None,
+    ) -> Dict[str, List[Tuple[str, str]]]:
         """Categorize staged files by content root (blog, kb, docs, etc.).
 
         Uses ExampleRecord.topic when available, falls back to filename stem.
-        Returns {category: [topic_strings]}.
+        Returns {category: [(relative_path, topic)]}.
         """
         content_roots = family_config.content_roots or []
         content_pattern = family_config.content_pattern or {}
@@ -4733,22 +4772,30 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             if ex.topic:
                 topics_by_file[key].add(ex.topic)
 
-        result: Dict[str, List[str]] = {}
+        result: Dict[str, List[Tuple[str, str]]] = {}
         for category, files in categorized.items():
             if not files:
                 continue
-            topics: set = set()
+            entries: List[Tuple[str, str]] = []
             for fp in files:
                 key = str(Path(fp).resolve())
-                if key in topics_by_file and topics_by_file[key]:
-                    topics.update(topics_by_file[key])
+                # Compute relative path for display
+                try:
+                    rel = str(Path(fp).relative_to(git_root)) if git_root else str(Path(fp))
+                except ValueError:
+                    rel = str(Path(fp))
+                # Pick primary topic
+                file_topics = sorted(topics_by_file.get(key, set()))
+                if file_topics:
+                    topic = file_topics[0]
                 else:
                     stem = Path(fp).stem
-                    if stem not in ("index", "_index"):
-                        cleaned = stem.replace("-", " ").replace("_", " ").strip()
-                        if cleaned:
-                            topics.add(cleaned)
-            result[category] = sorted(topics)[:5]
+                    if stem in ("index", "_index"):
+                        continue  # no useful name without a topic record
+                    topic = stem.replace("-", " ").replace("_", " ").strip()
+                if topic:
+                    entries.append((rel, topic))
+            result[category] = entries[:5]
 
         return result
 
@@ -4760,7 +4807,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         staged_files: List[str],
         commit_stats: Dict[str, Any],
         phase_results: Dict[str, Any],
-        categorized_topics: Dict[str, List[str]],
+        categorized_topics: Dict[str, List[Tuple[str, str]]],
         format_name: str = "compact",
     ) -> str:
         """Build the full commit message using the chosen format."""
@@ -4965,15 +5012,15 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
     # ── Shared: category line builder ─────────────────────────────────
 
     @staticmethod
-    def _format_category_lines(categorized_topics: Dict[str, List[str]]) -> List[str]:
-        """Build category summary lines from {category: [topics]}."""
+    def _format_category_lines(categorized_topics: Dict[str, List[Tuple[str, str]]]) -> List[str]:
+        """Build category summary lines from {category: [(path, topic)]}."""
         lines = []
-        for category, topics in categorized_topics.items():
-            if topics:
-                topic_list = ", ".join(topics)
-                count = len(topics)
-                lines.append(f"{category.title()}: {count} {'file' if count == 1 else 'files'} ({topic_list})")
-            # Omit categories with no topics
+        for category, entries in categorized_topics.items():
+            if entries:
+                count = len(entries)
+                lines.append(f"{category.title()}: {count} {'file' if count == 1 else 'files'}")
+                for path, topic in entries:
+                    lines.append(f"- Path: {path}")
         return lines
 
     # ── End commit message helpers ────────────────────────────────────
@@ -5067,6 +5114,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             logger.info(f"Committing to branch '{content_branch}' in {git_root}")
 
             # Stage all candidate files - paths relative to git root
+            candidate_rel_paths: List[str] = []
             for file_path in candidate_files:
                 abs_path = Path(file_path).resolve()
                 try:
@@ -5075,6 +5123,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     # File not under git root, use as-is
                     rel_path = file_path
 
+                candidate_rel_paths.append(str(rel_path))
                 subprocess.run(
                     ["git", "add", str(rel_path)],
                     cwd=git_root,
@@ -5083,8 +5132,9 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 )
 
             # CRITICAL: Query what was ACTUALLY staged (git-verified truth)
+            # Scope to candidate files only — avoids picking up pre-staged files from other runs
             git_status_result = subprocess.run(
-                ["git", "diff", "--cached", "--name-only"],
+                ["git", "diff", "--cached", "--name-only", "--"] + candidate_rel_paths,
                 cwd=git_root,
                 capture_output=True,
                 text=True,
@@ -5127,7 +5177,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             # Categorize staged files by content root
             family_config = self.config_manager.load_family_config(family)
             categorized_topics = self._categorize_staged_files(
-                staged_files, committed_examples, family_config,
+                staged_files, committed_examples, family_config, git_root=git_root,
             )
 
             # Build commit message using configured format
@@ -5138,8 +5188,9 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 commit_stats, phase_results or {}, categorized_topics, commit_format,
             )
 
+            # Selective commit — scope to current run's staged files only
             result = subprocess.run(
-                ["git", "commit", "-m", full_message],
+                ["git", "commit", "-m", full_message, "--"] + staged_relative_paths,
                 cwd=git_root,
                 capture_output=True,
                 text=True,

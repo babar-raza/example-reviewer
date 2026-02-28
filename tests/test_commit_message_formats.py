@@ -181,14 +181,20 @@ class TestFormatCompact:
         examples = [_make_example("ex1")]
         staged = ["/repo/file.md"]
         stats = _default_commit_stats(compile_first_try=1, runtime_first_try=1, runtime_total=1)
-        categories = {"blog": ["compression", "encryption"], "kb": ["extraction"]}
+        categories = {
+            "blog": [("blog/compress.md", "compression"), ("blog/encrypt.md", "encryption")],
+            "kb": [("kb/extract.md", "extraction")],
+        }
 
         msg = orch._format_compact(
             "zip", "run1234567890abcd", examples, staged,
             stats, {"discovery": {"examples_found": 1}}, categories,
         )
-        assert "Blog: 2 files (compression, encryption)" in msg
-        assert "Kb: 1 file (extraction)" in msg
+        assert "Blog: 2 files" in msg
+        assert "- Path: blog/compress.md" in msg
+        assert "- Path: blog/encrypt.md" in msg
+        assert "Kb: 1 file" in msg
+        assert "- Path: kb/extract.md" in msg
 
 
 # ── Format: Detailed ─────────────────────────────────────────────────
@@ -596,21 +602,27 @@ class TestCategorizeFiles:
     """Test _categorize_staged_files() and _format_category_lines()."""
 
     def test_format_category_lines_singular(self):
-        lines = Orchestrator._format_category_lines({"blog": ["compression"]})
-        assert lines == ["Blog: 1 file (compression)"]
+        lines = Orchestrator._format_category_lines({"blog": [("blog/compress.md", "compression")]})
+        assert lines == ["Blog: 1 file", "- Path: blog/compress.md"]
 
     def test_format_category_lines_plural(self):
-        lines = Orchestrator._format_category_lines({"blog": ["compression", "encryption"]})
-        assert lines == ["Blog: 2 files (compression, encryption)"]
+        lines = Orchestrator._format_category_lines({
+            "blog": [("blog/compress.md", "compression"), ("blog/encrypt.md", "encryption")]
+        })
+        assert lines == [
+            "Blog: 2 files",
+            "- Path: blog/compress.md",
+            "- Path: blog/encrypt.md",
+        ]
 
     def test_empty_categories_omitted(self):
         lines = Orchestrator._format_category_lines({
-            "blog": ["compression"],
+            "blog": [("blog/compress.md", "compression")],
             "kb": [],
-            "docs": ["tables"],
+            "docs": [("docs/tables.md", "tables")],
         })
-        # kb is empty, should not appear
-        assert len(lines) == 2
+        # kb is empty, should not appear; each non-empty category = 1 header + N bullets
+        assert len(lines) == 4  # 2 headers + 2 bullet lines
         assert any("Blog" in l for l in lines)
         assert any("Docs" in l for l in lines)
         assert not any("Kb" in l for l in lines)

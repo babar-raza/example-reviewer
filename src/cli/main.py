@@ -684,12 +684,16 @@ def main() -> int:
     scan_parser.add_argument('--family', '-f', type=str, help='Family identifier')
     scan_parser.add_argument('--directory', '-d', type=str, help='Directory to scan')
     scan_parser.add_argument('--max-files', type=int, help='Maximum files to scan')
-    
+    scan_parser.add_argument('--content-roots', nargs='+', metavar='PATH',
+                             help='Override content_roots from family config (space-separated paths)')
+
     # Extract command
     extract_parser = subparsers.add_parser('extract', help='Extract code examples')
     extract_parser.add_argument('--family', '-f', type=str, required=True,
                                 help='Family identifier')
     extract_parser.add_argument('--max-files', type=int, help='Maximum files to process')
+    extract_parser.add_argument('--content-roots', nargs='+', metavar='PATH',
+                                help='Override content_roots from family config (space-separated paths)')
     
     # Compile verify command
     compile_verify_parser = subparsers.add_parser('compile-verify',
@@ -781,6 +785,8 @@ def main() -> int:
                             help='REQUIRED to write .md files (safety guard)')
     run_parser.add_argument('--commit', action='store_true',
                             help='Commit verified changes to git (overrides config)')
+    run_parser.add_argument('--content-roots', nargs='+', metavar='PATH',
+                            help='Override content_roots from family config (space-separated paths)')
 
     # List families command
     list_parser = subparsers.add_parser('list-families',
@@ -932,12 +938,14 @@ def main() -> int:
             family=args.family,
             directory=args.directory,
             max_files=args.max_files,
+            content_roots=getattr(args, 'content_roots', None),
         )
-    
+
     elif args.command == 'extract':
         result = tools.extract(
             family=args.family,
             max_files=args.max_files,
+            content_roots=getattr(args, 'content_roots', None),
         )
     
     elif args.command == 'compile-verify':
@@ -1012,6 +1020,7 @@ def main() -> int:
             allow_md_write=getattr(args, 'allow_md_write', False),
             allow_commit=getattr(args, 'commit', False),
             strategy_config=strategy_config,
+            content_roots=getattr(args, 'content_roots', None),
         )
     
     elif args.command == 'list-families':

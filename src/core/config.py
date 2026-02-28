@@ -170,6 +170,10 @@ class GistConfig(BaseModel):
         default="Verified example from {family} - {file_path}",
         description="Template for gist descriptions"
     )
+    readme_generation: bool = Field(
+        default=True,
+        description="Generate README.md for gists using LLM (with template fallback)"
+    )
 
 
 class APICatalogConfig(BaseModel):

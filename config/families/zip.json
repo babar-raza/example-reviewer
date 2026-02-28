@@ -88,7 +88,7 @@
   },
   "gist": {
     "enabled": true,
-    "pat_env_var": "GITHUB_PAT"
+    "pat_env_var": "GITHUB_GIST_TOKEN"
   },
   "discovery_patterns": {
     "fence_patterns": [

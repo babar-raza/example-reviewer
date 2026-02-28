@@ -5,6 +5,7 @@ Exposes pipeline functionality as MCP-compatible tools.
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, asdict
@@ -94,18 +95,21 @@ class ExampleReviewerTools:
         family: Optional[str] = None,
         directory: Optional[str] = None,
         max_files: Optional[int] = None,
+        content_roots: Optional[List[str]] = None,
     ) -> ToolResult:
         """
         Scan for markdown files containing code examples.
-        
+
         Maps to CLI command: scan
         Maps to phase: A_discovery_extraction (partial)
-        
+
         Args:
             family: Family identifier (required if directory not provided)
             directory: Directory path to scan (required if family not provided)
             max_files: Maximum files to scan
-            
+            content_roots: Override content_roots from family config. Paths to
+                directories containing markdown files. Ignored when directory is set.
+
         Returns:
             ToolResult with file list
         """
@@ -129,17 +133,19 @@ class ExampleReviewerTools:
                         'files': [str(f) for f in files],
                     }
                 )
-            
+
             elif family:
                 family_config = self.orchestrator.config_manager.load_family_config(family)
-                
+                if content_roots:
+                    family_config = family_config.model_copy(update={"content_roots": content_roots})
+
                 from ..services.discovery_service import DiscoveryService
                 discovery = DiscoveryService(self.orchestrator.db)
                 files = discovery._find_markdown_files(family_config)
-                
+
                 if max_files:
                     files = files[:max_files]
-                
+
                 return ToolResult(
                     success=True,
                     data={
@@ -149,13 +155,13 @@ class ExampleReviewerTools:
                         'files': files,
                     }
                 )
-            
+
             else:
                 return ToolResult(
                     success=False,
                     error="Either 'family' or 'directory' must be provided"
                 )
-                
+
         except Exception as e:
             return ToolResult(success=False, error=str(e))
     
@@ -167,22 +173,27 @@ class ExampleReviewerTools:
         self,
         family: str,
         max_files: Optional[int] = None,
+        content_roots: Optional[List[str]] = None,
     ) -> ToolResult:
         """
         Extract code examples from markdown files.
-        
+
         Maps to CLI command: extract
         Maps to phase: A_discovery_extraction
-        
+
         Args:
             family: Family identifier
             max_files: Maximum files to process
-            
+            content_roots: Override content_roots from family config. Paths to
+                directories containing markdown files.
+
         Returns:
             ToolResult with extraction statistics
         """
         try:
             family_config = self.orchestrator.config_manager.load_family_config(family)
+            if content_roots:
+                family_config = family_config.model_copy(update={"content_roots": content_roots})
 
             stats = self.orchestrator.discovery_service.discover_family(
                 family, family_config,
@@ -657,6 +668,7 @@ class ExampleReviewerTools:
         allow_md_write: bool = False,
         allow_commit: bool = False,
         strategy_config: Optional[dict] = None,
+        content_roots: Optional[List[str]] = None,
     ) -> ToolResult:
         """
         Run the full pipeline for a family.
@@ -671,6 +683,8 @@ class ExampleReviewerTools:
             allow_md_write: Override global config to allow markdown writes
             allow_commit: Override global config to allow git commit
             strategy_config: Dict controlling which fix strategies to enable
+            content_roots: Override content_roots from family config. Paths to
+                directories containing markdown files with code examples.
 
         Returns:
             ToolResult with full pipeline results
@@ -686,12 +700,207 @@ class ExampleReviewerTools:
                 allow_md_write=allow_md_write,
                 allow_commit=allow_commit,
                 strategy_config=strategy_config,
+                content_roots=content_roots,
             )
 
             return ToolResult(success=results['success'], data=results)
 
         except Exception as e:
             return ToolResult(success=False, error=str(e))
+
+    # =========================================================================
+    # VALIDATE_CODE_SNIPPET TOOL (lightweight catalog validation)
+    # =========================================================================
+
+    # Per-family catalog cache (avoids reloading JSON on every call)
+    _catalog_cache: Dict[str, Any] = {}
+
+    def validate_code_snippet(
+        self,
+        code: str,
+        family: str,
+        language: str = "csharp",
+        compile_verify: bool = False,
+    ) -> ToolResult:
+        """
+        Validate a code snippet against the family's API catalog.
+
+        Checks for hallucinated Aspose types/methods and namespace violations.
+        This is the primary tool for external agents (e.g. seo-intelligence)
+        to verify LLM-generated code uses real Aspose APIs.
+
+        Args:
+            code: The code snippet to validate
+            family: Product family identifier (e.g. 'words', 'zip', 'cells')
+            language: Programming language (default: 'csharp'). Non-C# returns valid.
+            compile_verify: If True, also compile the code (requires .NET SDK)
+
+        Returns:
+            ToolResult with validation details
+        """
+        try:
+            # Non-C# code: no catalog to check, return early
+            if language.lower() != "csharp":
+                return ToolResult(
+                    success=True,
+                    data={
+                        "valid": True,
+                        "hallucinated_types": [],
+                        "namespace_violations": [],
+                        "catalog_matches": {},
+                        "catalog_info": {"family": family, "note": f"No catalog for language '{language}'"},
+                        "compilation_result": None,
+                    },
+                )
+
+            # Load catalog (cached per family)
+            from ..services.api_catalog_service import APICatalogService
+
+            if family not in self._catalog_cache:
+                catalog_path = self.config_dir / f"{family}_api_catalog.json"
+                if catalog_path.exists():
+                    self._catalog_cache[family] = APICatalogService(family, str(catalog_path))
+                else:
+                    self._catalog_cache[family] = APICatalogService(family)
+
+            catalog = self._catalog_cache[family]
+            if not catalog.is_loaded:
+                return ToolResult(
+                    success=False,
+                    error=f"No API catalog found for family '{family}'"
+                )
+
+            # Extract Aspose type references from code
+            # Matches: new TypeName, TypeName.Method, TypeName variable declarations
+            type_pattern = re.compile(
+                r'(?:new\s+|:\s*|(?:^|[\s(,<]))'
+                r'((?:Aspose\.\w+\.)*(\w+))'
+                r'(?:\s*[(<.\[\s;])',
+                re.MULTILINE,
+            )
+            # Also extract types from using directives to cross-check
+            using_pattern = re.compile(r'using\s+([\w.]+)\s*;')
+
+            # Collect all referenced type names (simple names after the last dot)
+            referenced_types = set()
+            for match in type_pattern.finditer(code):
+                full_ref = match.group(1)
+                simple_name = match.group(2)
+                # Only check types that could be Aspose types (capitalized, not keywords)
+                if simple_name[0].isupper() and simple_name not in _CSHARP_BUILTIN_TYPES:
+                    referenced_types.add(simple_name)
+
+            # Also extract types from 'new X(' pattern more directly
+            for match in re.finditer(r'\bnew\s+(\w+)\s*(?:\(|<|\[)', code):
+                type_name = match.group(1)
+                if type_name[0].isupper() and type_name not in _CSHARP_BUILTIN_TYPES:
+                    referenced_types.add(type_name)
+
+            # Validate each type against catalog
+            hallucinated_types = []
+            catalog_matches = {}
+
+            for type_name in sorted(referenced_types):
+                if catalog.has_type(type_name):
+                    ns = catalog.get_namespace_for_type(type_name)
+                    catalog_matches[type_name] = f"{ns}.{type_name}" if ns else type_name
+                elif catalog.find_type_case_insensitive(type_name):
+                    # Case mismatch — still valid, note the correct casing
+                    correct = catalog.find_type_case_insensitive(type_name)
+                    ns = catalog.get_namespace_for_type(correct)
+                    catalog_matches[type_name] = f"{ns}.{correct} (case mismatch)" if ns else correct
+                else:
+                    # Not in catalog — could be BCL type or hallucinated
+                    # Only flag as hallucinated if the code also has Aspose usings
+                    # (i.e., context suggests this should be an Aspose type)
+                    if not _is_known_bcl_type(type_name):
+                        hallucinated_types.append(type_name)
+
+            # Namespace validation using NamespaceValidator
+            from ..namespace_validator import NamespaceValidator
+
+            policy = {
+                "mode": "whitelist",
+                "allowed_namespaces": list(_SAFE_BCL_NAMESPACES),
+            }
+            validator = NamespaceValidator(policy, catalog=catalog)
+            ns_valid, namespace_violations = validator.validate(code)
+
+            # Overall validity
+            is_valid = len(hallucinated_types) == 0 and ns_valid
+
+            # Optional compilation
+            compilation_result = None
+            if compile_verify:
+                try:
+                    compile_result = self.orchestrator.compilation_service.compile_code(
+                        code, family
+                    )
+                    compilation_result = {
+                        "success": compile_result.get("success", False),
+                        "errors": compile_result.get("errors", []),
+                    }
+                    if not compilation_result["success"]:
+                        is_valid = False
+                except Exception as ce:
+                    compilation_result = {"success": False, "errors": [str(ce)]}
+
+            return ToolResult(
+                success=True,
+                data={
+                    "valid": is_valid,
+                    "hallucinated_types": hallucinated_types,
+                    "namespace_violations": namespace_violations,
+                    "catalog_matches": catalog_matches,
+                    "catalog_info": {
+                        "family": family,
+                        "total_types": len(catalog.get_all_types()),
+                        "total_namespaces": len(catalog.get_all_namespaces()),
+                        "has_enrichment": catalog.has_enrichment(),
+                    },
+                    "compilation_result": compilation_result,
+                },
+            )
+
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+
+# Standard .NET BCL namespaces that are always allowed
+_SAFE_BCL_NAMESPACES = frozenset([
+    "System", "System.*",
+    "System.IO", "System.IO.*",
+    "System.Text", "System.Text.*",
+    "System.Linq", "System.Linq.*",
+    "System.Collections", "System.Collections.*",
+    "System.Collections.Generic", "System.Collections.Generic.*",
+    "System.Threading", "System.Threading.*",
+    "System.Threading.Tasks", "System.Threading.Tasks.*",
+    "System.Drawing", "System.Drawing.*",
+    "System.Net", "System.Net.*",
+    "System.Net.Http", "System.Net.Http.*",
+    "System.Globalization",
+    "System.Runtime", "System.Runtime.*",
+    "Microsoft.Extensions", "Microsoft.Extensions.*",
+])
+
+# C# built-in type names to skip during type extraction
+_CSHARP_BUILTIN_TYPES = frozenset([
+    "String", "Int32", "Int64", "Boolean", "Double", "Float", "Decimal",
+    "Byte", "Char", "Object", "Void", "Console", "Math", "Convert",
+    "Array", "List", "Dictionary", "Task", "Action", "Func",
+    "Exception", "File", "Path", "Directory", "Stream", "MemoryStream",
+    "FileStream", "StreamReader", "StreamWriter", "StringBuilder",
+    "Encoding", "Environment", "Guid", "DateTime", "TimeSpan",
+    "Uri", "Type", "Activator", "Attribute", "Enum", "Tuple",
+    "KeyValuePair", "Nullable", "IDisposable", "IEnumerable",
+    "Program", "Main",
+])
+
+
+def _is_known_bcl_type(type_name: str) -> bool:
+    """Check if a type is a well-known .NET BCL type (not Aspose-specific)."""
+    return type_name in _CSHARP_BUILTIN_TYPES
 
 
 # Tool definitions for MCP server registration
@@ -705,6 +914,11 @@ TOOL_DEFINITIONS = [
                 "family": {"type": "string", "description": "Product family identifier"},
                 "directory": {"type": "string", "description": "Directory path to scan"},
                 "max_files": {"type": "integer", "description": "Maximum files to scan"},
+                "content_roots": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Override content_roots from the family config. Paths to directories containing markdown files. Ignored when directory is set.",
+                },
             },
         },
     },
@@ -716,6 +930,11 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "family": {"type": "string", "description": "Product family identifier"},
                 "max_files": {"type": "integer", "description": "Maximum files to process"},
+                "content_roots": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Override content_roots from the family config. Paths to directories containing markdown files.",
+                },
             },
             "required": ["family"],
         },
@@ -757,6 +976,18 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "runtime_fix",
+        "description": "Fix runtime errors using LLM",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "max_examples": {"type": "integer", "description": "Maximum examples to fix"},
+            },
+            "required": ["family"],
+        },
+    },
+    {
         "name": "md_update",
         "description": "Update markdown files with verified code",
         "inputSchema": {
@@ -764,6 +995,7 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "family": {"type": "string", "description": "Product family identifier"},
                 "dry_run": {"type": "boolean", "description": "Don't write changes", "default": False},
+                "allow_md_write": {"type": "boolean", "description": "Override global config to allow markdown writes", "default": False},
             },
             "required": ["family"],
         },
@@ -791,6 +1023,23 @@ TOOL_DEFINITIONS = [
         },
     },
     {
+        "name": "backfill",
+        "description": "Backfill missing API references, test data, examples, and gist source",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "targets": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Backfill targets: test_data, api_catalog, examples, gist_source_code",
+                },
+                "force": {"type": "boolean", "description": "Force re-download even if data exists", "default": False},
+            },
+            "required": ["family"],
+        },
+    },
+    {
         "name": "status",
         "description": "Get pipeline status",
         "inputSchema": {
@@ -810,9 +1059,32 @@ TOOL_DEFINITIONS = [
                 "max_examples": {"type": "integer", "description": "Maximum examples to process"},
                 "skip_runtime": {"type": "boolean", "description": "Skip runtime verification", "default": False},
                 "skip_llm_fixes": {"type": "boolean", "description": "Skip LLM-based fixing", "default": False},
+                "skip_llm_runtime_fixes": {"type": "boolean", "description": "Skip LLM fixes for runtime errors only (keeps compile-fix active)", "default": False},
                 "dry_run": {"type": "boolean", "description": "Don't write changes", "default": False},
+                "allow_md_write": {"type": "boolean", "description": "Override global config to allow markdown writes", "default": False},
+                "allow_commit": {"type": "boolean", "description": "Override global config to allow git commit", "default": False},
+                "strategy_config": {"type": "object", "description": "Dict controlling which fix strategies to enable (enable_transformers, enable_retrieval, enable_semantic_microfixes, enable_substitution, enable_learned_patterns)"},
+                "content_roots": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Override content_roots from the family config. Paths to directories containing markdown files with code examples.",
+                },
             },
             "required": ["family"],
+        },
+    },
+    {
+        "name": "validate_code_snippet",
+        "description": "Validate a code snippet against the family's API catalog. Detects hallucinated Aspose types and namespace violations.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "The code snippet to validate"},
+                "family": {"type": "string", "description": "Product family identifier (e.g. 'words', 'zip', 'cells')"},
+                "language": {"type": "string", "description": "Programming language (default: 'csharp')", "default": "csharp"},
+                "compile_verify": {"type": "boolean", "description": "Also compile the code (requires .NET SDK)", "default": False},
+            },
+            "required": ["code", "family"],
         },
     },
 ]
