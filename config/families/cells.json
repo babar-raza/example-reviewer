@@ -26,7 +26,9 @@
       "version_strategy": "latest_stable"
     },
     "additional_packages": [],
-    "target_frameworks": ["net8.0"]
+    "target_frameworks": [
+      "net8.0"
+    ]
   },
   "code_defaults": {
     "default_usings": [
@@ -54,24 +56,44 @@
     ],
     "blacklist": []
   },
-  "patterns": [],
-  "non_existent_apis": [],
   "api_patterns": {},
   "runtime_validation": {
     "enabled": true,
     "mode": "lenient",
     "timeout_seconds": 30,
     "required_files": [
-      "sample.xlsx", "sample.xls", "sample.csv",
-      "Workbook.xlsx", "input.xlsx"
+      "sample.xlsx",
+      "sample.xls",
+      "sample.csv",
+      "Workbook.xlsx",
+      "input.xlsx"
     ],
     "required_dirs": [],
     "file_aliases": {
-      "sample.xlsx": ["input.xlsx", "source.xlsx", "test.xlsx", "example.xlsx"],
-      "sample.xls": ["input.xls", "source.xls", "test.xls", "example.xls"],
-      "Workbook.xlsx": ["workbook.xlsx", "data.xlsx", "template.xlsx"]
+      "sample.xlsx": [
+        "input.xlsx",
+        "source.xlsx",
+        "test.xlsx",
+        "example.xlsx"
+      ],
+      "sample.xls": [
+        "input.xls",
+        "source.xls",
+        "test.xls",
+        "example.xls"
+      ],
+      "Workbook.xlsx": [
+        "workbook.xlsx",
+        "data.xlsx",
+        "template.xlsx"
+      ]
     },
-    "expected_outputs": ["*.xlsx", "*.pdf", "*.csv", "output/*.xlsx"],
+    "expected_outputs": [
+      "*.xlsx",
+      "*.pdf",
+      "*.csv",
+      "output/*.xlsx"
+    ],
     "env": {}
   },
   "test_data": {
@@ -94,7 +116,12 @@
     "fence_patterns": [
       "^```(\\w+|c#)\\s*\\n(.*?)^```"
     ],
-    "validatable_languages": ["cs", "csharp", "c#", "C#"],
+    "validatable_languages": [
+      "cs",
+      "csharp",
+      "c#",
+      "C#"
+    ],
     "normalize_to_canonical": true,
     "regex_timeout_seconds": 5.0,
     "context_extraction": {
@@ -104,7 +131,10 @@
     },
     "gist_extraction": {
       "enabled": true,
-      "allowed_owners": ["aspose-com-gists", "aspose-cells"],
+      "allowed_owners": [
+        "aspose-com-gists",
+        "aspose-cells"
+      ],
       "blocked_owners": []
     }
   },

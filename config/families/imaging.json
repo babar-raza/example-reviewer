@@ -62,8 +62,6 @@
     ],
     "blacklist": []
   },
-  "patterns": [],
-  "non_existent_apis": [],
   "api_patterns": {},
   "runtime_validation": {
     "enabled": true,
@@ -78,11 +76,25 @@
     ],
     "required_dirs": [],
     "file_aliases": {
-      "sample.png": ["PNG/aspose_logo.png", "PNG/template.png"],
-      "sample.jpg": ["JPEG/aspose-logo.jpg", "JPEG/test.jpg"],
-      "sample.bmp": ["Bmp/Rle4.bmp", "PNG/template.bmp"],
-      "sample.gif": ["GIF/ezgif.com-gif-maker(1)___.gif"],
-      "sample.tiff": ["Tiff/Sample.tif", "Tiff/lichee.tif"]
+      "sample.png": [
+        "PNG/aspose_logo.png",
+        "PNG/template.png"
+      ],
+      "sample.jpg": [
+        "JPEG/aspose-logo.jpg",
+        "JPEG/test.jpg"
+      ],
+      "sample.bmp": [
+        "Bmp/Rle4.bmp",
+        "PNG/template.bmp"
+      ],
+      "sample.gif": [
+        "GIF/ezgif.com-gif-maker(1)___.gif"
+      ],
+      "sample.tiff": [
+        "Tiff/Sample.tif",
+        "Tiff/lichee.tif"
+      ]
     },
     "expected_outputs": [],
     "env": {}

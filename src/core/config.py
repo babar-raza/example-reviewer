@@ -459,7 +459,6 @@ class FinalReviewConfig(BaseModel):
     provider: str = Field(default="anthropic", description="LLM provider for final review")
     model: str = Field(default="claude-3-5-sonnet-latest", description="Model for final review")
     timeout_seconds: int = Field(default=30, ge=1, description="Timeout for final review calls")
-    enforce_model: bool = Field(default=True, description="Enforce specific model usage")
     confidence_threshold: float = Field(default=0.85, ge=0.0, le=1.0, description="Confidence threshold for intent drift rejection")
     auto_remediation_enabled: bool = Field(
         default=False,
@@ -553,7 +552,7 @@ class TimeoutsConfig(BaseModel):
     per_example_seconds: int = Field(default=300, ge=1, description="Timeout per example processing")
     per_phase_seconds: int = Field(default=1800, ge=1, description="Timeout per pipeline phase")
     hard_run_timeout_seconds: int = Field(default=2400, ge=1, description="Hard timeout for entire run")
-    allow_timeout_override: bool = Field(default=False, description="Allow CLI timeout overrides")
+
 
 
 class SubstitutionConfig(BaseModel):
@@ -636,6 +635,24 @@ class ProviderConfig(BaseModel):
     pull_timeout_seconds: int = 600
 
 
+class CircuitBreakerConfig(BaseModel):
+    """Circuit breaker configuration for LLM provider health monitoring.
+
+    Monitors primary LLM endpoint (professionalize.LLM) health across calls
+    and proactively routes to fallback (Ollama) when primary is detected flaky.
+
+    Thresholds are calibrated for LLM workloads (expensive calls, clustered failures).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="Enable circuit breaker (auto-enabled when fallback configured)")
+    failure_threshold: int = Field(default=3, ge=1, description="Consecutive primary failures before opening circuit")
+    error_rate_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description=">50% error rate in rolling window opens circuit")
+    window_size: int = Field(default=10, ge=2, description="Rolling window size for error rate evaluation")
+    latency_threshold_s: float = Field(default=30.0, gt=0, description="Average latency (seconds) above this opens circuit")
+    recovery_timeout_s: float = Field(default=60.0, gt=0, description="Seconds in OPEN state before probing primary (HALF_OPEN)")
+
+
 class ModelRoutingConfig(BaseModel):
     """Model routing and fallback configuration."""
     model_config = ConfigDict(extra="forbid")
@@ -647,6 +664,10 @@ class ModelRoutingConfig(BaseModel):
     track_cost: bool = False
     fallback_on_timeout: bool = True
     fallback_on_error: bool = True
+    circuit_breaker: CircuitBreakerConfig = Field(
+        default_factory=CircuitBreakerConfig,
+        description="Passive circuit breaker for proactive fallback routing based on latency/error rate"
+    )
 
 
 class GlobalConfig(BaseModel):
@@ -678,8 +699,6 @@ class GlobalConfig(BaseModel):
 
     # Database configuration
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
-    # Keep for backward compatibility (deprecated)
-    database_path: Optional[str] = Field(default=None, description="DEPRECATED: Use database.path instead")
 
 
 class NuGetPackage(BaseModel):
@@ -823,9 +842,7 @@ class FamilyConfig(BaseModel):
     cs_discovery: CSDiscoveryConfig = Field(default_factory=CSDiscoveryConfig)
 
     # Patterns and hints
-    patterns: List[Dict[str, Any]] = Field(default_factory=list)
     api_patterns: Dict[str, Any] = Field(default_factory=dict)
-    non_existent_apis: List[str] = Field(default_factory=list)
     discovery_patterns: Optional[DiscoveryPatternsConfig] = None
 
     # Learned patterns (auto-learn module)
@@ -959,18 +976,9 @@ class ConfigurationManager:
         if 'artifact_store_path' in data:
             parsed['artifact_store_path'] = data['artifact_store_path']
 
-        # Database configuration with backward compatibility
+        # Database configuration
         if 'database' in data:
             parsed['database'] = DatabaseConfig(**data['database'])
-        elif 'database_path' in data:
-            # Backward compatibility: old database_path field
-            logger.warning("Config field 'database_path' is deprecated. Use 'database.path' instead.")
-            parsed['database'] = DatabaseConfig(path=data['database_path'])
-            parsed['database_path'] = data['database_path']  # Keep for legacy code
-
-        # Keep database_path for backward compatibility if set separately
-        if 'database_path' in data and 'database' not in data:
-            parsed['database_path'] = data['database_path']
 
         return GlobalConfig(**parsed)
     
@@ -1048,8 +1056,8 @@ class ConfigurationManager:
         
         # Simple fields
         for key in ['display_name', 'auto_commit', 'commit_message_template', 
-                    'content_roots', 'content_pattern', 'patterns', 
-                    'api_patterns', 'non_existent_apis']:
+                    'content_roots', 'content_pattern',
+                    'api_patterns']:
             if key in data:
                 parsed[key] = data[key]
         

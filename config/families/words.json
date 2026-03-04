@@ -24,7 +24,9 @@
       "version_strategy": "latest_stable"
     },
     "additional_packages": [],
-    "target_frameworks": ["net8.0"]
+    "target_frameworks": [
+      "net8.0"
+    ]
   },
   "code_defaults": {
     "default_usings": [
@@ -56,26 +58,59 @@
     ],
     "blacklist": []
   },
-  "patterns": [],
-  "non_existent_apis": [],
   "api_patterns": {},
   "runtime_validation": {
     "enabled": true,
     "mode": "lenient",
     "timeout_seconds": 30,
     "required_files": [
-      "Document.docx", "Document.doc", "Document.html", "Document.odt",
-      "Blank.docx", "Bookmarks.docx", "Comments.docx", "Tables.docx",
+      "Document.docx",
+      "Document.doc",
+      "Document.html",
+      "Document.odt",
+      "Blank.docx",
+      "Bookmarks.docx",
+      "Comments.docx",
+      "Tables.docx",
       "English text.txt"
     ],
-    "required_dirs": ["Images", "Database"],
+    "required_dirs": [
+      "Images",
+      "Database"
+    ],
     "file_aliases": {
-      "Document.docx": ["input.docx", "source.docx", "sample.docx", "example.docx", "test.docx"],
-      "Document.doc": ["input.doc", "source.doc", "sample.doc", "example.doc"],
-      "Blank.docx": ["empty.docx", "new.docx", "template.docx", "output.docx"],
-      "Images": ["images", "Pictures", "pictures", "Resources"]
+      "Document.docx": [
+        "input.docx",
+        "source.docx",
+        "sample.docx",
+        "example.docx",
+        "test.docx"
+      ],
+      "Document.doc": [
+        "input.doc",
+        "source.doc",
+        "sample.doc",
+        "example.doc"
+      ],
+      "Blank.docx": [
+        "empty.docx",
+        "new.docx",
+        "template.docx",
+        "output.docx"
+      ],
+      "Images": [
+        "images",
+        "Pictures",
+        "pictures",
+        "Resources"
+      ]
     },
-    "expected_outputs": ["*.docx", "*.pdf", "*.html", "output/*.docx"],
+    "expected_outputs": [
+      "*.docx",
+      "*.pdf",
+      "*.html",
+      "output/*.docx"
+    ],
     "env": {}
   },
   "test_data": {
@@ -98,7 +133,12 @@
     "fence_patterns": [
       "^```(\\w+|c#)\\s*\\n(.*?)^```"
     ],
-    "validatable_languages": ["cs", "csharp", "c#", "C#"],
+    "validatable_languages": [
+      "cs",
+      "csharp",
+      "c#",
+      "C#"
+    ],
     "normalize_to_canonical": true,
     "regex_timeout_seconds": 5.0,
     "context_extraction": {
@@ -108,7 +148,10 @@
     },
     "gist_extraction": {
       "enabled": false,
-      "allowed_owners": ["aspose-com-gists", "aspose-words"],
+      "allowed_owners": [
+        "aspose-com-gists",
+        "aspose-words"
+      ],
       "blocked_owners": []
     },
     "require_code_indicators": [],

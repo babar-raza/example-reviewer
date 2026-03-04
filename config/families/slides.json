@@ -55,8 +55,6 @@
     ],
     "blacklist": []
   },
-  "patterns": [],
-  "non_existent_apis": [],
   "api_patterns": {},
   "runtime_validation": {
     "enabled": true,

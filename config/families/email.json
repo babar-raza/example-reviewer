@@ -64,8 +64,6 @@
     ],
     "blacklist": []
   },
-  "patterns": [],
-  "non_existent_apis": [],
   "api_patterns": {},
   "runtime_validation": {
     "enabled": true,
@@ -78,9 +76,16 @@
     ],
     "required_dirs": [],
     "file_aliases": {
-      "sample.msg": ["Email/Message.msg"],
-      "sample.eml": ["Email/Message.eml", "Email/Attachments.eml"],
-      "sample.mbox": ["Thunderbird/ExampleMbox.mbox"]
+      "sample.msg": [
+        "Email/Message.msg"
+      ],
+      "sample.eml": [
+        "Email/Message.eml",
+        "Email/Attachments.eml"
+      ],
+      "sample.mbox": [
+        "Thunderbird/ExampleMbox.mbox"
+      ]
     },
     "expected_outputs": [],
     "env": {}

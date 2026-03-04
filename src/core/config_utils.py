@@ -53,9 +53,6 @@ def normalize_family_config(config: Dict[str, Any]) -> Dict[str, Any]:
     code_defaults.setdefault("default_usings", [])
     result["code_defaults"] = code_defaults
 
-    result.setdefault("patterns", [])
-    result.setdefault("non_existent_apis", [])
-
     return result
 
 

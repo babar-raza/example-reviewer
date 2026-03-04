@@ -146,7 +146,6 @@
     "base_url": "https://llm.professionalize.com/v1",
     "api_key_env_var": "litellm_key",
     "timeout_seconds": 60,
-    "enforce_model": true,
     "auto_remediation_enabled": false,
     "max_review_attempts": 2,
     "strict_mode": false,
@@ -167,8 +166,7 @@
     "code_execution_seconds": 30,
     "per_example_seconds": 300,
     "per_phase_seconds": 14400,
-    "hard_run_timeout_seconds": 21600,
-    "allow_timeout_override": false
+    "hard_run_timeout_seconds": 21600
   },
   "substitution": {
     "same_context_only": true
@@ -178,17 +176,6 @@
   },
   "context_harness": {
     "enabled": true
-  },
-  "model_discovery": {
-    "enabled": true,
-    "providers": {
-      "company": {
-        "base_url": "https://llm.professionalize.com/v1",
-        "api_key_env": "litellm_key",
-        "timeout_seconds": 10,
-        "fallback_to": "ollama"
-      }
-    }
   },
   "model_routing": {
     "enabled": true,
@@ -228,7 +215,15 @@
     "fallback_enabled": true,
     "track_cost": true,
     "fallback_on_timeout": true,
-    "fallback_on_error": true
+    "fallback_on_error": true,
+    "circuit_breaker": {
+      "enabled": true,
+      "failure_threshold": 3,
+      "error_rate_threshold": 0.5,
+      "window_size": 10,
+      "latency_threshold_s": 30.0,
+      "recovery_timeout_s": 60.0
+    }
   },
   "auto_learn": {
     "enabled": true,
@@ -246,25 +241,5 @@
   "database": {
     "path": "./data/example_reviewer.db",
     "production_path": "./data/example_reviewer_prod.db"
-  },
-  "content_url_patterns": {
-    "blog.aspose.net": {
-      "base_path": "content/blog.aspose.net/{product}",
-      "has_language_subfolder": false,
-      "english_pattern": "**/index.md",
-      "localized_pattern": "**/index.{lang}.md",
-      "notes": "blog.aspose.net does NOT have /en/ subfolder - English is index.md, other langs are index.{lang}.md"
-    },
-    "docs.aspose.net": {
-      "base_path": "content/docs.aspose.net/{product}",
-      "has_language_subfolder": true,
-      "english_pattern": "en/**/*.md",
-      "notes": "docs.aspose.net has /en/ subfolder for English content"
-    },
-    "kb.aspose.net": {
-      "base_path": "content/kb.aspose.net/{product}",
-      "has_language_subfolder": true,
-      "english_pattern": "en/**/*.md"
-    }
   }
 }

@@ -22,7 +22,9 @@
       "version_strategy": "latest_stable"
     },
     "additional_packages": [],
-    "target_frameworks": ["net8.0"]
+    "target_frameworks": [
+      "net8.0"
+    ]
   },
   "code_defaults": {
     "default_usings": [
@@ -35,13 +37,6 @@
       "Aspose.Zip.Rar"
     ]
   },
-  "patterns": [],
-  "non_existent_apis": [
-    "SaveAsync",
-    "CreateEntryAsync",
-    "ExtractAsync",
-    "OpenAsync"
-  ],
   "api_patterns": {
     "compression_basic": {
       "description": "Create archive with compression settings",
@@ -56,23 +51,94 @@
     "enabled": true,
     "mode": "lenient",
     "timeout_seconds": 30,
-    "required_files": ["sample.zip", "archive.zip", "outer.zip", "flatten.zip", "different_password.zip", "encrypted_password.zip", "archive.7z", "archive.gz", "sample.gz", "plrabn12.rar", "encrypted.rar", "alice29.txt", "sample.txt", "asyoulik.txt", "plrabn12.txt", "lcet10.txt"],
-    "required_dirs": ["sample_dir"],
+    "required_files": [
+      "sample.zip",
+      "archive.zip",
+      "outer.zip",
+      "flatten.zip",
+      "different_password.zip",
+      "encrypted_password.zip",
+      "archive.7z",
+      "archive.gz",
+      "sample.gz",
+      "plrabn12.rar",
+      "encrypted.rar",
+      "alice29.txt",
+      "sample.txt",
+      "asyoulik.txt",
+      "plrabn12.txt",
+      "lcet10.txt"
+    ],
+    "required_dirs": [
+      "sample_dir"
+    ],
     "file_aliases": {
-      "sample.zip": ["input.zip", "example.zip", "source.zip", "ZipFileToBeExtracted.zip", "parent.zip"],
-      "archive.zip": ["test.zip", "data.zip"],
-      "plrabn12.rar": ["archive.rar", "input.rar", "example.rar", "sample.rar", "data.rar"],
-      "encrypted.rar": ["encrypted_archive.rar", "password_protected.rar", "protected.rar"],
-      "archive.7z": ["input.7z", "protected.7z", "example.7z"],
-      "encrypted_password.zip": ["encrypted.zip", "protected.zip"],
-      "different_password.zip": ["password_protected.zip", "secure.zip"],
-      "sample_dir": ["input", "data", "sourceDir", "files", "input_folder"],
-      "alice29.txt": ["file.txt", "source.txt", "input.txt", "file1.txt", "file2.txt"],
-      "sample.txt": ["data.txt", "readme.txt"],
-      "asyoulik.txt": ["text1.txt"],
-      "plrabn12.txt": ["text2.txt"]
+      "sample.zip": [
+        "input.zip",
+        "example.zip",
+        "source.zip",
+        "ZipFileToBeExtracted.zip",
+        "parent.zip"
+      ],
+      "archive.zip": [
+        "test.zip",
+        "data.zip"
+      ],
+      "plrabn12.rar": [
+        "archive.rar",
+        "input.rar",
+        "example.rar",
+        "sample.rar",
+        "data.rar"
+      ],
+      "encrypted.rar": [
+        "encrypted_archive.rar",
+        "password_protected.rar",
+        "protected.rar"
+      ],
+      "archive.7z": [
+        "input.7z",
+        "protected.7z",
+        "example.7z"
+      ],
+      "encrypted_password.zip": [
+        "encrypted.zip",
+        "protected.zip"
+      ],
+      "different_password.zip": [
+        "password_protected.zip",
+        "secure.zip"
+      ],
+      "sample_dir": [
+        "input",
+        "data",
+        "sourceDir",
+        "files",
+        "input_folder"
+      ],
+      "alice29.txt": [
+        "file.txt",
+        "source.txt",
+        "input.txt",
+        "file1.txt",
+        "file2.txt"
+      ],
+      "sample.txt": [
+        "data.txt",
+        "readme.txt"
+      ],
+      "asyoulik.txt": [
+        "text1.txt"
+      ],
+      "plrabn12.txt": [
+        "text2.txt"
+      ]
     },
-    "expected_outputs": ["*.zip", "output/*.zip", "*.7z"],
+    "expected_outputs": [
+      "*.zip",
+      "output/*.zip",
+      "*.7z"
+    ],
     "env": {}
   },
   "test_data": {
@@ -94,7 +160,12 @@
     "fence_patterns": [
       "^```(\\w+|c#)\\s*\\n(.*?)^```"
     ],
-    "validatable_languages": ["cs", "csharp", "c#", "C#"],
+    "validatable_languages": [
+      "cs",
+      "csharp",
+      "c#",
+      "C#"
+    ],
     "normalize_to_canonical": true,
     "regex_timeout_seconds": 5.0,
     "context_extraction": {
@@ -104,7 +175,10 @@
     },
     "gist_extraction": {
       "enabled": true,
-      "allowed_owners": ["aspose-com-gists", "aspose-zip"],
+      "allowed_owners": [
+        "aspose-com-gists",
+        "aspose-zip"
+      ],
       "blocked_owners": []
     }
   },
@@ -115,7 +189,10 @@
     "default": "p@s$",
     "encrypted_password.zip": "p@s$",
     "encrypted.rar": "p@s$",
-    "different_password.zip": {"0": "first_pass", "1": "second_pass"}
+    "different_password.zip": {
+      "0": "first_pass",
+      "1": "second_pass"
+    }
   },
   "api_catalog": {
     "enabled": true,

@@ -19,12 +19,26 @@
       "version_strategy": "latest_stable"
     },
     "additional_packages": [
-      {"name": "System.Net.Http", "version": "4.3.4"},
-      {"name": "Newtonsoft.Json", "version": "13.0.3"},
-      {"name": "System.Data.SqlClient", "version": "4.8.6"},
-      {"name": "Azure.Storage.Blobs", "version": "12.19.1"}
+      {
+        "name": "System.Net.Http",
+        "version": "4.3.4"
+      },
+      {
+        "name": "Newtonsoft.Json",
+        "version": "13.0.3"
+      },
+      {
+        "name": "System.Data.SqlClient",
+        "version": "4.8.6"
+      },
+      {
+        "name": "Azure.Storage.Blobs",
+        "version": "12.19.1"
+      }
     ],
-    "target_frameworks": ["net8.0"]
+    "target_frameworks": [
+      "net8.0"
+    ]
   },
   "code_defaults": {
     "default_usings": [
@@ -110,8 +124,6 @@
     "retire_threshold": 0.3,
     "retire_min_applications": 10
   },
-  "patterns": [],
-  "non_existent_apis": [],
   "api_patterns": {},
   "persistent_fix": {
     "enabled": true,
@@ -124,7 +136,12 @@
   "discovery_patterns": {
     "gist_extraction": {
       "enabled": true,
-      "allowed_owners": ["aspose-net", "aspose-com-gists", "aspose-cloud", "aspose-pdf-gists"],
+      "allowed_owners": [
+        "aspose-net",
+        "aspose-com-gists",
+        "aspose-cloud",
+        "aspose-pdf-gists"
+      ],
       "blocked_owners": []
     }
   },
