@@ -307,34 +307,6 @@ class LearnedPatternsService:
             logger.debug(f"Historical boost skipped: {e}")
             return patterns
 
-    def query_all_patterns(
-        self,
-        min_confidence: float = 0.0,
-        approved_only: bool = False,
-    ) -> List[LearnedPattern]:
-        """Query all patterns for this family."""
-        conn = self._get_connection()
-
-        query = """
-            SELECT * FROM learned_patterns
-            WHERE family = ?
-              AND confidence >= ?
-        """
-        params: List[Any] = [self.family, min_confidence]
-
-        if approved_only:
-            query += " AND auto_approved = TRUE"
-
-        query += " ORDER BY priority ASC, confidence DESC"
-
-        try:
-            cursor = conn.execute(query, params)
-            rows = cursor.fetchall()
-            return [LearnedPattern.from_row(row) for row in rows]
-        except sqlite3.Error as e:
-            logger.error(f"Error querying patterns: {e}")
-            return []
-
     def apply_pattern(
         self,
         pattern: LearnedPattern,
@@ -912,21 +884,6 @@ class LearnedPatternsService:
             logger.error(f"Error during bulk approval: {e}")
             conn.rollback()
             return 0
-
-    def get_pattern_performance(self, pattern_id: int) -> Optional[Dict[str, Any]]:
-        """Get performance metrics for a pattern."""
-        conn = self._get_connection()
-        try:
-            row = conn.execute(
-                """
-                SELECT * FROM pattern_performance WHERE pattern_id = ?
-                """,
-                (pattern_id,),
-            ).fetchone()
-            return dict(row) if row else None
-        except sqlite3.Error as e:
-            logger.error(f"Error getting pattern performance: {e}")
-            return None
 
     @classmethod
     def register_transformer(cls, name: str, func: Callable[[str], str]) -> None:

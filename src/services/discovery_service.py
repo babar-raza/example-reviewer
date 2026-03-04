@@ -463,56 +463,6 @@ class DiscoveryService:
             self.filter_stats['reasons'][reason] = 0
         self.filter_stats['reasons'][reason] += 1
 
-    def export_skipped_candidates(self, run_id: str, artifacts_dir: Path) -> Path:
-        """
-        Export skipped candidates to JSON artifact.
-
-        Task 1: Creates artifacts/runs/<run_id>/skipped_candidates.json
-
-        Args:
-            run_id: Current run ID
-            artifacts_dir: Base artifacts directory
-
-        Returns:
-            Path to the exported JSON file
-        """
-        import json
-        from datetime import datetime, timezone
-
-        output_dir = artifacts_dir / "runs" / run_id
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        output_path = output_dir / "skipped_candidates.json"
-
-        # Group by reason for summary
-        reason_counts: Dict[str, int] = {}
-        for candidate in self.skipped_candidates:
-            reason = candidate.get('reason', 'unknown')
-            # Normalize reason for counting (remove variable parts)
-            if reason.startswith('snippet_too_incomplete'):
-                base_reason = 'snippet_too_incomplete'
-            else:
-                base_reason = reason
-            reason_counts[base_reason] = reason_counts.get(base_reason, 0) + 1
-
-        data = {
-            'run_id': run_id,
-            'generated_at': datetime.now(timezone.utc).isoformat(),
-            'total_skipped': len(self.skipped_candidates),
-            'reason_summary': reason_counts,
-            'skipped_candidates': self.skipped_candidates,
-        }
-
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-
-        logger.info(f"Exported {len(self.skipped_candidates)} skipped candidates to {output_path}")
-        return output_path
-
-    def clear_skipped_candidates(self) -> None:
-        """Clear skipped candidates list for a new run."""
-        self.skipped_candidates = []
-
     def get_filter_stats(self) -> Dict[str, Any]:
         """Get filter statistics."""
         return self.filter_stats.copy()
@@ -1518,59 +1468,6 @@ class DiscoveryService:
 
         return examples
     
-    def discover_directory(
-        self,
-        directory: str,
-        family: str,
-        recursive: bool = True,
-    ) -> Dict[str, Any]:
-        """
-        Discover examples from a directory (for directory mode scan).
-        
-        Args:
-            directory: Directory path
-            family: Family identifier
-            recursive: Whether to scan recursively
-            
-        Returns:
-            Statistics dictionary
-        """
-        stats = {
-            'files_found': 0,
-            'files_processed': 0,
-            'examples_found': 0,
-            'errors': 0,
-        }
-        
-        dir_path = Path(directory)
-        if not dir_path.exists():
-            logger.error(f"Directory does not exist: {directory}")
-            return stats
-        
-        if recursive:
-            # Sort glob results deterministically (case-normalized for Windows compatibility)
-            files = sorted(dir_path.rglob("*.md"), key=lambda p: str(p).lower())
-        else:
-            # Sort glob results deterministically (case-normalized for Windows compatibility)
-            files = sorted(dir_path.glob("*.md"), key=lambda p: str(p).lower())
-
-        stats['files_found'] = len(files)
-        
-        for file_path in files:
-            try:
-                examples = self._process_file(str(file_path), family)
-                
-                for example in examples:
-                    self.db.save_example(example)
-                    stats['examples_found'] += 1
-                
-                stats['files_processed'] += 1
-                
-            except Exception as e:
-                logger.error(f"Error processing {file_path}: {e}")
-                stats['errors'] += 1
-        
-        return stats
 
 
 class GistResolver:

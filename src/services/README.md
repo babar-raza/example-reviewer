@@ -20,7 +20,6 @@ All specialized services used by the pipeline orchestrator.
 | `semantic_microfixes_zip.py` | ZIP-family-specific deterministic fixes |
 | `learned_patterns_service.py` | Applies auto-learned fix patterns from past runs |
 | `context_harness_service.py` | Wraps partial code snippets in compilable harnesses |
-| `snippet_wrapper_service.py` | Wraps code in Main() method for compilation |
 
 ## Support Services
 
@@ -32,7 +31,7 @@ All specialized services used by the pipeline orchestrator.
 | `backfill_service.py` | Fetches code from GitHub gists |
 | `drift_detector.py` | Embedding-based semantic drift detection |
 | `semantic_signature_service.py` | Structural signature validation for drift prevention |
-| `model_discovery_service.py` | Discovers available LLM models |
+| `circuit_breaker.py` | Monitors primary LLM health and routes to fallback proactively |
 | `ollama_manager.py` | Ollama LLM server management |
 | `vector_db_service.py` | ChromaDB vector database for semantic search |
 | `gist_publisher.py` | Publishes code examples to GitHub gists |

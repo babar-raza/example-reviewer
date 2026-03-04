@@ -185,17 +185,6 @@ class APICatalogService:
             methods = [m for m in methods if method_lower in m.get("name", "").lower()]
         return list(methods)
 
-    def get_properties(self, type_name: str) -> List[str]:
-        """Return public property names for a type, or [] if not found/not enriched.
-
-        Args:
-            type_name: The simple name of the type (e.g. "BarcodeParameters")
-
-        Returns:
-            List of property name strings, e.g. ["BarColor", "BackColor", "Resolution"]
-        """
-        return list(self._properties.get(type_name, []))
-
     def get_all_members(self, type_name: str) -> List[str]:
         """Return all known member names (properties + methods) for a type.
 

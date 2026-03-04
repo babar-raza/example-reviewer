@@ -1469,12 +1469,6 @@ class Database:
             )
             return conn.total_changes > 0
 
-    def delete_examples_by_family(self, family: str) -> int:
-        """Delete all examples for a family."""
-        with self.get_connection() as conn:
-            conn.execute("DELETE FROM example_records WHERE family = ?", (family,))
-            return conn.total_changes
-
     def get_needs_review_examples(
         self,
         family: Optional[str] = None,

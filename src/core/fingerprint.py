@@ -117,64 +117,6 @@ class RunFingerprint:
             pass
         return None
 
-    @classmethod
-    def capture_fingerprint(cls, orchestrator: 'PipelineOrchestrator') -> 'RunFingerprint':
-        """
-        Capture run fingerprint from orchestrator state.
-
-        Args:
-            orchestrator: PipelineOrchestrator instance with initialized config and services
-
-        Returns:
-            RunFingerprint with all captured metadata
-        """
-        from ..pipeline.orchestrator import PipelineOrchestrator
-
-        # Get latest run_id
-        # Note: This assumes run_id is tracked in orchestrator or we capture it from DB
-        # For now, we'll generate a fingerprint without run_id and let caller set it
-
-        # Get global config
-        global_config = orchestrator.config_manager.load_global_config()
-
-        # Compute config hash (we'll need to know the family)
-        # This will be set by caller
-        config_hash = "unknown"
-
-        # Get vector DB startup decision
-        vector_db_decision = orchestrator._vector_db_startup_decision
-        drift_enabled = orchestrator._drift_enabled
-
-        # Get LLM capabilities (if LLM service initialized)
-        llm_capabilities = {}
-        if orchestrator._llm_service:
-            # Get detected capabilities from LLM service
-            caps = orchestrator._llm_service.get_provider_capabilities()
-            llm_capabilities = {
-                'provider': global_config.llm.provider,
-                'model': global_config.llm.model,
-                'temperature': global_config.llm.temperature,
-                'seed_supported': caps.seed_supported,
-                'timeout_supported': caps.timeout_supported,
-                'model_hash': caps.model_hash,
-                'detected_at': caps.detected_at,
-            }
-
-        # LLM seed and deterministic mode
-        llm_seed = global_config.llm.seed
-        deterministic_mode = global_config.llm.deterministic_mode
-
-        return cls(
-            run_id="",  # Will be set by caller
-            config_hash=config_hash,  # Will be set by caller
-            selection_hash=None,  # Will be set after example selection
-            vector_db_startup_decision=vector_db_decision,
-            drift_enabled=drift_enabled,
-            llm_provider_capabilities=llm_capabilities,
-            llm_seed=llm_seed,
-            deterministic_mode=deterministic_mode,
-        )
-
     def to_dict(self) -> Dict[str, Any]:
         """
         Convert fingerprint to dictionary matching Plan v2.1 Section B format (lines 60-107).
@@ -261,22 +203,6 @@ class RunFingerprint:
             JSON-formatted string
         """
         return json.dumps(self.to_dict(), indent=2, sort_keys=True)
-
-    def save_to_db(self, db: 'Database', run_id: str) -> None:
-        """
-        Save fingerprint to database.
-
-        Args:
-            db: Database instance
-            run_id: Run identifier
-        """
-        # Ensure run_id is set
-        if not self.run_id:
-            self.run_id = run_id
-
-        # Database save is done via database.save_run_fingerprint()
-        # (to be implemented in database.py)
-        db.save_run_fingerprint(self)
 
     def save_to_file(self, path: Path) -> None:
         """

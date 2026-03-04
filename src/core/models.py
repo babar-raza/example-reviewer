@@ -68,11 +68,6 @@ class ScanScope(BaseModel):
     directory_path: Optional[str] = None
     family: Optional[str] = None
     
-    def validate_scope(self) -> bool:
-        """Validate that scope is properly configured."""
-        if self.mode == ScanMode.DIRECTORY:
-            return self.directory_path is not None
-        return self.family is not None
 
 
 class Location(BaseModel):
@@ -81,11 +76,6 @@ class Location(BaseModel):
     start_line: int = 0
     end_line: int = 0
     anchor: str = ""
-
-
-class CodeLocation(Location):
-    """Compatibility alias for legacy code location usage."""
-    pass
 
 
 class GistInfo(BaseModel):

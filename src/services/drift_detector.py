@@ -104,15 +104,3 @@ class DriftDetector:
             # Return high drift on error (fail-safe: prefer human review)
             return 1.0, 0.0
 
-    def is_drift_acceptable(self, drift_score: float, threshold: float) -> bool:
-        """
-        Check if drift score is within acceptable threshold.
-
-        Args:
-            drift_score: Computed drift score (0.0 to 1.0)
-            threshold: Maximum acceptable drift
-
-        Returns:
-            True if drift is acceptable, False if exceeds threshold
-        """
-        return drift_score <= threshold

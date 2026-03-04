@@ -372,28 +372,6 @@ class VectorDBService:
             logger.error(f"Failed to get example {example_id}: {e}")
             return None
 
-    def delete_example(self, example_id: str) -> bool:
-        """
-        Delete an example from the vector database.
-
-        Args:
-            example_id: Example identifier
-
-        Returns:
-            True if deleted successfully, False otherwise
-        """
-        if not self.is_available():
-            return False
-
-        try:
-            self._collection.delete(ids=[example_id])
-            logger.debug(f"Deleted example {example_id} from vector DB")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to delete example {example_id}: {e}")
-            return False
-
     def count(self, family: Optional[str] = None) -> int:
         """
         Get count of examples in the database.
@@ -419,35 +397,6 @@ class VectorDBService:
         except Exception as e:
             logger.error(f"Failed to count examples: {e}")
             return 0
-
-    def clear_family(self, family: str) -> bool:
-        """
-        Clear all examples for a specific family.
-
-        Args:
-            family: Product family identifier
-
-        Returns:
-            True if cleared successfully, False otherwise
-        """
-        if not self.is_available():
-            return False
-
-        try:
-            # Get all IDs for family
-            results = self._collection.get(where={"family": family})
-
-            if results['ids']:
-                # Delete all matching IDs
-                self._collection.delete(ids=results['ids'])
-                logger.info(f"Cleared {len(results['ids'])} examples for family {family}")
-                return True
-
-            return True  # No examples to clear
-
-        except Exception as e:
-            logger.error(f"Failed to clear family {family}: {e}")
-            return False
 
     def _get_collection(self, collection_name: str):
         """

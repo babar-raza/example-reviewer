@@ -398,11 +398,6 @@ class FixtureResolverService:
 
         return results
 
-    @property
-    def stats(self) -> Dict[str, int]:
-        """Get resolution statistics for this run."""
-        return dict(self._stats)
-
     # ------------------------------------------------------------------
     # Tier implementations
     # ------------------------------------------------------------------
@@ -740,42 +735,3 @@ class FixtureResolverService:
         }
         self._save_registry()
 
-    def mine_fixtures_from_cs_examples(self, family: str, db) -> Dict[str, List[str]]:
-        """Extract file references from verified CS_FILE examples.
-
-        Returns: {filename: [example_ids_that_use_it]}
-        """
-        fixture_map: Dict[str, List[str]] = {}
-
-        try:
-            # Lazy import to avoid circular dependency
-            if SourceType is None:
-                from ..core.models import SourceType as ST
-            else:
-                ST = SourceType
-
-            examples = db.get_examples_by_family(family)
-            if not examples:
-                return fixture_map
-
-            for ex in examples:
-                if ex.source_type != ST.CS_FILE:
-                    continue
-
-                code = ex.verified_code or ex.original_code
-                if not code:
-                    continue
-
-                # Extract file references using existing helper
-                file_refs = extract_file_references_from_code(code)
-                for filename in file_refs:
-                    if filename not in fixture_map:
-                        fixture_map[filename] = []
-                    fixture_map[filename].append(ex.example_id)
-
-            logger.info(f"Mined {len(fixture_map)} unique fixtures from CS_FILE examples in {family}")
-            return fixture_map
-
-        except Exception as e:
-            logger.warning(f"Error mining fixtures from CS examples: {e}")
-            return fixture_map
