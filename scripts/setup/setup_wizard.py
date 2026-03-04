@@ -221,21 +221,32 @@ def generate_catalog(family):
         config = json.load(f)
 
     catalog_section = config.get("api_catalog", {})
-    catalog_path = catalog_section.get("catalog_path", "")
+    # Field is "path", not "catalog_path"
+    catalog_rel_path = catalog_section.get("path", "")
+    catalog_abs_path = PROJECT_ROOT / catalog_rel_path if catalog_rel_path else None
 
-    if catalog_path and Path(PROJECT_ROOT / catalog_path).exists():
-        ok(f"API catalog already exists: {catalog_path}")
+    if catalog_abs_path and catalog_abs_path.exists():
+        ok(f"API catalog already exists: {catalog_rel_path}")
         regen = input("  Regenerate? [y/n]: ").strip().lower()
         if regen != 'y':
             return True
 
     nuget_config = config.get("nuget_config", {})
-    pkg_name = nuget_config.get("primary_package", {}).get("name", "")
-    pkg_version = nuget_config.get("primary_package", {}).get("pinned_version", "")
+    primary_pkg = nuget_config.get("primary_package", {})
+    pkg_name = primary_pkg.get("name", "")
+    # Use explicit pinned_version if present; otherwise omit and let NuGet resolve latest stable
+    pkg_version = primary_pkg.get("pinned_version", "") or primary_pkg.get("version", "")
+    # Namespace prefix defaults to the package name (e.g. Aspose.Zip -> Aspose.Zip)
+    namespace_prefix = primary_pkg.get("namespace_prefix", pkg_name)
 
     if not pkg_name:
         warn("No nuget_config.primary_package.name found in family config.")
-        info("Skipping catalog generation. Run scripts/setup/bootstrap_catalog.py manually.")
+        info("Skipping catalog generation. Run scripts/setup/extract_assembly_catalog.py manually.")
+        return False
+
+    if not catalog_abs_path:
+        warn("No api_catalog.path configured in family JSON.")
+        info("Skipping catalog generation.")
         return False
 
     extract_script = PROJECT_ROOT / "scripts" / "setup" / "extract_assembly_catalog.py"
@@ -243,20 +254,32 @@ def generate_catalog(family):
         warn(f"extract_assembly_catalog.py not found at {extract_script}")
         return False
 
-    info(f"Generating catalog for {pkg_name} {pkg_version or 'latest'}...")
+    info(f"Generating catalog for {pkg_name} {pkg_version or '(latest stable)'}...")
+    info("This downloads the NuGet package and runs .NET reflection — may take 30-60 seconds.")
+
     cmd = [sys.executable, str(extract_script), pkg_name]
     if pkg_version:
         cmd += [pkg_version]
-    cmd += ["--full"]
+    cmd += [namespace_prefix, "--full"]
 
     code, stdout, stderr = run(cmd, cwd=str(PROJECT_ROOT))
-    if code == 0:
-        ok("Catalog generated successfully")
-        return True
-    else:
-        warn(f"Catalog generation failed: {stderr[:400]}")
-        info("You can run it manually: python scripts/setup/extract_assembly_catalog.py <package> [version] --full")
+
+    if code != 0:
+        warn(f"Catalog generation failed:\n{stderr[:400]}")
+        info(f"You can run it manually:")
+        info(f"  python scripts/setup/extract_assembly_catalog.py {pkg_name} [version] {namespace_prefix} --full")
+        info(f"  Then save the output to: {catalog_rel_path}")
         return False
+
+    # The script writes JSON to stdout — save it to the configured catalog path
+    if not stdout.strip():
+        warn("Catalog script produced no output.")
+        return False
+
+    catalog_abs_path.parent.mkdir(parents=True, exist_ok=True)
+    catalog_abs_path.write_text(stdout, encoding="utf-8")
+    ok(f"Catalog saved to {catalog_rel_path}")
+    return True
 
 
 def verify_setup(family):

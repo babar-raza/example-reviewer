@@ -302,20 +302,36 @@ Each Aspose product has its own `config/families/<family>.json`. The key fields:
 }
 ```
 
-### 6.6 Generating an API Catalog
+### 6.6 Generate API Catalogs (required — not bundled in the repo)
 
-The catalog is derived from the actual compiled assembly (not markdown docs):
+> **API catalog files are not committed to the repository.** They are generated
+> from the compiled NuGet assembly via .NET reflection and must be created locally
+> before the pipeline can run. The setup wizard (step 5) does this automatically.
+> If you skipped the wizard or need to regenerate for a specific family, run the
+> script directly.
 
 ```bash
+# Recommended: use the setup wizard (handles all families interactively)
+python scripts/setup/setup_wizard.py
+
+# Or generate a single family's catalog manually:
 python scripts/setup/extract_assembly_catalog.py \
-    Aspose.Zip 25.1.0 Aspose.Zip \
-    --include-enums \
-    --include-constructors \
-    --include-methods \
+    Aspose.Zip 25.1.0 Aspose.Zip --full \
     > config/families/zip_api_catalog.json
+
+# For a family where the package name differs from the DLL name (e.g. Slides):
+python scripts/setup/extract_assembly_catalog.py \
+    Aspose.Slides.NET 25.1.0 Aspose.Slides --dll-name Aspose.Slides --full \
+    > config/families/slides_api_catalog.json
 ```
 
-This gives the LLM and the deterministic fixer accurate type/method/enum information, eliminating guesswork.
+The script downloads the NuGet package, loads the DLL via .NET reflection, and
+dumps the exported type/enum/constructor/method surface as JSON. This takes
+30–60 seconds per family on first run (subsequent runs are faster as NuGet caches
+the package locally).
+
+Without a catalog, the deterministic fixer cannot resolve missing `using` directives
+and the LLM will receive no type context, significantly lowering the fix success rate.
 
 ### 6.7 Backfill Test Data
 
