@@ -56,7 +56,7 @@ def find_package_dll(package_name: str, dll_name: str) -> Optional[str]:
 def generate_catalog_from_dll(family: str, dll_path: str, namespace: str) -> Tuple[bool, str]:
     """Generate catalog by directly loading a DLL."""
 
-    output_path = Path(__file__).parent.parent / "config" / "families" / f"{family}_api_catalog.json"
+    output_path = Path(__file__).parent.parent.parent / "config" / "families" / f"{family}_api_catalog.json"
 
     print(f"[*] Generating catalog for {family}...")
     print(f"    DLL: {dll_path}")
@@ -124,7 +124,7 @@ def generate_catalog_via_extractor(family: str, package: str, namespace: str) ->
     """Generate catalog using the existing extractor script."""
 
     script_path = Path(__file__).parent / "extract_assembly_catalog.py"
-    output_path = Path(__file__).parent.parent / "config" / "families" / f"{family}_api_catalog.json"
+    output_path = Path(__file__).parent.parent.parent / "config" / "families" / f"{family}_api_catalog.json"
 
     print(f"[*] Generating catalog for {family}...")
     print(f"    Package: {package}")

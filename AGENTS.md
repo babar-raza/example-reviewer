@@ -4,6 +4,30 @@ This repo is a **VFV (Verify → Fix → Verify)** pipeline for validating and r
 
 ## Quick commands (copy/paste)
 
+### Fresh-clone setup (first time on a new machine)
+```bash
+# 1. Clone and enter the repo
+git clone <repo-url>
+cd example-reviewer
+
+# 2. Create venv and install Python dependencies
+python -m venv venv
+venv/Scripts/activate        # Windows
+# source venv/bin/activate   # Linux/macOS
+pip install -r requirements.txt
+
+# 3. Create .env in the repo root
+#    litellm_key=sk-your-api-key-here
+#    GITHUB_TOKEN=ghp_read_token   (optional, raises gist rate limit)
+
+# 4. Run the interactive setup wizard (handles dotnet restore, catalog generation, test-data)
+python scripts/setup/setup_wizard.py
+
+# 5. Verify everything is wired up
+python -m src.cli.main list-families
+python -m src.cli.main run --family zip --max-examples 15 --skip-llm
+```
+
 ### Setup (preferred)
 ```bash
 # One command “setup + prerequisites” wizard (creates venv/ if missing)
@@ -85,7 +109,7 @@ All commands accept `--family <name>`. Available families (configs in `config/fa
 
 **Tooling (normal edits allowed, but keep scripts deterministic):**
 - `tools/` — gate runners, safety validators, determinism checks
-- `scripts/` — catalog extraction (`extract_assembly_catalog.py`), auto-learn (`auto_learn.py`), validation helpers
+- `scripts/` — catalog extraction (`scripts/setup/extract_assembly_catalog.py`), auto-learn (`scripts/patterns/auto_learn.py`), validation helpers
 
 **Legacy code (avoid unless tasked):**
 - `src/_legacy/` (kept for reference/back-compat; prefer fixing current paths under `src/`)
@@ -218,17 +242,17 @@ You are a **Fix Strategies Engineer** for the VFV pipeline.
 
 ## Role & scope
 - Primary job: implement, tune, and validate the deterministic fix layer (pre- and post-LLM) plus the self-healing infrastructure around it.
-- Read from: `src/services/semantic_microfixes.py`, `src/services/semantic_signature_service.py`, `src/services/family_drift_validators/`, `src/services/api_catalog_service.py`, `src/services/fixture_resolver_service.py`, `scripts/auto_learn.py`, `scripts/extract_assembly_catalog.py`, `config/families/`
+- Read from: `src/services/semantic_microfixes.py`, `src/services/semantic_signature_service.py`, `src/services/family_drift_validators/`, `src/services/api_catalog_service.py`, `src/services/fixture_resolver_service.py`, `scripts/patterns/auto_learn.py`, `scripts/setup/extract_assembly_catalog.py`, `config/families/`
 - Write to: same, plus `docs/` and `specs/` when fix contracts change.
 - Success looks like: deterministic fixes cover the known error catalog, drift is caught before markdown writes, missing fixtures are auto-resolved, and auto-learn surfaces actionable new patterns.
 
 ## Commands (run these)
 - Regenerate assembly catalog for a family:
-  - `python scripts/extract_assembly_catalog.py Aspose.ZIP <version> Aspose.Zip --full --out config/families/zip_api_catalog.json`
+  - `python scripts/setup/bootstrap_catalog.py --family zip --package Aspose.Zip --output config/families/zip_api_catalog.json`
 - Run auto-learn (cluster failures + extract patterns):
-  - `python scripts/auto_learn.py --family zip --db-path data/example_reviewer.db`
+  - `python scripts/patterns/auto_learn.py --family zip --db-path data/example_reviewer.db`
 - Validate catalog integrity:
-  - `python scripts/validation/validate_bootstrap.py --family zip`
+  - `python scripts/setup/validate_bootstrap.py --family zip`
 - Fixture resolver smoke-test (dry-run proactive resolution):
   - `python -m src.cli.main --deterministic --seed 12345 --safe-workspace runtime-verify --family zip --max-examples 5`
 

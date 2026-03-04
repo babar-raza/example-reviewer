@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 # Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from services.test_data_generator import generate_all_zip_family
 

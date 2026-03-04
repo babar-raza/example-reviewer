@@ -236,19 +236,23 @@ venv\Scripts\activate           # Windows
 pip install -r requirements.txt
 pip install -r requirements-dev.txt   # optional — needed for tests
 
-# Restore the .NET build project
-dotnet restore test-examples/AsposeZipValidator.csproj
+# Run the setup wizard (handles dotnet restore, catalog generation, and test-data scaffolding)
+python scripts/setup/setup_wizard.py
 ```
+
+> `dotnet restore` for the .NET build project is handled automatically by the setup wizard.
+> To run it manually: `dotnet restore test-examples/AsposeZipValidator.csproj`
 
 ### 6.3 Environment Variables
 
-Create a `.env` file in the repo root (loaded automatically at startup):
+Create a `.env` file in the repo root **before** running the setup wizard (loaded automatically
+at startup):
 
 ```bash
-# Required: API key for your LLM provider
+# Required: API key for your LLM provider (OpenAI-compatible)
 litellm_key=sk-your-api-key-here
 
-# Optional: GitHub token for higher gist rate limits (60 → 5000 req/hr)
+# Optional: GitHub token for higher gist rate limits (60 -> 5000 req/hr)
 GITHUB_TOKEN=ghp_read_token
 
 # Optional: telemetry HTTP endpoint

@@ -13,10 +13,12 @@ Key Features:
 """
 
 import base64
+import io
 import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -507,7 +509,7 @@ def generate_file(filename: str, destination_dir: Path, verbose: bool = False) -
 
 def generate_all_zip_family(destination_dir: Path, verbose: bool = False) -> Dict[str, bool]:
     """
-    Generate all 17 required test data files for ZIP family.
+    Generate all 20 required test data files for ZIP family.
 
     Args:
         destination_dir: Directory to create files in (test-data/zip/)
@@ -536,6 +538,9 @@ def generate_all_zip_family(destination_dir: Path, verbose: bool = False) -> Dic
         "plrabn12.txt",
         "lcet10.txt",
         "sample_dir",
+        "data1.bin",  # 7z per-entry encryption examples
+        "data2.bin",
+        "data3.bin",
     ]
 
     results = {}
@@ -547,6 +552,64 @@ def generate_all_zip_family(destination_dir: Path, verbose: bool = False) -> Dic
         if verbose:
             status = "OK" if success else "FAIL"
             print(f"  [{status}] {message}")
+
+    return results
+
+
+def generate_all_words_family(destination_dir: Path, verbose: bool = False) -> Dict[str, bool]:
+    """
+    Generate all required test data files for Words family.
+
+    Generates canonical docx files first so subsequent copies can use them as sources.
+
+    Args:
+        destination_dir: Directory to create files in (artifacts/backfill/words/test-data/)
+        verbose: Print verbose output
+
+    Returns:
+        Dict mapping filename -> success (True/False)
+    """
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate canonical docx files first — others may copy from them
+    canonical_first = [
+        "Document.docx",
+        "Blank.docx",
+    ]
+    other_files = [
+        "Bookmarks.docx",
+        "Comments.docx",
+        "Tables.docx",
+        "Document.doc",
+        "Document.html",
+        "Document.odt",
+        "English text.txt",
+    ]
+    required_dirs = ["Images", "Database"]
+
+    results: Dict[str, bool] = {}
+
+    for filename in canonical_first + other_files:
+        dest = destination_dir / filename
+        if filename.endswith(".docx"):
+            success, message = _generate_docx_from_canonical(dest, destination_dir)
+        else:
+            success, message = generate_file_for_family(filename, dest, destination_dir, "words")
+        results[filename] = success
+        if verbose:
+            print(f"  [{'OK' if success else 'FAIL'}] {message}")
+
+    for dirname in required_dirs:
+        d = destination_dir / dirname
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            results[dirname + "/"] = True
+            if verbose:
+                print(f"  [OK] Created directory {dirname}/")
+        except Exception as e:
+            results[dirname + "/"] = False
+            if verbose:
+                print(f"  [FAIL] Could not create {dirname}/: {e}")
 
     return results
 
@@ -616,18 +679,69 @@ def _select_canonical_docx(filename: str, test_data_dir: Path) -> Optional[Path]
     return None
 
 
+def _generate_minimal_docx(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid .docx from scratch using stdlib zipfile (no dependencies)."""
+    # A .docx is a ZIP containing OOXML parts; the minimum viable structure is:
+    # [Content_Types].xml, _rels/.rels, word/document.xml, word/_rels/document.xml.rels
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml"'
+        ' ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '</Types>'
+    )
+    rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1"'
+        ' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"'
+        ' Target="word/document.xml"/>'
+        '</Relationships>'
+    )
+    doc_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>'
+    )
+    document = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"'
+        ' xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body>'
+        '<w:p><w:r><w:t>Sample document content.</w:t></w:r></w:p>'
+        '<w:sectPr/>'
+        '</w:body>'
+        '</w:document>'
+    )
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", content_types)
+            zf.writestr("_rels/.rels", rels)
+            zf.writestr("word/_rels/document.xml.rels", doc_rels)
+            zf.writestr("word/document.xml", document)
+        dest.write_bytes(buf.getvalue())
+        _fix_timestamp(dest)
+        return (True, f"Generated minimal {dest.name}")
+    except Exception as e:
+        return (False, f"Failed to generate minimal docx {dest.name}: {e}")
+
+
 def _generate_docx_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
-    """Generate a .docx by copying the best canonical source."""
+    """Generate a .docx by copying the best canonical source, or creating minimal from scratch."""
     canonical = _select_canonical_docx(dest.name, test_data_dir)
     if canonical:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(canonical, dest)
         return (True, f"Generated {dest.name} from canonical {canonical.name}")
-    return (False, f"No canonical .docx found in test-data for {dest.name}")
+    # No canonical source — generate minimal valid docx from scratch
+    return _generate_minimal_docx(dest)
 
 
 def _generate_doc_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
-    """Generate a .doc by copying canonical source."""
+    """Generate a .doc by copying canonical source, or fall back to a docx-renamed file."""
     for name in ("Document.doc", "Blank.doc"):
         candidate = test_data_dir / name
         if candidate.exists():
@@ -640,7 +754,15 @@ def _generate_doc_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool,
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(f, dest)
             return (True, f"Generated {dest.name} from {f.name}")
-    return (False, f"No canonical .doc found in test-data for {dest.name}")
+    # Fallback: copy from any existing .docx (Aspose.Words can open docx with .doc extension)
+    for name in ("Document.docx", "Blank.docx"):
+        candidate = test_data_dir / name
+        if candidate.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(candidate, dest)
+            return (True, f"Generated {dest.name} from {candidate.name} (docx fallback)")
+    # Last resort: generate minimal docx with .doc extension
+    return _generate_minimal_docx(dest)
 
 
 def _generate_pdf_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
@@ -732,14 +854,50 @@ def _generate_rtf(dest: Path) -> Tuple[bool, str]:
     return (True, f"Generated RTF {dest.name}")
 
 
+def _generate_minimal_odt(dest: Path) -> Tuple[bool, str]:
+    """Generate a minimal valid .odt from scratch using stdlib zipfile (no dependencies)."""
+    # .odt is a ZIP containing ODF parts
+    mime = "application/vnd.oasis.opendocument.text"
+    content_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<office:document-content'
+        ' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
+        ' xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"'
+        ' office:version="1.2">'
+        '<office:body><office:text>'
+        '<text:p>Sample document content.</text:p>'
+        '</office:text></office:body>'
+        '</office:document-content>'
+    )
+    meta_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<office:document-meta'
+        ' xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"'
+        ' office:version="1.2"/>'
+    )
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            # mimetype must be first and uncompressed
+            zf.writestr(zipfile.ZipInfo("mimetype"), mime)
+            zf.writestr("content.xml", content_xml)
+            zf.writestr("meta.xml", meta_xml)
+        dest.write_bytes(buf.getvalue())
+        _fix_timestamp(dest)
+        return (True, f"Generated minimal {dest.name}")
+    except Exception as e:
+        return (False, f"Failed to generate minimal odt {dest.name}: {e}")
+
+
 def _generate_odt_from_canonical(dest: Path, test_data_dir: Path) -> Tuple[bool, str]:
-    """Generate a .odt by copying canonical source."""
+    """Generate a .odt by copying canonical source, or generating minimal from scratch."""
     for f in test_data_dir.rglob("*.odt"):
         if f.is_file():
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(f, dest)
             return (True, f"Generated {dest.name} from canonical {f.name}")
-    return (False, f"No canonical .odt found in test-data for {dest.name}")
+    return _generate_minimal_odt(dest)
 
 
 def _copy_canonical_by_ext(dest: Path, test_data_dir: Path, ext: str) -> Tuple[bool, str]:

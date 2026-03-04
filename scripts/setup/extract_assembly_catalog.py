@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 def get_flag_value(flag_name):

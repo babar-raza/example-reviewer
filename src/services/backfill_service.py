@@ -309,7 +309,7 @@ class BackfillService:
             # Use bootstrap_catalog.py which handles namespace prefix derivation
             cmd = [
                 sys.executable,
-                str(Path("scripts/bootstrap_catalog.py")),
+                str(Path("scripts/setup/bootstrap_catalog.py")),
                 "--family", family,
                 "--package", pkg_name,
                 "--output", str(catalog_path),

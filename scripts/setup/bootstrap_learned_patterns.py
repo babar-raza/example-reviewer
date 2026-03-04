@@ -29,7 +29,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "api_catalog.db"
 
 # ---------------------------------------------------------------------------

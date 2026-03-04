@@ -67,7 +67,10 @@
       "sample.txt",
       "asyoulik.txt",
       "plrabn12.txt",
-      "lcet10.txt"
+      "lcet10.txt",
+      "data1.bin",
+      "data2.bin",
+      "data3.bin"
     ],
     "required_dirs": [
       "sample_dir"

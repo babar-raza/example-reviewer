@@ -10,7 +10,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding='utf-8')
 
 # Paths
-REPO_ROOT = Path(__file__).parent.parent
+REPO_ROOT = Path(__file__).parent.parent.parent
 TEST_DATA_DIR = REPO_ROOT / "artifacts" / "backfill" / "barcode" / "test-data"
 TEMP_CS_FILE = REPO_ROOT / "test-examples" / "generate_barcode_test_data.cs"
 

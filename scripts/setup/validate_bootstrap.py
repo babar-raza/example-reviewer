@@ -25,7 +25,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # Known-bad namespaces that should NOT be in validated catalogs
 # NOTE: After v26.1.0 reflection verification, Drawing.Charts DOES exist!
