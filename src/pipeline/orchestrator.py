@@ -824,7 +824,7 @@ class PipelineOrchestrator:
         use_llm = auto_learn_config.use_llm
 
         # LOG: Command construction
-        script_path = Path(__file__).parent.parent.parent / "scripts" / "auto_learn.py"
+        script_path = Path(__file__).parent.parent.parent / "scripts" / "patterns" / "auto_learn.py"
         cmd = [sys.executable, str(script_path), "--family", family, "--run-id", run_id]
         if use_llm:
             cmd.append("--use-llm")
