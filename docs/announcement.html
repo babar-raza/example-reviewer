@@ -1,0 +1,313 @@
+<!-- WordPress post body — paste directly into the HTML block in the block editor (or Classic editor's Text tab). No <html>/<head>/<body> wrapper needed. -->
+
+<p>We've built an automated pipeline that finds every C# code example in our documentation, compiles it, runs it against real test data, fixes any errors it finds, and writes the corrected code back to the source file. This post explains what it does, how it works, and what it has produced so far.</p>
+
+<hr />
+
+<h2>The Problem</h2>
+
+<p>Documentation code examples go stale over time. The failure modes we see in practice:</p>
+
+<ol>
+  <li><strong>API evolution</strong> — a method is removed or renamed between library versions; the example still references the old name.</li>
+  <li><strong>LLM-authored drift</strong> — content written or assisted by an LLM can contain plausible-but-wrong API calls (e.g., <code>archive.SaveAsync()</code> when that method does not exist in Aspose.ZIP).</li>
+  <li><strong>Copy-paste errors</strong> — incomplete <code>using</code> directives, wrong constructor signatures, missing namespace qualifications.</li>
+  <li><strong>Environmental assumptions</strong> — examples that reference files or paths that don't exist in the test environment.</li>
+</ol>
+
+<p>None of these are visible from reading the markdown. They only surface when you actually try to build and run the snippet.</p>
+
+<hr />
+
+<h2>How It Works</h2>
+
+<p>The pipeline runs examples through a <strong>Verify → Fix → Verify</strong> loop across six sequential phases:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Phase</th>
+      <th>What happens</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>A — Discovery</strong></td>
+      <td>Crawls configured content directories, extracts C# code fences and GitHub Gist references from markdown into a SQLite database</td>
+    </tr>
+    <tr>
+      <td><strong>B — Compile</strong></td>
+      <td>Wraps each snippet into a temporary .NET project, runs <code>dotnet build</code>, records success or error</td>
+    </tr>
+    <tr>
+      <td><strong>C — Runtime</strong></td>
+      <td>Executes each compilable snippet against sample test data in a sandboxed subprocess, records pass or failure</td>
+    </tr>
+    <tr>
+      <td><strong>D — Markdown update</strong></td>
+      <td>Writes back only the verified (compile + runtime passing) corrected code to the source markdown files</td>
+    </tr>
+    <tr>
+      <td><strong>E — LLM review</strong></td>
+      <td>A local LLM reviews any LLM-fixed snippet to confirm the fix preserved the original intent</td>
+    </tr>
+    <tr>
+      <td><strong>F — Finalization</strong></td>
+      <td>Exports telemetry, optionally commits and records the run</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>When a snippet fails, fixes are applied in two layers before anything touches the markdown:</p>
+
+<ol>
+  <li><strong>Deterministic microfixes</strong> — 10 known patterns applied proactively before the first compile attempt: missing <code>using</code> directives resolved from the assembly catalog, wrong constructor signatures, incorrect enum values, stream disposal patterns, missing output directories. Fast, no LLM involved.</li>
+  <li><strong>LLM-based fixes</strong> — for errors that don't match a known pattern, a structured prompt is built containing the exact error message, a list of known non-existent APIs for that library, and the correct namespace catalog. The model is given up to 10 attempts with progressively firmer instructions. All inference runs locally via <a href="https://ollama.com">Ollama</a>; no code or data is sent externally.</li>
+</ol>
+
+<hr />
+
+<h2>Self-Healing and Learning</h2>
+
+<p>The pipeline is not static. Several components allow it to improve automatically as it encounters new failures.</p>
+
+<h3>Assembly Reflection Catalog</h3>
+
+<p>The authoritative source of valid types, namespaces, constructors, enums, and methods is extracted directly from the NuGet assembly using .NET reflection — not parsed from documentation or markdown. For Aspose.ZIP this produces 138 types across 28 namespaces. For Aspose.Words it is 797 types.</p>
+
+<p>This catalog feeds both the deterministic fix layer (which <code>using</code> directives to inject, which enum values are valid) and the LLM prompt context (which APIs are real, which are hallucinated). When a new library version ships, one script regenerates it:</p>
+
+<pre><code>python scripts/extract_assembly_catalog.py Aspose.ZIP &lt;version&gt; Aspose.Zip --full</code></pre>
+
+<h3>Auto-Learn Pattern Engine</h3>
+
+<p>After each run, <code>auto_learn.py</code> clusters the remaining failures by error message and code structure, then surfaces patterns that appear more than once. Each discovered pattern is tracked with a hit count, a success rate, and a confidence score indicating whether it has enough signal to be promoted to the deterministic layer.</p>
+
+<p>For Aspose.Words alone, 29 patterns have been identified. Pattern #25 (a CS0117 error requiring a specific LLM prompt formulation) reached 100% success across all 4 of its occurrences and was promoted to the deterministic layer. Patterns #24 and #27 had 0% success after 36 and 11 uses respectively and were retired to stop wasting LLM budget on them.</p>
+
+<p>The practical effect: errors that required a human or an LLM call on the first occurrence are handled deterministically — in milliseconds, with no model invocation — in all subsequent runs.</p>
+
+<h3>Intelligent Fixture Resolver</h3>
+
+<p>Runtime failures caused by missing sample files are handled by a 5-tier self-healing resolver before they ever reach the LLM:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Tier</th>
+      <th>Strategy</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1</td>
+      <td>Use the file if it already exists in the workspace</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>Look up the file in the persistent fixture registry (cross-run cache)</td>
+    </tr>
+    <tr>
+      <td>3</td>
+      <td>Try a reverse alias (e.g., <code>sample.zip</code> → <code>Archive.zip</code>)</td>
+    </tr>
+    <tr>
+      <td>4</td>
+      <td>Match by extension and content type hint</td>
+    </tr>
+    <tr>
+      <td>5</td>
+      <td>Generate a minimal but structurally valid file on demand</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Generators cover 12 file types: <code>.docx</code>, <code>.doc</code>, <code>.pdf</code>, <code>.html</code>, <code>.txt</code>, <code>.png</code>, <code>.jpg</code>, <code>.bmp</code>, <code>.csv</code>, <code>.xml</code>, <code>.rtf</code>, <code>.svg</code>. They use hint-based selection: a file named <code>Template.docx</code> gets the blank template; <code>Tables.docx</code> gets a table-structured document. Resolved fixtures are written to a persistent registry so future runs skip the resolver entirely for known paths.</p>
+
+<h3>Semantic Drift Prevention</h3>
+
+<p>Before any fixed code is written back to markdown, a 4-gate validator runs:</p>
+
+<ol>
+  <li><strong>Signature comparison</strong> — checks that types, methods, and namespaces in the fixed code exist in the assembly catalog</li>
+  <li><strong>Family classification</strong> — confirms the snippet still targets the correct Aspose product (catches examples that drifted into a different library's API)</li>
+  <li><strong>Embedding similarity</strong> — computes semantic distance between original and fixed code; a score below threshold blocks the write</li>
+  <li><strong>LLM intent review</strong> — reviews LLM-fixed examples to confirm the original intent was preserved</li>
+</ol>
+
+<p>A validator returning <code>reject</code> blocks the markdown write entirely.</p>
+
+<hr />
+
+<h2>Current Results</h2>
+
+<p>The numbers below come from commits co-authored by <code>example-reviewer@aspose.net</code> in the content repository. <em>Injected to markdown</em> means the example was verified (compiled + ran against real test data) and the corrected code was committed back to the source file. <em>Additionally verified</em> means the example passed all pipeline gates but was not written back in that particular run (typically a read-only or status-check run).</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Family</th>
+      <th style="text-align:right;">Injected to markdown</th>
+      <th style="text-align:right;">Markdown files updated</th>
+      <th style="text-align:right;">Additionally verified</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Aspose.Slides</td>
+      <td style="text-align:right;">358</td>
+      <td style="text-align:right;">222</td>
+      <td style="text-align:right;">200</td>
+    </tr>
+    <tr>
+      <td>Aspose.BarCode</td>
+      <td style="text-align:right;">138</td>
+      <td style="text-align:right;">63</td>
+      <td style="text-align:right;">5</td>
+    </tr>
+    <tr>
+      <td>Aspose.Cells</td>
+      <td style="text-align:right;">98</td>
+      <td style="text-align:right;">53</td>
+      <td style="text-align:right;">50</td>
+    </tr>
+    <tr>
+      <td>Aspose.Imaging</td>
+      <td style="text-align:right;">94</td>
+      <td style="text-align:right;">76</td>
+      <td style="text-align:right;">50</td>
+    </tr>
+    <tr>
+      <td>Aspose.Words</td>
+      <td style="text-align:right;">89</td>
+      <td style="text-align:right;">33</td>
+      <td style="text-align:right;">13</td>
+    </tr>
+    <tr>
+      <td>Aspose.ZIP</td>
+      <td style="text-align:right;">86</td>
+      <td style="text-align:right;">38</td>
+      <td style="text-align:right;">27</td>
+    </tr>
+    <tr>
+      <td>Aspose.PDF</td>
+      <td style="text-align:right;">79</td>
+      <td style="text-align:right;">59</td>
+      <td style="text-align:right;">22</td>
+    </tr>
+    <tr>
+      <td>Aspose.PSD</td>
+      <td style="text-align:right;">65</td>
+      <td style="text-align:right;">48</td>
+      <td style="text-align:right;">3</td>
+    </tr>
+    <tr>
+      <td>Aspose.OCR</td>
+      <td style="text-align:right;">11</td>
+      <td style="text-align:right;">8</td>
+      <td style="text-align:right;">11</td>
+    </tr>
+    <tr>
+      <td>Aspose.HTML</td>
+      <td style="text-align:right;">11</td>
+      <td style="text-align:right;">4</td>
+      <td style="text-align:right;">2</td>
+    </tr>
+    <tr>
+      <td>Aspose.Email</td>
+      <td style="text-align:right;">9</td>
+      <td style="text-align:right;">3</td>
+      <td style="text-align:right;">6</td>
+    </tr>
+    <tr>
+      <td>Aspose.TeX</td>
+      <td style="text-align:right;">0</td>
+      <td style="text-align:right;">0</td>
+      <td style="text-align:right;">57</td>
+    </tr>
+    <tr>
+      <td>Aspose.CAD</td>
+      <td style="text-align:right;">1</td>
+      <td style="text-align:right;">1</td>
+      <td style="text-align:right;">10</td>
+    </tr>
+    <tr>
+      <td>Aspose.Medical</td>
+      <td style="text-align:right;">1</td>
+      <td style="text-align:right;">1</td>
+      <td style="text-align:right;">1</td>
+    </tr>
+    <tr style="font-weight:bold; border-top:2px solid #ccc;">
+      <td><strong>Total</strong></td>
+      <td style="text-align:right;"><strong>1,040</strong></td>
+      <td style="text-align:right;"><strong>609</strong></td>
+      <td style="text-align:right;"><strong>457</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Across all families, <strong>1,040 verified C# examples have been committed back into 609 documentation files</strong>, with a further 457 examples verified in read-only runs. Aspose.TeX has 57 verified examples pending injection. The pipeline has now touched content across 14 Aspose product families.</p>
+
+<hr />
+
+<h2>Key Technical Components</h2>
+
+<ul>
+  <li><strong>Assembly catalog</strong> — Type/namespace/constructor/enum/method data extracted from the NuGet assembly via .NET reflection. ZIP: 138 types, 28 namespaces. Words: 797 types. Drives both deterministic fixes and LLM prompt context. Regenerated per library version with a single script.</li>
+  <li><strong>Fixture resolver</strong> — Self-healing 5-tier service ensuring sample files exist before runtime. Supports 12 file types, hint-aware generation, persistent cross-run registry.</li>
+  <li><strong>Semantic drift prevention</strong> — 4-gate validator (signature, family, embedding, LLM review) that blocks markdown writes when a fix deviates too far from the original. Runs before every write.</li>
+  <li><strong>Auto-learn</strong> — Clusters failures by error message after each run, surfaces recurring patterns, tracks per-pattern success rates, flags patterns for promotion or retirement.</li>
+  <li><strong>Dual-DB mode</strong> — A dev database receives all runs including experiments. A production database receives only committed, reviewed runs. Both are SQLite; separation is optional and configured via a path or environment variable.</li>
+  <li><strong>MCP server</strong> — The pipeline exposes all 13 tools over JSON-RPC (stdio), so any MCP-compatible client (Claude Desktop, IDE extensions) can drive the pipeline without using the CLI. An HTTP API wrapper is also available.</li>
+</ul>
+
+<hr />
+
+<h2>What It Does Not Do</h2>
+
+<ul>
+  <li>It does not modify markdown without an explicit <code>--allow-md-write</code> flag — all runs default to read-only.</li>
+  <li>It does not send any code or data to external APIs; the LLM runs fully locally via Ollama.</li>
+  <li>It does not validate documentation prose or non-C# code blocks.</li>
+  <li>It does not currently run in CI; it is a local developer tool.</li>
+</ul>
+
+<hr />
+
+<h2>Setup</h2>
+
+<p><strong>Prerequisites:</strong> Python 3.8+, .NET SDK 8.0+, <a href="https://ollama.com">Ollama</a> with a code model (recommended: <code>qwen2.5-coder</code>)</p>
+
+<pre><code># One-command setup (creates venv, installs deps, verifies prereqs)
+python scripts/setup/setup_wizard.py
+
+# Verify
+python -m src.cli.main list-families
+
+# Run a smoke test (20 examples, no markdown writes)
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace compile-verify --family zip --max-examples 20</code></pre>
+
+<p>The <code>--safe-workspace</code> flag copies the SQLite database to a temp location before the run, which avoids file locking issues on OneDrive-synced directories on Windows.</p>
+
+<hr />
+
+<h2>Adding a New Aspose Family</h2>
+
+<ol>
+  <li>Add <code>config/families/&lt;name&gt;.json</code> with content roots, NuGet package reference, safe <code>using</code> directives, and test data configuration.</li>
+  <li>Run <code>scripts/extract_assembly_catalog.py</code> against the NuGet package to generate the type catalog.</li>
+  <li>Place or generate test data fixtures in <code>artifacts/backfill/&lt;name&gt;/test-data/</code>.</li>
+  <li>Run the pipeline with <code>--max-examples 20</code> to validate the setup, then scale up.</li>
+</ol>
+
+<p>Most families have active configs today. Families at lower pass rates (OCR, CAD, TeX) need additional fixture coverage or runtime environment setup specific to their dependencies.</p>
+
+<hr />
+
+<h2>Interfaces</h2>
+
+<ul>
+  <li><strong>CLI</strong> (<code>python -m src.cli.main</code>) — primary interface for running gates, viewing status, triggering updates</li>
+  <li><strong>MCP server</strong> — stdio JSON-RPC; configure as an MCP server in Claude Desktop or any MCP-compatible host</li>
+  <li><strong>HTTP API</strong> — <code>uvicorn src.http_server:app --port 18800</code> for integration into other tooling</li>
+</ul>

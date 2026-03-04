@@ -40,7 +40,15 @@ __pycache__/
 /content/
 /%LOCALAPPDATA%/
 
-# Generated config derivatives
+# Development history and local-only docs
+/archive/
+/docs/archive/
+/docs/evidence/
+
+# Tool-specific configs (not relevant to other users)
+/.kilocode/
+
+# Generated config derivatives (regenerate with scripts/extract_assembly_catalog.py)
 /config/families/*_api_catalog*.json
 /config/families/barcode.json
 /config/families/ocr*.json
