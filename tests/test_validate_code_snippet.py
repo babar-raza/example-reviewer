@@ -6,6 +6,17 @@ from unittest.mock import MagicMock, patch
 
 from src.mcp_tools.tools import ExampleReviewerTools, ToolResult
 
+_zip_catalog_exists = Path("config/families/zip_api_catalog.json").exists()
+_words_catalog_exists = Path("config/families/words_api_catalog.json").exists()
+requires_zip_catalog = pytest.mark.skipif(
+    not _zip_catalog_exists,
+    reason="zip_api_catalog.json not present (generated artifact, requires setup)"
+)
+requires_words_catalog = pytest.mark.skipif(
+    not _words_catalog_exists,
+    reason="words_api_catalog.json not present (generated artifact, requires setup)"
+)
+
 
 @pytest.fixture
 def tools_with_catalog():
@@ -48,6 +59,7 @@ class TestValidateCodeSnippetBasics:
         assert result.success is False
         assert "No API catalog" in result.error
 
+    @requires_zip_catalog
     def test_empty_code_is_valid(self, tools_with_catalog):
         """Empty code has nothing to flag."""
         result = tools_with_catalog.validate_code_snippet(
@@ -62,6 +74,7 @@ class TestValidateCodeSnippetBasics:
 class TestValidateCodeSnippetZip:
     """Validation against the real ZIP API catalog (138 types, 28 namespaces)."""
 
+    @requires_zip_catalog
     def test_valid_zip_code(self, tools_with_catalog):
         """Code using real Aspose.Zip types should be valid."""
         code = """
@@ -88,6 +101,7 @@ class Program
         assert result.data["catalog_info"]["family"] == "zip"
         assert result.data["catalog_info"]["total_types"] > 100
 
+    @requires_zip_catalog
     def test_hallucinated_type_flagged(self, tools_with_catalog):
         """A type that doesn't exist in the catalog should be flagged."""
         code = """
@@ -106,6 +120,7 @@ class Program
         assert result.success is True
         assert "ZipMagicProcessor" in result.data["hallucinated_types"]
 
+    @requires_zip_catalog
     def test_bcl_types_not_flagged(self, tools_with_catalog):
         """Standard .NET types (Console, String, etc.) should not be flagged."""
         code = """
@@ -127,6 +142,7 @@ class Program
         assert "Console" not in result.data["hallucinated_types"]
         assert "Archive" in result.data["catalog_matches"]
 
+    @requires_zip_catalog
     def test_namespace_violation_detected(self, tools_with_catalog):
         """Using a namespace not in catalog or BCL whitelist should be flagged."""
         code = """
@@ -146,6 +162,7 @@ class Program
         assert result.success is True
         assert "SixLabors.ImageSharp" in result.data["namespace_violations"]
 
+    @requires_zip_catalog
     def test_system_namespaces_allowed(self, tools_with_catalog):
         """All standard System.* namespaces should be allowed."""
         code = """
@@ -172,6 +189,7 @@ class Program
 class TestValidateCodeSnippetWords:
     """Validation against the real Words API catalog."""
 
+    @requires_words_catalog
     def test_valid_words_code(self, tools_with_catalog):
         """Code using real Aspose.Words types should be valid."""
         code = """
@@ -192,6 +210,7 @@ class Program
         assert "Document" in result.data["catalog_matches"]
         assert "SaveFormat" in result.data["catalog_matches"]
 
+    @requires_words_catalog
     def test_hallucinated_words_method(self, tools_with_catalog):
         """A type that doesn't exist in Words catalog should be flagged."""
         code = """
@@ -214,6 +233,7 @@ class Program
 class TestValidateCodeSnippetCatalogCaching:
     """Verify catalog instances are cached per family."""
 
+    @requires_zip_catalog
     def test_catalog_cached_across_calls(self, tools_with_catalog):
         """Second call for same family should reuse cached catalog."""
         code = "using Aspose.Zip;\nvar a = new Archive();"
@@ -226,6 +246,8 @@ class TestValidateCodeSnippetCatalogCaching:
         tools_with_catalog.validate_code_snippet(code=code, family="zip")
         assert ExampleReviewerTools._catalog_cache["zip"] is cached
 
+    @requires_zip_catalog
+    @requires_words_catalog
     def test_different_families_separate_caches(self, tools_with_catalog):
         """Each family gets its own cached catalog."""
         tools_with_catalog.validate_code_snippet(
@@ -241,6 +263,7 @@ class TestValidateCodeSnippetCatalogCaching:
 class TestValidateCodeSnippetCompileVerify:
     """Test the optional compile_verify flag."""
 
+    @requires_zip_catalog
     def test_compile_verify_false_skips_compilation(self, tools_with_catalog):
         """compile_verify=False (default) should not trigger compilation."""
         code = "using Aspose.Zip;\nvar a = new Archive();"
