@@ -2,11 +2,12 @@
 Setup wizard for example-reviewer.
 
 Guides a new user through:
-1. Checking prerequisites (Python, .NET SDK, dotnet restore)
+1. Checking prerequisites (Python, .NET SDK)
 2. Installing Python dependencies
 3. Configuring a product family
-4. Generating the API catalog
-5. Verifying the setup
+4. Scaffolding / updating the .NET build host (test-examples/)
+5. Generating the API catalog
+6. Verifying the setup
 
 Usage:
     python scripts/setup/setup_wizard.py
@@ -14,6 +15,7 @@ Usage:
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -79,20 +81,8 @@ def check_prerequisites():
         fail(".NET SDK not found. Install from https://dotnet.microsoft.com/download")
         all_ok = False
 
-    # dotnet restore on test-examples
-    test_examples = PROJECT_ROOT / "test-examples"
-    if test_examples.exists():
-        code, stdout, stderr = run(
-            ["dotnet", "restore"],
-            cwd=str(test_examples)
-        )
-        if code == 0:
-            ok("dotnet restore succeeded (NuGet packages ready)")
-        else:
-            warn(f"dotnet restore failed: {stderr[:200]}")
-            warn("This may be OK if you add NuGet packages per-family later.")
-    else:
-        warn("test-examples/ not found — skipping dotnet restore")
+    # test-examples/ is scaffolded in Step 4; just confirm dotnet is reachable here
+    info("test-examples/ will be scaffolded automatically in Step 4")
 
     return all_ok
 
@@ -211,6 +201,98 @@ def configure_content_roots(family):
     else:
         warn("No content roots configured. You can edit config/families/{family}.json manually.")
         return False
+
+
+def scaffold_test_examples(family):
+    """
+    Step 4: Ensure test-examples/ exists and is up-to-date.
+
+    - If missing, scaffold from scripts/setup/templates/.
+    - If the selected family's NuGet package is not yet referenced in the
+      .csproj, add it (so dotnet restore pulls it into the NuGet cache,
+      which CatalogTypes() needs for dynamic reflection).
+    - Run dotnet restore + dotnet build to keep the binary current.
+    """
+    section("Step 4: .NET Build Host (test-examples/)")
+
+    templates_dir = Path(__file__).parent / "templates"
+    test_examples = PROJECT_ROOT / "test-examples"
+    csproj_path = test_examples / "AsposeZipValidator.csproj"
+    program_cs_path = test_examples / "Program.cs"
+
+    # ── 1. Read family config to get the NuGet package ──────────────────────
+    config_path = PROJECT_ROOT / "config" / "families" / f"{family}.json"
+    with open(config_path, encoding="utf-8") as f:
+        config = json.load(f)
+    primary_pkg = config.get("nuget_config", {}).get("primary_package", {})
+    pkg_name = primary_pkg.get("name", "")
+    pkg_version = primary_pkg.get("pinned_version", "") or primary_pkg.get("version", "") or "*"
+
+    # ── 2. Scaffold if test-examples/ or any required file is missing ────────
+    test_examples.mkdir(parents=True, exist_ok=True)
+    scaffolded = False
+
+    for src, dst in [(templates_dir / "AsposeZipValidator.csproj", csproj_path),
+                     (templates_dir / "Program.cs", program_cs_path)]:
+        if not dst.exists():
+            if not src.exists():
+                warn(f"Template not found: {src}")
+                warn("Cannot scaffold test-examples/ automatically.")
+                return False
+            dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            ok(f"Created test-examples/{dst.name} from template")
+            scaffolded = True
+        else:
+            ok(f"test-examples/{dst.name} already exists")
+
+    # ── 3. Ensure the selected family's package is in the .csproj ───────────
+    csproj_text = csproj_path.read_text(encoding="utf-8")
+    pkg_already_present = bool(
+        re.search(rf'PackageReference\s+Include="{re.escape(pkg_name)}"',
+                  csproj_text, re.IGNORECASE)
+    )
+
+    if pkg_name and not pkg_already_present:
+        new_ref = f'    <PackageReference Include="{pkg_name}" Version="{pkg_version}" />'
+        # Insert immediately before the end marker so the file stays clean
+        csproj_text = csproj_text.replace(
+            "    <!-- FAMILY-PACKAGES-END -->",
+            f"{new_ref}\n    <!-- FAMILY-PACKAGES-END -->"
+        )
+        csproj_path.write_text(csproj_text, encoding="utf-8")
+        ok(f"Added {pkg_name} {pkg_version} to AsposeZipValidator.csproj")
+        scaffolded = True
+    elif pkg_name:
+        ok(f"{pkg_name} already referenced in .csproj")
+
+    # ── 4. Build (always after scaffold/edit; skip if binary is current) ─────
+    bin_dir = test_examples / "bin"
+    needs_build = scaffolded or not bin_dir.exists()
+
+    if needs_build:
+        info("Running dotnet restore...")
+        code, _, stderr = run(["dotnet", "restore", str(csproj_path)],
+                              cwd=str(test_examples))
+        if code != 0:
+            warn(f"dotnet restore failed: {stderr[:300]}")
+            info("You may need to fix network access or NuGet feed settings.")
+            return False
+        ok("dotnet restore succeeded")
+
+        info("Building .NET build host (dotnet build)...")
+        code, _, stderr = run(
+            ["dotnet", "build", str(csproj_path), "--no-restore", "--nologo", "-v", "q"],
+            cwd=str(test_examples)
+        )
+        if code == 0:
+            ok("Build host compiled successfully")
+        else:
+            warn(f"dotnet build failed:\n{stderr[:400]}")
+            return False
+    else:
+        ok(".NET build host binary is current — skipping rebuild")
+
+    return True
 
 
 def generate_catalog(family):
@@ -360,13 +442,21 @@ def main():
         print("\n  No family selected. Exiting.")
         sys.exit(0)
 
-    # Step 4: Configure content roots
+    # Step 4: Scaffold / update .NET build host
+    build_host_ok = scaffold_test_examples(family)
+    if not build_host_ok:
+        print("\n  .NET build host setup failed.")
+        print("  Resolve the errors above, then re-run the wizard or build manually:")
+        print("    dotnet build test-examples/AsposeZipValidator.csproj")
+        sys.exit(1)
+
+    # Step 5 (renumbered): Configure content roots
     configure_content_roots(family)
 
-    # Step 5: Generate API catalog
+    # Step 6 (renumbered): Generate API catalog
     generate_catalog(family)
 
-    # Step 6: Verify
+    # Step 7 (renumbered): Verify
     verify_setup(family)
 
     # Done

@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Aspose.Zip is a required anchor: Program.cs references it directly via typeof(Aspose.Zip.Archive).
+      Additional family packages are added automatically by the setup wizard (setup_wizard.py).
+      Do not remove the FAMILY-PACKAGES markers below.
+    -->
+    <PackageReference Include="Aspose.Zip" Version="*" />
+    <!-- FAMILY-PACKAGES-START -->
+    <!-- FAMILY-PACKAGES-END -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Exclude legacy example directories and ad-hoc test files to avoid naming conflicts -->
+    <Compile Remove="test\**" />
+    <Compile Remove="zip\**" />
+    <Compile Remove="test_*.cs" />
+    <Compile Remove="Program_GenFixtures.cs" />
+    <EmbeddedResource Remove="test\**" />
+    <EmbeddedResource Remove="zip\**" />
+    <None Remove="test\**" />
+    <None Remove="zip\**" />
+  </ItemGroup>
+
+</Project>
