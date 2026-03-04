@@ -8,7 +8,6 @@ import re
 import time
 import json
 import logging
-import asyncio
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
@@ -28,7 +27,29 @@ except ImportError:
 from .llm_contracts import ReviewResponse, ReviewIssue, IssueType, Severity
 from ..pipeline.error_complexity_classifier import ErrorComplexityClassifier
 
+try:
+    from .circuit_breaker import CircuitBreaker, build_circuit_breaker_from_config
+    CIRCUIT_BREAKER_AVAILABLE = True
+except ImportError:
+    CIRCUIT_BREAKER_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+
+def _is_transient_error(error: Exception) -> bool:
+    """Return True for network/server errors that should trip the circuit breaker.
+
+    Returns False for permanent errors (auth, validation) that must NOT trip the
+    circuit — we don't want a bad API key to cause Ollama failover.
+    """
+    permanent_types = (ValueError, KeyError, AttributeError, TypeError)
+    if isinstance(error, permanent_types):
+        return False
+    err_str = str(error).lower()
+    # 401/403 are auth errors — permanent, don't trip circuit
+    if "401" in err_str or "403" in err_str or "authentication" in err_str:
+        return False
+    return True  # Default: treat as transient (connection, timeout, 5xx, etc.)
 
 
 @dataclass
@@ -191,6 +212,7 @@ using (var archive = new Archive(settings))
         self.routing_enabled = False
         self._fallback_client = None
         self._ollama_manager = None  # Lazy-initialized OllamaManager for auto-start
+        self._circuit_breaker: Optional['CircuitBreaker'] = None  # Passive health monitor
 
         # Telemetry tracking for routing decisions
         self._tier_distribution = {"small": 0, "medium": 0, "large": 0}
@@ -333,6 +355,10 @@ using (var archive = new Archive(settings))
                             except Exception:
                                 pass
 
+        # Expose circuit breaker state for logging / dashboard
+        if self._circuit_breaker:
+            result["circuit_breaker"] = self._circuit_breaker.get_status()
+
         return result
 
     def set_routing_config(self, routing_config: Dict[str, Any]) -> None:
@@ -340,11 +366,25 @@ using (var archive = new Archive(settings))
         Set model routing configuration.
 
         Args:
-            routing_config: Configuration dict with model_tiers, providers, etc.
+            routing_config: Configuration dict with model_tiers, providers, circuit_breaker, etc.
         """
         self.routing_config = routing_config
         self.routing_enabled = routing_config.get("enabled", False)
-        logger.info(f"Model routing {'enabled' if self.routing_enabled else 'disabled'}")
+
+        # Build circuit breaker if fallback (Ollama) is configured
+        if CIRCUIT_BREAKER_AVAILABLE:
+            has_fallback = bool(routing_config.get("providers", {}).get("ollama"))
+            cb_cfg = routing_config.get("circuit_breaker", {})
+            # Handle both dict (from JSON) and Pydantic model (from model_dump)
+            if hasattr(cb_cfg, "model_dump"):
+                cb_cfg = cb_cfg.model_dump()
+            self._circuit_breaker = build_circuit_breaker_from_config(cb_cfg, has_fallback)
+
+        logger.info(
+            "Model routing %s, circuit_breaker=%s",
+            "enabled" if self.routing_enabled else "disabled",
+            "active" if self._circuit_breaker else "disabled",
+        )
 
     def _get_fallback_client(self) -> Optional[OpenAI]:
         """
@@ -432,12 +472,53 @@ using (var archive = new Archive(settings))
             logger.warning(f"Failed to initialize OllamaManager: {e}")
             return None
 
-    def _call_with_fallback(self, model: str, messages: List[Dict], **kwargs) -> Optional[Any]:
+    def _try_ollama_fallback(
+        self, model: str, messages: List[Dict], reason: str = "unknown", **kwargs
+    ) -> Optional[Any]:
         """
-        Try calling company LLM, fallback to Ollama if unavailable.
+        Attempt the Ollama fallback endpoint, auto-starting Ollama if needed.
 
         Args:
-            model: Model name to use
+            model: Original model name (for logging; Ollama uses its own model)
+            messages: Chat messages to send
+            reason: Why fallback is being used (for log context)
+            **kwargs: Additional arguments for chat.completions.create
+
+        Returns:
+            Response object from Ollama, or None if fallback also fails
+        """
+        if not self.routing_config:
+            return None
+        providers = self.routing_config.get("providers", {})
+        ollama_config = providers.get("ollama", {})
+        if ollama_config.get("auto_start", True):
+            self._ensure_ollama_running(ollama_config)
+        fallback_client = self._get_fallback_client()
+        if fallback_client:
+            fallback_model = self._get_fallback_model()
+            logger.info(
+                "llm_fallback_to_ollama reason=%s primary_model=%s fallback_model=%s",
+                reason, model, fallback_model,
+            )
+            try:
+                return fallback_client.chat.completions.create(
+                    model=fallback_model, messages=messages, **kwargs
+                )
+            except Exception as fallback_e:
+                logger.error("ollama_fallback_failed reason=%s error=%s", reason, fallback_e)
+        return None
+
+    def _call_with_fallback(self, model: str, messages: List[Dict], **kwargs) -> Optional[Any]:
+        """
+        Call primary LLM (professionalize.LLM) with circuit-breaker-aware fallback to Ollama.
+
+        Flow:
+          1. If circuit breaker is OPEN → route directly to Ollama (proactive routing)
+          2. Otherwise try primary; record success/failure with latency for circuit breaker
+          3. On primary failure → attempt Ollama (reactive fallback, existing behavior)
+
+        Args:
+            model: Model name to use on primary
             messages: Chat messages
             **kwargs: Additional arguments for chat.completions.create
 
@@ -445,41 +526,59 @@ using (var archive = new Archive(settings))
             Response object, or None if both primary and fallback fail
         """
         if not self.routing_config or not self.routing_config.get("fallback_enabled", True):
-            # Routing not enabled or fallback disabled, use primary client
+            # Routing disabled — use primary client directly
             if self._client:
                 return self._client.chat.completions.create(model=model, messages=messages, **kwargs)
             return None
 
+        # ── Proactive routing: skip primary when circuit breaker is OPEN ──
+        if self._circuit_breaker and self._circuit_breaker.should_use_fallback():
+            cb_status = self._circuit_breaker.get_status()
+            logger.info(
+                "circuit_breaker_proactive_route state=%s consecutive_failures=%d "
+                "error_rate=%.2f avg_latency_s=%.1f",
+                cb_status["state"],
+                cb_status["consecutive_failures"],
+                cb_status["error_rate"],
+                cb_status["avg_latency_s"],
+            )
+            return self._try_ollama_fallback(model, messages, reason="circuit_open", **kwargs)
+
+        # ── Primary call with latency tracking ──
+        if not self._client:
+            logger.warning("primary_client_unavailable routing_to_ollama")
+            return self._try_ollama_fallback(model, messages, reason="no_primary_client", **kwargs)
+
+        _t0 = time.time()
         try:
-            # Try primary provider first
-            if self._client:
-                logger.debug(f"Calling primary provider with model {model}")
-                return self._client.chat.completions.create(model=model, messages=messages, **kwargs)
+            logger.debug("calling_primary_provider model=%s", model)
+            response = self._client.chat.completions.create(model=model, messages=messages, **kwargs)
+            _latency_s = time.time() - _t0
+            if self._circuit_breaker:
+                self._circuit_breaker.record_success(_latency_s)
+            return response
 
-        except (ConnectionError, TimeoutError, Exception) as e:
-            error_str = str(e).lower()
-            if self.routing_config.get("fallback_on_error", True) or isinstance(e, TimeoutError):
-                logger.warning(f"Primary provider unavailable ({type(e).__name__}): {e}. Attempting fallback to Ollama.")
+        except Exception as e:
+            _latency_s = time.time() - _t0
+            # Record transient failures for circuit breaker (skip auth/permanent errors)
+            if self._circuit_breaker and _is_transient_error(e):
+                self._circuit_breaker.record_failure(_latency_s)
+                cb_status = self._circuit_breaker.get_status()
+                logger.info(
+                    "circuit_breaker_failure_recorded state=%s consecutive_failures=%d",
+                    cb_status["state"],
+                    cb_status["consecutive_failures"],
+                )
 
-                # Ensure Ollama is running before attempting fallback
-                providers = self.routing_config.get("providers", {})
-                ollama_config = providers.get("ollama", {})
-                if ollama_config.get("auto_start", True):
-                    self._ensure_ollama_running(ollama_config)
-
-                try:
-                    # Try fallback client with fallback-specific model
-                    fallback_client = self._get_fallback_client()
-                    if fallback_client:
-                        fallback_model = self._get_fallback_model()
-                        logger.info(f"Falling back to Ollama with model {fallback_model}")
-                        return fallback_client.chat.completions.create(model=fallback_model, messages=messages, **kwargs)
-                except Exception as fallback_e:
-                    logger.error(f"Fallback client also failed: {fallback_e}")
-
+            if self.routing_config.get("fallback_on_error", True):
+                logger.warning(
+                    "primary_provider_failed error_type=%s error=%s falling_back_to_ollama",
+                    type(e).__name__, e,
+                )
+                return self._try_ollama_fallback(
+                    model, messages, reason=type(e).__name__, **kwargs
+                )
             raise
-
-        return None
 
     def get_provider_capabilities(self) -> ProviderCapabilities:
         """
@@ -1921,61 +2020,6 @@ Return the C# code now:"""
             # Don't fail the pipeline if telemetry fails, but log loudly
             logger.error(f"Failed to track LLM rejection telemetry: {e}")
 
-    def review_markdown(
-        self,
-        markdown_content: str,
-        code_snippets: List[Dict[str, str]],
-    ) -> LLMResponse:
-        """
-        Review updated markdown for code relevance and correctness.
-
-        Args:
-            markdown_content: Full markdown file content
-            code_snippets: List of code snippets with their context
-
-        Returns:
-            LLMResponse with review results
-        """
-        system_prompt = """You are a technical documentation reviewer.
-Your task is to verify that code snippets in the markdown are:
-1. Relevant to the surrounding documentation context
-2. Properly formatted with correct language tags
-3. Complete and syntactically correct
-
-Return a JSON object with the following structure:
-{
-    "approved": true/false,
-    "issues": ["issue1", "issue2"],
-    "suggestions": ["suggestion1"]
-}"""
-
-        prompt_parts = [
-            "Review the following markdown document with code snippets:",
-            "",
-            "## Markdown Content:",
-            markdown_content[:8000],  # Truncate for context window
-            "",
-            "## Code Snippets to Verify:",
-        ]
-
-        for i, snippet in enumerate(code_snippets[:5], 1):
-            prompt_parts.extend([
-                f"### Snippet {i} (at line {snippet.get('line', 'unknown')}):",
-                "```" + snippet.get('language', 'csharp'),
-                snippet.get('code', ''),
-                "```",
-            ])
-
-        prompt_parts.extend([
-            "",
-            "Return your review as JSON:",
-        ])
-
-        return self.complete(
-            prompt="\n".join(prompt_parts),
-            system_prompt=system_prompt,
-            max_tokens=2048,
-        )
 
     def review_markdown_structured(
         self,
