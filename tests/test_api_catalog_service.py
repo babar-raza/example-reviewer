@@ -8,16 +8,23 @@ from src.namespace_validator import NamespaceValidator
 
 
 CATALOG_PATH = "config/families/zip_api_catalog.json"
+_catalog_exists = Path(CATALOG_PATH).exists()
+requires_catalog = pytest.mark.skipif(
+    not _catalog_exists,
+    reason="zip_api_catalog.json not present (generated artifact, requires setup)"
+)
 
 
 class TestAPICatalogService:
     """Unit tests for APICatalogService."""
 
+    @requires_catalog
     def test_load_zip_catalog(self):
         svc = APICatalogService("zip")
         assert svc.is_loaded
         assert len(svc.get_all_types()) >= 130
 
+    @requires_catalog
     def test_load_with_explicit_path(self):
         svc = APICatalogService("zip", catalog_path=CATALOG_PATH)
         assert svc.is_loaded
@@ -29,24 +36,28 @@ class TestAPICatalogService:
         assert svc.get_all_types() == []
         assert svc.get_namespace_for_type("Archive") is None
 
+    @requires_catalog
     def test_get_namespace_for_type(self):
         svc = APICatalogService("zip")
         assert svc.get_namespace_for_type("Archive") == "Aspose.Zip"
         assert svc.get_namespace_for_type("RarArchive") == "Aspose.Zip.Rar"
         assert svc.get_namespace_for_type("FakeType") is None
 
+    @requires_catalog
     def test_get_using_directive(self):
         svc = APICatalogService("zip")
         assert svc.get_using_directive("Archive") == "using Aspose.Zip;"
         assert svc.get_using_directive("SevenZipArchive") == "using Aspose.Zip.SevenZip;"
         assert svc.get_using_directive("FakeType") is None
 
+    @requires_catalog
     def test_validate_symbol(self):
         svc = APICatalogService("zip")
         assert svc.validate_symbol("Archive")
         assert svc.validate_symbol("TarArchive")
         assert not svc.validate_symbol("BogusType")
 
+    @requires_catalog
     def test_ambiguous_types(self):
         svc = APICatalogService("zip")
         assert svc.is_ambiguous("CancelEntryEventArgs")
@@ -54,12 +65,14 @@ class TestAPICatalogService:
         ns = svc.get_ambiguous_namespaces("CancelEntryEventArgs")
         assert len(ns) >= 2
 
+    @requires_catalog
     def test_validate_namespace(self):
         svc = APICatalogService("zip")
         assert svc.validate_namespace("Aspose.Zip")
         assert svc.validate_namespace("Aspose.Zip.Rar")
         assert not svc.validate_namespace("Aspose.Fake")
 
+    @requires_catalog
     def test_get_namespace_set(self):
         svc = APICatalogService("zip")
         ns = svc.get_namespace_set()
@@ -67,6 +80,7 @@ class TestAPICatalogService:
         assert "Aspose.Zip" in ns
         assert len(ns) == 28
 
+    @requires_catalog
     def test_using_directive_map(self):
         svc = APICatalogService("zip")
         m = svc.get_using_directive_map()
@@ -83,6 +97,7 @@ class TestNamespaceValidatorCatalogIntegration:
         assert not ok
         assert "Aspose.Zip" in violations
 
+    @requires_catalog
     def test_with_catalog_allows_aspose(self):
         catalog = APICatalogService("zip")
         v = NamespaceValidator(
@@ -93,6 +108,7 @@ class TestNamespaceValidatorCatalogIntegration:
         assert ok
         assert violations == []
 
+    @requires_catalog
     def test_with_catalog_rejects_unknown(self):
         catalog = APICatalogService("zip")
         v = NamespaceValidator(
@@ -125,6 +141,7 @@ class TestCatalogConfigIntegration:
         assert fc.api_catalog.enabled is True
         assert fc.api_catalog.path == "config/families/zip_api_catalog.json"
 
+    @requires_catalog
     def test_config_path_loads_catalog(self):
         from src.core.config import ConfigurationManager
         cm = ConfigurationManager()
@@ -137,6 +154,7 @@ class TestCatalogConfigIntegration:
 class TestSemanticMicrofixesIntegration:
     """Integration: semantic_microfixes uses catalog via service."""
 
+    @requires_catalog
     def test_catalog_directives_available_via_registry(self):
         """Test that catalog directives are accessible via FamilyServiceRegistry."""
         from pathlib import Path
