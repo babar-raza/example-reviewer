@@ -40,6 +40,10 @@ __pycache__/
 /content/
 /%LOCALAPPDATA%/
 
+# .NET build host and test fixtures (local only)
+/test-examples/
+/test-data/
+
 # Development history and local-only docs
 /archive/
 /docs/archive/
