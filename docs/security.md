@@ -1,586 +1,199 @@
 # Security Guide
 
-This guide covers security best practices for the Example Reviewer system, with special focus on GitHub API token management and data protection.
+Security practices for the Example Reviewer system, covering token management,
+data protection, and secrets handling.
 
 ---
 
 ## Table of Contents
 
-1. [GitHub Token Management](#github-token-management)
-2. [Rate Limiting](#rate-limiting)
-3. [Data Security](#data-security)
-4. [Secrets Management](#secrets-management)
-5. [Vulnerability Management](#vulnerability-management)
-6. [Security Checklist](#security-checklist)
+1. [GitHub Token Management](#1-github-token-management)
+2. [Rate Limiting](#2-rate-limiting)
+3. [Data Security](#3-data-security)
+4. [Secrets Management](#4-secrets-management)
+5. [Vulnerability Disclosure](#5-vulnerability-disclosure)
 
 ---
 
-## GitHub Token Management
+## 1. GitHub Token Management
 
-### Token Requirements
+### What tokens are used
 
-The Example Reviewer uses the GitHub Gist API to fetch code examples from public gists.
+The pipeline uses GitHub tokens in two places:
 
-**Important**: GitHub tokens are **optional** for this system. Public gists can be accessed without authentication.
+| Purpose | Env var | Required? |
+|---------|---------|-----------|
+| Fetching public gists during discovery / backfill | Configured via `pat_env_var` in family JSON | Optional — increases rate limit from 60 → 5,000 req/hr |
+| Publishing verified examples back to gists | Same `pat_env_var` | Required only when `upload_mode` ≠ `inline-only` |
 
-**Why use a token?**
-- Increase rate limit from 60 to 5,000 requests per hour
-- Avoid IP-based rate limiting in shared environments
-- Better monitoring and tracking of API usage
+The environment variable name is **per-family** and set in each `config/families/<family>.json`
+under `gist.pat_env_var`. Examples:
 
-### Token Scopes
+```json
+// config/families/zip.json
+{ "gist": { "pat_env_var": "GITHUB_GIST_TOKEN" } }
 
-For reading **public gists**, you need **NO special scopes**.
+// config/families/words.json
+{ "gist": { "pat_env_var": "GITHUB_PAT" } }
+```
 
-For **publishing gists** (Phase 5 upload modes), you need the `gist` scope.
+The default when no family override is set is `GIST_PAT`.
 
-#### Read-Only Operations (Discovery)
+### Token scopes
 
-**Classic Personal Access Token**:
-- No scopes required (public read is default)
-- Can create a token with zero scopes selected
-- Token still provides rate limit increase
+| Operation | Required scope |
+|-----------|---------------|
+| Reading public gists (discovery, backfill) | None — public read requires no scopes |
+| Publishing / updating gists (`upload-on-change`, `upload-always`) | `gist` scope |
 
-**Fine-Grained Personal Access Token** (Recommended):
-- No permissions required for reading public gists
-- More secure than classic tokens
-- Can be scoped to specific repositories if needed
+Use a fine-grained PAT with no permissions for read-only access. For publishing,
+a classic PAT with only the `gist` scope is sufficient.
 
-#### Write Operations (Gist Publishing - Phase 5)
+### Creating a token
 
-**Classic Personal Access Token**:
-- Required scope: `gist` (Create gists)
-- Allows creating, updating, and deleting gists
-- Used via `GIST_PUBLISH_TOKEN` environment variable
+1. Go to **GitHub Settings → Developer settings → Personal access tokens**
+2. For read-only: fine-grained token, no permissions selected
+3. For publishing: classic token, tick only the `gist` scope
+4. Set expiry to 90 days; rotate before expiry
 
-**Fine-Grained Personal Access Token**:
-- Gists permission: Read and write
-- More granular control than classic tokens
-- Recommended for production deployments
+### Token storage
 
-**Reference**: [GitHub Documentation - Scopes for OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps)
-
-### Creating a GitHub Token
-
-#### Option 1: Fine-Grained Token (Recommended)
-
-1. Go to GitHub Settings: https://github.com/settings/tokens?type=beta
-2. Click "Generate new token" (fine-grained)
-3. Configure token:
-   - **Token name**: `example-reviewer-gist-access`
-   - **Expiration**: 90 days (rotate regularly)
-   - **Repository access**: Public Repositories (read-only)
-   - **Permissions**: None required for public gists
-4. Click "Generate token"
-5. **Copy token immediately** (you won't see it again)
-
-#### Option 2: Classic Token
-
-1. Go to GitHub Settings: https://github.com/settings/tokens
-2. Click "Generate new token" → "Generate new token (classic)"
-3. Configure token:
-   - **Note**: `example-reviewer-gist-access`
-   - **Expiration**: 90 days
-   - **Scopes**: Leave all unchecked (no scopes needed)
-4. Click "Generate token"
-5. **Copy token immediately**
-
-### Token Storage
-
-**Environment Variables** (Recommended):
+Store tokens in a `.env` file at the repo root (already in `.gitignore`):
 
 ```bash
-# Linux/Mac
-export GITHUB_TOKEN="ghp_your_token_here"
-export GIST_PUBLISH_OWNER="mycompany"
-export GIST_PUBLISH_TOKEN="ghp_your_publish_token_here"
-export GIST_PUBLISH_PUBLIC="true"  # Optional: defaults to true
-
-# Windows Command Prompt
-set GITHUB_TOKEN=ghp_your_token_here
-set GIST_PUBLISH_OWNER=mycompany
-set GIST_PUBLISH_TOKEN=ghp_your_publish_token_here
-
-# Windows PowerShell
-$env:GITHUB_TOKEN="ghp_your_token_here"
-$env:GIST_PUBLISH_OWNER="mycompany"
-$env:GIST_PUBLISH_TOKEN="ghp_your_publish_token_here"
+# .env  —  never commit this file
+GITHUB_GIST_TOKEN=ghp_your_token_here   # for zip family
+GITHUB_PAT=ghp_your_token_here          # for words family
+# Add one line per family as needed
 ```
 
-**Important**:
-- `GITHUB_TOKEN` is for **reading** public gists (optional, increases rate limit)
-- `GIST_PUBLISH_TOKEN` is for **publishing** new gists (required for upload modes)
-- These should be **different tokens** with different scopes for security
-- `GIST_PUBLISH_TOKEN` requires `gist` scope; `GITHUB_TOKEN` needs no scopes
+Loaded automatically at startup via `python-dotenv`. For CI, use repository secrets.
 
-**Persistent Storage** (for development):
+### Token redaction in logs
 
-Create a `.env` file in the repository root (already in .gitignore):
+The pipeline never logs full token values. `GistPublisher` reads the token via
+`os.environ.get(token_env_var)` and logs only debug-level availability checks
+(`"GistPublisher unavailable: no authentication token"`). No token value
+ever appears in log output.
+
+### Verifying your token
 
 ```bash
-# .env
-GITHUB_TOKEN=ghp_your_token_here
-GIST_PUBLISH_OWNER=mycompany
-GIST_PUBLISH_TOKEN=ghp_your_publish_token_here
-GIST_PUBLISH_PUBLIC=true
-```
-
-### Token Logging Security (Phase 5)
-
-**CRITICAL**: The system **NEVER logs full tokens** to prevent accidental exposure.
-
-**Token Redaction Policy**:
-- Full tokens are **never** written to logs or console output
-- Only last 4 characters shown for verification (e.g., `...x7a9`)
-- Applies to both `GITHUB_TOKEN` and `GIST_PUBLISH_TOKEN`
-
-**Example Safe Logging**:
-```
-[i] Gist publishing enabled: owner=mycompany, token=...x7a9, public=true
-[i] Publishing gist for snippet 123: filename=test.cs, owner=mycompany, token=...a1b2
-```
-
-**Implementation**:
-```python
-# Token redaction in GistPublisher
-token_redacted = "..." + self.token[-4:] if len(self.token) >= 4 else "***"
-logger.info(f"Using token: {token_redacted}")
-```
-
-**What to check**:
-- Search logs for token patterns: `grep -E "ghp_[a-zA-Z0-9]{36}" logs/*.log` (should return nothing)
-- Verify only last 4 chars appear: `grep "token=" logs/*.log`
-- Check console output during CLI operations
-
-Load with python-dotenv:
-```python
-from dotenv import load_dotenv
-load_dotenv()
-```
-
-**CI/CD Environments**:
-- Use repository secrets (GitHub Actions: `secrets.GITHUB_TOKEN`)
-- Use environment variables in CI configuration
-- Never hardcode tokens in scripts
-
-### Token Verification
-
-Test your token is working:
-
-```bash
-# Without token (should show 60 requests/hour limit)
+# Check rate limit without token (expect limit: 60)
 curl https://api.github.com/rate_limit
 
-# With token (should show 5000 requests/hour limit)
-curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/rate_limit
+# Check rate limit with token (expect limit: 5000)
+curl -H "Authorization: token $GITHUB_GIST_TOKEN" https://api.github.com/rate_limit
 ```
-
-Expected output with token:
-```json
-{
-  "resources": {
-    "core": {
-      "limit": 5000,
-      "remaining": 5000,
-      "reset": 1768149395
-    }
-  }
-}
-```
-
-### Token Rotation
-
-**Best Practices**:
-1. Set token expiration to 90 days or less
-2. Rotate tokens before expiration
-3. Revoke old tokens after rotation
-4. Document rotation dates in team calendar
-
-**Rotation Process**:
-1. Create new token (follow creation steps above)
-2. Update environment variable or CI secret
-3. Test system works with new token
-4. Revoke old token: https://github.com/settings/tokens
-
-### Token Revocation
-
-**When to revoke immediately**:
-- Token accidentally committed to git
-- Suspicious API activity detected
-- Team member leaves project
-- System compromise suspected
-
-**How to revoke**:
-1. Go to: https://github.com/settings/tokens
-2. Find the token in list
-3. Click "Delete" or "Revoke"
-4. Generate new token if still needed
 
 ---
 
-## Rate Limiting
+## 2. Rate Limiting
 
-### Rate Limit Tiers
+| Auth | Requests/hour |
+|------|--------------|
+| None | 60 |
+| With token | 5,000 |
 
-GitHub API enforces rate limits to prevent abuse:
-
-| Authentication | Requests/Hour | Use Case |
-|----------------|---------------|----------|
-| None | 60 | Small-scale testing, single gist fetches |
-| With Token | 5,000 | Production use, batch processing |
-
-### Rate Limit Detection
-
-The system automatically detects rate limiting:
-
-```
-[!] GitHub API rate limit exceeded. Set GITHUB_TOKEN env var for higher limits.
-```
-
-**HTTP Response Indicators**:
-- Status code: `403 Forbidden`
-- Header: `X-RateLimit-Remaining: 0`
-
-### Checking Current Rate Limit
-
-```bash
-# Check rate limit status
-curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/rate_limit
-
-# Extract specific values
-curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/rate_limit | \
-  python -c "import json, sys; d=json.load(sys.stdin); print(f\"Remaining: {d['resources']['core']['remaining']}/{d['resources']['core']['limit']}\")"
-```
-
-### Rate Limit Reset
-
-When rate limit is exceeded, wait until reset time:
-
-```python
-import requests
-import time
-from datetime import datetime
-
-response = requests.get('https://api.github.com/rate_limit',
-                        headers={'Authorization': f'token {token}'})
-reset_timestamp = response.json()['resources']['core']['reset']
-reset_time = datetime.fromtimestamp(reset_timestamp)
-print(f"Rate limit resets at: {reset_time}")
-```
-
-### Avoiding Rate Limits
-
-**Best Practices**:
-1. **Use token**: Always set GITHUB_TOKEN for production
-2. **Cache aggressively**: System uses ETags and 1-hour cache
-3. **Batch operations**: Process gists in bulk during off-peak hours
-4. **Monitor usage**: Check rate limit before large operations
+The pipeline detects HTTP 403 + `X-RateLimit-Remaining: 0` and logs a warning.
+Setting the family's `pat_env_var` token in your environment is the only action needed.
 
 ---
 
-## Data Security
+## 3. Data Security
 
-### Cached Data
+### SQLite database
 
-**Location**: `cache/gists/` (or `$CACHE_DIR`)
+**Path**: `data/example_reviewer.db` (development) / `data/example_reviewer_prod.db` (production)
 
-**What is cached**:
-- Gist API responses (JSON metadata)
-- Raw file content (.cs files)
-- ETags for conditional requests
+Both paths are gitignored (`/data/` in `.gitignore`).
 
-**Sensitivity**:
-- Public data only (public gists)
-- No PII or secrets should be in gists
-- Safe to backup or share within organization
+**What is stored**: file paths, extracted code snippets, compile/runtime results,
+LLM fix history, telemetry run records. No credentials or PII.
 
-**File Permissions**:
-```bash
-# Recommended permissions
-chmod 755 cache/gists/           # Directory readable by all
-chmod 644 cache/gists/*          # Files readable by all
+### Cache and workspace directories
+
+All runtime-generated directories are gitignored:
+
+```
+/cache/          # HTTP response cache
+/workspace/      # dotnet build scratch space
+/workspaces/     # safe-workspace mode
+/artifacts/      # test data, fixture registry
+/logs/
+/runs/
 ```
 
-### Database Content
+None of these contain secrets. They are safe to delete and will be rebuilt on next run.
 
-**Location**: `data/examples.db`
+### OneDrive / WSL note
 
-**What is stored**:
-- Page metadata (file paths, family)
-- Code snippets (from documentation)
-- Gist metadata (ID, owner, description)
-- Validation results (compilation errors)
-
-**Sensitivity**:
-- No credentials or secrets
-- Contains file paths (may reveal directory structure)
-- Contains code snippets (public documentation)
-
-**File Permissions**:
-```bash
-# Recommended permissions (more restrictive)
-chmod 600 data/examples.db       # Owner read/write only
-chmod 700 data/                  # Directory owner-only access
-```
-
-### Access Control
-
-**Principle of Least Privilege**:
-1. Database: Owner read/write only (600)
-2. Cache: World-readable (644) - public data
-3. Logs: Owner read/write only (600) - may contain errors
-4. Config: Owner read/write only (600) - may contain paths
-
-**Set permissions**:
-```bash
-chmod 700 data/ logs/
-chmod 600 data/examples.db logs/*.log
-chmod 755 cache/
-chmod 644 cache/gists/*
-```
-
-### Data Cleanup
-
-**Secure deletion** of old data:
+SQLite WAL mode is incompatible with OneDrive sync and WSL DrvFS. Use
+`--safe-workspace` to move the DB and workspace to a local path:
 
 ```bash
-# Delete cache (safe - will be rebuilt)
-rm -rf cache/gists/
-
-# Delete database (WARNING: destructive)
-rm data/examples.db
-
-# Secure overwrite (if paranoid)
-shred -vfz -n 3 data/examples.db
+PYTHONPATH=. python -m src.cli.main run --family zip --safe-workspace
 ```
-
-**Automated cleanup** (recommended):
-- See [Operations Guide - Database Cleanup](operations.md#database-cleanup)
-
-### Network Security
-
-**HTTPS Only**:
-- All GitHub API calls use HTTPS
-- No insecure HTTP fallback
-- Certificate validation enabled
-
-**No Proxy by Default**:
-- System respects standard `HTTP_PROXY` environment variable
-- Ensure proxy is trusted if configured
 
 ---
 
-## Secrets Management
+## 4. Secrets Management
 
-### Never Commit Tokens
+### What must never be committed
 
-**Verification**:
-Check .gitignore includes:
-```bash
-# Verify .gitignore
-grep -E "\.env|GITHUB_TOKEN|secrets" .gitignore
-```
+The `.gitignore` already excludes:
 
-Expected entries:
 ```
 .env
-*.env
-secrets/
+.env.local
+/secrets/
+/data/
 ```
 
-**Check for leaked secrets**:
+Verify before pushing:
+
 ```bash
-# Search for potential token patterns in git history
-git log --all --full-history --source --pickaxe-regex -S "ghp_[a-zA-Z0-9]{36}" -- .
-
-# Use git-secrets (install separately)
-git secrets --scan
+git log --all --full-history -S "ghp_" -- .   # should return nothing
 ```
 
-### Environment Variables
+### Required `.env` entries
 
-**Best Practice**:
-- Use environment variables for tokens
-- Never hardcode in source code
-- Document required variables in README
-
-**For shell sessions**:
 ```bash
-# Add to ~/.bashrc or ~/.zshrc (but NOT to git)
-export GITHUB_TOKEN="ghp_your_token_here"
+# LLM provider key (required)
+litellm_key=sk-your-api-key-here
+
+# GitHub gist token — one per family, using that family's pat_env_var name
+GITHUB_GIST_TOKEN=ghp_your_token_here    # zip
+GITHUB_PAT=ghp_your_token_here           # words
+
+# Optional: telemetry HTTP endpoint
+TELEMETRY_API_URL=http://localhost:8765
 ```
 
-**For systemd services**:
-```ini
-[Service]
-Environment="GITHUB_TOKEN=ghp_your_token_here"
-```
+### CI/CD
 
-### CI/CD Integration
-
-**GitHub Actions**:
 ```yaml
-name: Example Reviewer
-on: [push]
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Run discovery
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python src/cli.py discover --family zip
-```
-
-**GitLab CI**:
-```yaml
-variables:
-  GITHUB_TOKEN: $CI_GITHUB_TOKEN  # Set in project settings
-```
-
-### Production Key Vaults
-
-For production deployments, use managed secret services:
-
-**AWS Secrets Manager**:
-```python
-import boto3
-client = boto3.client('secretsmanager')
-token = client.get_secret_value(SecretId='github-token')['SecretString']
-```
-
-**Azure Key Vault**:
-```python
-from azure.keyvault.secrets import SecretClient
-from azure.identity import DefaultAzureCredential
-
-client = SecretClient(vault_url="https://myvault.vault.azure.net/",
-                      credential=DefaultAzureCredential())
-token = client.get_secret("github-token").value
-```
-
-**HashiCorp Vault**:
-```bash
-export GITHUB_TOKEN=$(vault kv get -field=token secret/github)
+# GitHub Actions example
+- name: Run pipeline
+  env:
+    litellm_key: ${{ secrets.LITELLM_KEY }}
+    GITHUB_GIST_TOKEN: ${{ secrets.GITHUB_GIST_TOKEN }}
+  run: PYTHONPATH=. python -m src.cli.main run --family zip --max-examples 50
 ```
 
 ---
 
-## Vulnerability Management
+## 5. Vulnerability Disclosure
 
-### Dependency Scanning
+If you find a security vulnerability in this project:
 
-**Check for known vulnerabilities**:
-
-```bash
-# Python dependencies
-pip install safety
-safety check --json
-
-# Or use pip-audit
-pip install pip-audit
-pip-audit
-```
-
-**GitHub Dependabot**:
-- Enable Dependabot alerts in repository settings
-- Review and merge security updates promptly
-
-### Known Vulnerabilities
-
-**Check CVE databases**:
-- https://nvd.nist.gov/
-- https://github.com/advisories
-
-**Monitor dependencies**:
-```bash
-# List installed packages
-pip list
-
-# Check for updates
-pip list --outdated
-```
-
-### Security Updates
-
-**Apply updates promptly**:
-```bash
-# Update all packages
-pip install --upgrade -r requirements.txt
-
-# Update specific package
-pip install --upgrade requests
-```
-
-**Test after updates**:
-```bash
-# Run test suite
-pytest tests/
-
-# Run smoke test
-python src/cli.py discover --family test --max-pages 1
-```
-
-### Security Disclosure Policy
-
-**If you find a security vulnerability**:
-
-1. **DO NOT** open a public issue
-2. Email security contact (add your email here)
-3. Include:
-   - Description of vulnerability
-   - Steps to reproduce
+1. **Do not** open a public GitHub issue
+2. Email the maintainer directly with:
+   - Description and steps to reproduce
    - Potential impact
    - Suggested fix (if any)
-
-**Response timeline**:
-- Acknowledgment: Within 48 hours
-- Initial assessment: Within 1 week
-- Fix timeline: Based on severity
+3. Expected response: acknowledgment within 48 hours, fix timeline based on severity
 
 ---
 
-## Security Checklist
-
-### Initial Setup
-- [ ] Generate GitHub token with minimal scopes (none for public gists)
-- [ ] Store token in environment variable or .env file
-- [ ] Verify .gitignore includes .env and secrets
-- [ ] Test token with rate limit check
-- [ ] Set appropriate file permissions (600 for DB, 644 for cache)
-
-### Regular Operations
-- [ ] Monitor rate limit usage
-- [ ] Rotate tokens every 90 days
-- [ ] Review file permissions monthly
-- [ ] Check for dependency updates weekly
-- [ ] Backup database before major operations
-
-### Before Deployment
-- [ ] Scan for secrets in git history
-- [ ] Run dependency vulnerability scan
-- [ ] Review all file permissions
-- [ ] Test without token (verify graceful degradation)
-- [ ] Document token rotation procedure
-
-### After Incident
-- [ ] Revoke compromised token immediately
-- [ ] Generate new token with different name
-- [ ] Review access logs for suspicious activity
-- [ ] Update all systems with new token
-- [ ] Document incident and lessons learned
-
----
-
-## Additional Resources
-
-- [GitHub Authentication Documentation](https://docs.github.com/en/authentication)
-- [GitHub REST API Rate Limiting](https://docs.github.com/en/rest/rate-limit)
-- [GitHub Gist API Reference](https://docs.github.com/en/rest/gists/gists)
-- [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html)
-
----
-
-**Last Updated**: 2026-01-11
-**Next Review**: 2026-04-11 (quarterly)
+**Last Updated**: 2026-03-04
