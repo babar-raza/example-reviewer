@@ -197,6 +197,10 @@ class PipelineOrchestrator:
         # Track examples that received LLM fixes (for final review filtering)
         self._llm_fixed_example_ids: set = set()
 
+        # Write-back diff guard: track original code before proactive fixes
+        # so we can detect examples where only infrastructure changes were applied
+        self._pre_proactive_codes: Dict[str, str] = {}  # example_id -> original code before proactive fixes
+
         # Learned patterns service cache (per family)
         self._learned_patterns_service_cache: Dict[str, Optional['LearnedPatternsService']] = {}
 
@@ -1674,6 +1678,9 @@ class PipelineOrchestrator:
                             continue
                 except Exception as e:
                     logger.debug(f"Foreign family detection failed for {example.example_id}: {e}")
+
+                # Save original code before ANY proactive fixes for write-back diff guard
+                self._pre_proactive_codes[example.example_id] = example.original_code
 
                 # CRITICAL: Proactive using directive injection (BEFORE semantic microfixes)
                 # This prevents CS0246 errors by adding missing using directives based on
@@ -4253,6 +4260,32 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
             if indexed_count > 0:
                 logger.info(f"Indexed {indexed_count} verified CS_FILE examples in vector DB")
+
+        # Write-back diff guard: prevent proactive-only changes from reaching markdown.
+        # If verified_code matches the pre-proactive original, no substantive fix was
+        # applied (only infrastructure changes like using directives, stream disposal).
+        # Reset verified_code to the pre-proactive original so the markdown service
+        # sees no diff and naturally skips the file (preserves provenance invariant).
+        if self._pre_proactive_codes:
+            proactive_only_ids = set()
+            for ex in (verified or []):
+                pre_code = self._pre_proactive_codes.get(ex.example_id)
+                if pre_code is not None and ex.verified_code is not None:
+                    if ex.verified_code.strip() == pre_code.strip():
+                        proactive_only_ids.add(ex.example_id)
+            if proactive_only_ids:
+                logger.info(
+                    f"Write-back guard: blocking {len(proactive_only_ids)} proactive-only examples "
+                    f"from markdown update (resetting to original code)"
+                )
+                with self.db.get_connection() as conn:
+                    for eid in proactive_only_ids:
+                        original = self._pre_proactive_codes[eid]
+                        conn.execute(
+                            "UPDATE example_run_state SET verified_code = ? "
+                            "WHERE run_id = ? AND example_id = ?",
+                            (original, run_id, eid),
+                        )
 
         # ALWAYS recreate service with correct run_id (fixes run_id mismatch bug)
         global_config = self.config_manager.load_global_config()

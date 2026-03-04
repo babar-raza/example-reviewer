@@ -349,6 +349,12 @@ def apply_quick_fixes(code: str, errors: List[str]) -> Tuple[str, List[str]]:
                     directories_to_create.add(match)
 
         if directories_to_create:
+            # Idempotency guard: filter out directories that already have CreateDirectory in code
+            directories_to_create = {
+                d for d in directories_to_create
+                if f'Directory.CreateDirectory(@"{d}")' not in fixed_code
+            }
+        if directories_to_create:
             # Insert Directory.CreateDirectory calls at the beginning of Main
             create_calls = '\n'.join([
                 f'        Directory.CreateDirectory(@"{d}");'

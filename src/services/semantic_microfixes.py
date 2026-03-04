@@ -221,6 +221,10 @@ def fix_cs0104_ambiguous_reference(code: str, type_name: str, fq_name: str) -> T
 
     Replaces all usage patterns: new Task(...), Task.WhenAll(...), Task<bool>, async Task Method.
     """
+    # Idempotency guard: if already fully qualified, skip
+    if fq_name in code:
+        return code, ""
+
     esc = re.escape(type_name)
     patterns = [
         (rf'\bnew\s+{esc}\b', f'new {fq_name}'),                # new Task(...)
@@ -497,6 +501,11 @@ def fix_cs0103_undefined_name(code: str, var_name: str, using_directives: Dict[s
         default_value = 'Path.Combine(Path.GetTempPath(), "output")'
     definition = f'string {var_name} = {default_value};'
 
+    # Idempotency guard: skip if variable is already declared in code
+    decl_pattern = rf'(?:string|var|int|bool|object)\s+{re.escape(var_name)}\s*[=;]'
+    if re.search(decl_pattern, code):
+        return code, ""
+
     # Find the first usage of the variable
     lines = code.split('\n')
     first_usage_idx = -1
@@ -652,6 +661,12 @@ def fix_stream_disposal_pattern(code: str) -> Tuple[str, str]:
     """
     stream_types = ['MemoryStream', 'FileStream']
     stream_pattern = '|'.join(stream_types)
+
+    # Idempotency guard: if explicit .Dispose() already present and no using() patterns remain, skip
+    has_explicit_dispose = bool(re.search(r'\.\s*Dispose\s*\(\s*\)\s*;', code))
+    has_using_stream = bool(re.search(rf'using\s*\(.*(?:{stream_pattern})', code))
+    if has_explicit_dispose and not has_using_stream:
+        return code, ""
 
     lines = code.split('\n')
 
@@ -1395,6 +1410,9 @@ def fix_extract_output_directory(code: str) -> Tuple[str, str]:
         # Get directory portion of the path
         dir_part = extract_path.rsplit('/', 1)[0] if '/' in extract_path else extract_path.rsplit('\\', 1)[0]
         if dir_part and dir_part != extract_path:
+            # Idempotency guard: skip if CreateDirectory already present for this path
+            if f'Directory.CreateDirectory(@"{dir_part}")' in code:
+                continue
             insertions.append((line_num, indent, dir_part))
 
     if not insertions:
@@ -1766,6 +1784,10 @@ def fix_file_exists_on_extract(code: str) -> Tuple[str, str]:
 
         # Don't add cleanup for "." (current directory)
         if dir_path.strip('"') == '.':
+            continue
+
+        # Idempotency guard: skip if cleanup already injected for this path
+        if f'Directory.Exists({dir_path})' in code and f'Directory.Delete({dir_path}' in code:
             continue
 
         insertions.append((line_num, indent, dir_path))

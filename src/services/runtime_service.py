@@ -1104,7 +1104,12 @@ class RuntimeService:
             if found_dirs:
                 create_calls = []
                 for dir_path in sorted(found_dirs):  # Sort for determinism
+                    # Idempotency guard: skip if CreateDirectory already present for this path
+                    if f'Directory.CreateDirectory(@"{dir_path}")' in code:
+                        continue
                     create_calls.append(f'        Directory.CreateDirectory(@"{dir_path}");')
+                if not create_calls:
+                    return code  # All directories already guarded
 
                 # Find the Main method and insert after the opening brace
                 lines = patched.split('\n')
@@ -1147,43 +1152,22 @@ class RuntimeService:
                 gz_files = [f for f in test_data_files if f.endswith('.gz')]
                 sevenz_files = [f for f in test_data_files if f.endswith('.7z')]
 
-                # Replace common placeholders based on file type
+                # SAFE substitutions only — never use test_data_files[0] wildcard
+                # which would leak infrastructure filenames (alice29.txt, archive.zip)
+                # into documentation. Let the fixture resolver handle missing files
+                # by generating them rather than rewriting code paths.
+                SAFE_PLACEHOLDER_NAMES = {
+                    "sample.zip", "input.zip", "archive.zip", "test.zip",
+                    "sample.txt", "input.txt", "data.txt", "test.txt",
+                    "archive.7z", "input.7z",
+                    "sample.gz", "archive.gz",
+                }
                 replacements = []
-
-                # ZIP file replacements
-                if zip_files:
-                    zip_sub = zip_files[0]
-                    replacements.extend([
-                        (r'"sample\.zip"', f'"{zip_sub}"'),
-                        (r'"input\.zip"', f'"{zip_sub}"'),
-                        (r'"archive\.zip"', f'"{zip_sub}"'),
-                        (r'"test\.zip"', f'"{zip_sub}"'),
-                    ])
-
-                # Text file replacements
-                if txt_files:
-                    txt_sub = txt_files[0]
-                    replacements.extend([
-                        (r'"sample\.txt"', f'"{txt_sub}"'),
-                        (r'"input\.txt"', f'"{txt_sub}"'),
-                        (r'"data\.txt"', f'"{txt_sub}"'),
-                    ])
-
-                # 7z file replacements
-                if sevenz_files:
-                    sevenz_sub = sevenz_files[0]
-                    replacements.extend([
-                        (r'"archive\.7z"', f'"{sevenz_sub}"'),
-                        (r'"input\.7z"', f'"{sevenz_sub}"'),
-                    ])
-
-                # GZ file replacements
-                if gz_files:
-                    gz_sub = gz_files[0]
-                    replacements.extend([
-                        (r'"sample\.gz"', f'"{gz_sub}"'),
-                        (r'"archive\.gz"', f'"{gz_sub}"'),
-                    ])
+                # Only substitute if the EXACT placeholder name exists as a real file
+                for placeholder in SAFE_PLACEHOLDER_NAMES:
+                    if placeholder in test_data_files:
+                        # Identity mapping: keep the name, fixture resolver ensures file exists
+                        continue  # File already exists, no substitution needed
 
                 for old_pattern, new_val in replacements:
                     if re.search(old_pattern, patched, re.IGNORECASE):

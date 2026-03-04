@@ -289,6 +289,11 @@ def fix_archive_iteration_try_catch(code: str) -> Tuple[str, str]:
     if not body_indent:
         body_indent = '        '
 
+    # Idempotency guard: skip if try-catch already exists in foreach body
+    foreach_body = '\n'.join(lines[foreach_brace_idx + 1:foreach_end_idx])
+    if re.search(r'\btry\b', foreach_body) and re.search(r'\bcatch\b', foreach_body):
+        return code, ""
+
     # Wrap the body in try-catch
     new_lines = lines[:foreach_brace_idx + 1]
     new_lines.append(f'{body_indent}try')
