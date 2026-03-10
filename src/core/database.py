@@ -1952,9 +1952,67 @@ class Database:
         )
     
     # =========================================================================
+    # COMMIT RECORDS
+    # =========================================================================
+
+    def save_commit_record(
+        self,
+        run_id: str,
+        family: str,
+        commit_hash: str,
+        message: str,
+        touched_files: List[str],
+        description: str = "",
+    ) -> str:
+        """Persist a git commit record for a pipeline run.
+
+        Args:
+            run_id: Pipeline run that produced this commit.
+            family: Family identifier (e.g. "imaging").
+            commit_hash: Full SHA-1 from ``git rev-parse HEAD``.
+            message: First line of the git commit message.
+            touched_files: Absolute or repo-relative paths that were staged.
+            description: Optional extended body of the commit message.
+
+        Returns:
+            commit_id (UUID string)
+        """
+        import uuid
+        commit_id = str(uuid.uuid4())
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO commit_records
+                    (commit_id, run_id, family, hash, message, description,
+                     touched_files, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    commit_id,
+                    run_id,
+                    family,
+                    commit_hash,
+                    message,
+                    description,
+                    "\n".join(touched_files),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+        return commit_id
+
+    def get_commit_records(self, run_id: str) -> List[dict]:
+        """Return all commit records for a given run_id."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM commit_records WHERE run_id = ? ORDER BY timestamp",
+                (run_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # =========================================================================
     # RUN RECORDS
     # =========================================================================
-    
+
     def get_latest_run_id(self, family: str) -> Optional[str]:
         """Get the primary run_id for a family (the one with the most examples)."""
         with self.get_connection() as conn:

@@ -328,6 +328,13 @@ def export_run_telemetry(
         # Calculate total duration from phase timings
         total_duration_ms = sum(p['duration_ms'] for p in phase_timings)
 
+        # Fetch commit records for this run (populated by SR-01 fix)
+        commit_records = db.get_commit_records(run_id)
+        committed_to_git = sum(
+            len([f for f in rec.get("touched_files", "").split("\n") if f.strip()])
+            for rec in commit_records
+        )
+
         # Build run summary
         run_summary = {
             'run_id': run_id,
@@ -338,6 +345,8 @@ def export_run_telemetry(
             'examples_processed': run_row['examples_processed'],
             'examples_successful': run_row['examples_successful'],
             'examples_failed': run_row['examples_failed'],
+            'committed_to_git': committed_to_git,        # files actually in a git commit
+            'commit_count': len(commit_records),          # number of git commits made
             'phases_completed': run_row['phases_completed'],
             'total_duration_ms': total_duration_ms,
             'attempt_counts': attempt_counts,

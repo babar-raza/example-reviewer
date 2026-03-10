@@ -5192,10 +5192,13 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
             logger.info(f"Git staging verified: {len(staged_files)} files have changes (from {len(candidate_files)} candidates)")
 
-            # Filter examples to only those whose files are actually staged
+            # Filter examples to only those whose files are actually staged.
+            # Use a set for O(1) membership test (staged_files list preserved for
+            # downstream uses: git commit args, _categorize_staged_files).
+            staged_set = set(staged_files)
             committed_examples = [
                 ex for ex in examples
-                if str(Path(ex.file_path).resolve()) in staged_files
+                if str(Path(ex.file_path).resolve()) in staged_set
             ]
 
             if not committed_examples:
@@ -5243,8 +5246,24 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 stats['git_root'] = str(git_root)
                 stats['git_branch'] = content_branch
 
-                # Update example statuses
-                for e in examples:
+                # Persist commit record to DB — non-fatal if it fails
+                commit_title = full_message.split("\n")[0]
+                commit_body = full_message[len(commit_title):].lstrip("\n")
+                try:
+                    self.db.save_commit_record(
+                        run_id=run_id,
+                        family=family,
+                        commit_hash=stats['commit_hash'],
+                        message=commit_title,
+                        touched_files=staged_files,
+                        description=commit_body,
+                    )
+                    logger.info(f"Commit record saved for run {run_id[:16]} ({stats['commit_hash'][:12]})")
+                except Exception as cr_err:
+                    logger.warning(f"Failed to save commit record (non-fatal): {cr_err}")
+
+                # Update example statuses — only for examples whose files were actually staged
+                for e in committed_examples:
                     self.db.update_example_status(e.example_id, ExampleStatus.COMMITTED, run_id=run_id)
 
         except Exception as e:
