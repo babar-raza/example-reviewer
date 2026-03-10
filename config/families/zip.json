@@ -4,8 +4,8 @@
   "auto_commit": true,
   "commit_message_template": "fix(zip): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
-    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/zip",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/zip/en"
+    "${ASPOSE_CONTENT_ROOT}/blog.aspose.net/zip",
+    "${ASPOSE_CONTENT_ROOT}/kb.aspose.net/zip/en"
   ],
   "content_pattern": {
     "blog": "**/index.md",

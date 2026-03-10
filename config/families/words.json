@@ -4,9 +4,9 @@
   "auto_commit": true,
   "commit_message_template": "fix(words): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
-    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/words",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/words/en",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/words/en"
+    "${ASPOSE_CONTENT_ROOT}/blog.aspose.net/words",
+    "${ASPOSE_CONTENT_ROOT}/docs.aspose.net/words/en",
+    "${ASPOSE_CONTENT_ROOT}/kb.aspose.net/words/en"
   ],
   "content_pattern": {
     "blog": "**/index.md",

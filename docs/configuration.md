@@ -226,3 +226,38 @@ Configuration for NuGet packages required for compilation.
 ```
 
 See individual family configs in `config/families/` for complete examples.
+
+## Content Discovery Paths
+
+Each family config (`config/families/<family>.json`) has a `content_roots` array that lists
+directories containing Markdown blog posts and documentation to scan for code examples.
+
+These paths use the `${ASPOSE_CONTENT_ROOT}` placeholder, which is expanded at runtime from
+the environment variable of the same name. The config loader calls `load_dotenv()` automatically,
+so values in your `.env` file are applied without any extra steps.
+
+### Setup (new contributor)
+
+1. Obtain or clone the `aspose.net` content repository.
+2. In your `.env` file (copy from `.env.example`), set:
+   ```
+   ASPOSE_CONTENT_ROOT=/path/to/your/aspose.net/content
+   ```
+   Windows example: `C:/repos/aspose.net/content`
+
+3. Verify discovery works:
+   ```bash
+   python -m src.cli.main run --family zip --max-examples 5 --dry-run
+   ```
+   You should see "Discovered N markdown files" in the log. If you see
+   "Content root does not exist" warnings, double-check `ASPOSE_CONTENT_ROOT`.
+
+### How the substitution works
+
+The `${ASPOSE_CONTENT_ROOT}` token in `content_roots` is expanded by
+`ConfigurationManager._expand_env_vars()` inside `load_family_config()`.
+If the variable is not set, the token is left as-is (path will not exist → warning logged → skipped).
+
+You can also use this pattern for any other path in `content_roots` if you need
+different roots for different machines. Any `${VAR}` token in a `content_roots`
+string will be expanded from the environment.

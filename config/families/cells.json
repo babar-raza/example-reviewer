@@ -4,10 +4,10 @@
   "auto_commit": true,
   "commit_message_template": "fix(cells): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
-    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/cells",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/cells/en",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/cells/en",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/products.aspose.net/cells/en"
+    "${ASPOSE_CONTENT_ROOT}/blog.aspose.net/cells",
+    "${ASPOSE_CONTENT_ROOT}/docs.aspose.net/cells/en",
+    "${ASPOSE_CONTENT_ROOT}/kb.aspose.net/cells/en",
+    "${ASPOSE_CONTENT_ROOT}/products.aspose.net/cells/en"
   ],
   "content_pattern": {
     "blog": "**/index.md",

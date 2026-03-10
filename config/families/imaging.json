@@ -4,9 +4,9 @@
   "auto_commit": true,
   "commit_message_template": "fix(imaging): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
-    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/imaging",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/imaging/en",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/imaging/en"
+    "${ASPOSE_CONTENT_ROOT}/blog.aspose.net/imaging",
+    "${ASPOSE_CONTENT_ROOT}/docs.aspose.net/imaging/en",
+    "${ASPOSE_CONTENT_ROOT}/kb.aspose.net/imaging/en"
   ],
   "content_pattern": {
     "blog": "**/index.md",

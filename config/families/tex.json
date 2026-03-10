@@ -4,9 +4,9 @@
   "auto_commit": true,
   "commit_message_template": "fix(tex): apply {patch_count} patches\n\n{file_list}\n\nSnippets: {snippet_ids}",
   "content_roots": [
-    "D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/tex",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/tex/en",
-    "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/tex/en"
+    "${ASPOSE_CONTENT_ROOT}/blog.aspose.net/tex",
+    "${ASPOSE_CONTENT_ROOT}/docs.aspose.net/tex/en",
+    "${ASPOSE_CONTENT_ROOT}/kb.aspose.net/tex/en"
   ],
   "content_pattern": {
     "blog": "**/index.md",

@@ -152,9 +152,9 @@ def create_complete_config(family: str, definition: Dict[str, Any]) -> Dict[str,
         "auto_commit": True,
         "commit_message_template": f"fix({family}): apply {{patch_count}} patches\n\n{{file_list}}\n\nSnippets: {{snippet_ids}}",
         "content_roots": [
-            f"D:/onedrive/Documents/GitHub/aspose.net/content/blog.aspose.net/{family}",
-            f"D:/onedrive/Documents/GitHub/aspose.net/content/docs.aspose.net/{family}/en",
-            f"D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/{family}/en"
+            f"${{ASPOSE_CONTENT_ROOT}}/blog.aspose.net/{family}",
+            f"${{ASPOSE_CONTENT_ROOT}}/docs.aspose.net/{family}/en",
+            f"${{ASPOSE_CONTENT_ROOT}}/kb.aspose.net/{family}/en"
         ],
         "content_pattern": {
             "blog": "**/index.md",

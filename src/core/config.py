@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Set
 from pydantic import BaseModel, Field, ConfigDict
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -880,6 +881,7 @@ class ConfigurationManager:
             config_dir: Directory containing family configs
             global_config_path: Path to global.json
         """
+        load_dotenv(override=False)   # load .env; existing shell vars take precedence
         self.config_dir = Path(config_dir) if config_dir else Path("config/families")
         self.global_config_path = Path(global_config_path) if global_config_path else self.config_dir.parent / "global.json"
         self._global_config: Optional[GlobalConfig] = None
@@ -1033,6 +1035,16 @@ class ConfigurationManager:
 
         return config.model_copy(update={'llm': llm, 'git': git, 'database': database})
     
+    @staticmethod
+    def _expand_env_vars(value: str) -> str:
+        """Expand ${VAR} references in a string using the current environment."""
+        import re
+        return re.sub(
+            r'\$\{(\w+)\}',
+            lambda m: os.getenv(m.group(1), m.group(0)),
+            value
+        )
+
     def load_family_config(self, family: str) -> FamilyConfig:
         """Load family-specific configuration."""
         if family in self._family_configs:
@@ -1045,7 +1057,13 @@ class ConfigurationManager:
         
         with open(family_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
+
+        # Expand ${ENV_VAR} tokens in content_roots paths
+        if 'content_roots' in data:
+            data['content_roots'] = [
+                self._expand_env_vars(p) for p in data['content_roots']
+            ]
+
         config = self._parse_family_config(data, family)
         self._family_configs[family] = config
         return config
