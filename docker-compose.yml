@@ -3,6 +3,26 @@
 # Exposes the lightweight HTTP API on port 18800.
 
 services:
+  cleanup:
+    build:
+      context: .
+      dockerfile: Dockerfile.light
+    volumes:
+      - ./data:/app/data
+      - ./config/families:/app/config/families
+    environment:
+      - DB_PATH=/app/data/example_reviewer.db
+      - WORKSPACE_DIR=/app/workspace
+    command:
+      - python
+      - scripts/maintenance/cleanup_runtime.py
+      - --keep-days
+      - "7"
+      - --keep-runs
+      - "50"
+    profiles:
+      - tools
+
   example-reviewer-api:
     build:
       context: .
