@@ -668,23 +668,24 @@ Linux/WSL: moves to `~/.cache/example_reviewer/workspaces/<timestamp>`
 
 ## 9. Supported Families
 
-| Family | Config file | Status |
-|--------|------------|--------|
-| ZIP | `config/families/zip.json` | Production — 97.7% verified |
-| Words | `config/families/words.json` | Production — 93.2% verified |
-| PDF | `config/families/pdf.json` | Configured |
-| Email | `config/families/email.json` | Configured |
-| Cells | `config/families/cells.json` | Configured |
-| Slides | `config/families/slides.json` | Configured |
-| Barcode | `config/families/barcode.json` | Configured |
-| Imaging | `config/families/imaging.json` | Configured |
-| OCR | `config/families/ocr.json` | Configured |
-| CAD | `config/families/cad.json` | Configured |
-| HTML | `config/families/html.json` | Configured |
-| Tasks | `config/families/tasks.json` | Configured |
-| PSD | `config/families/psd.json` | Configured |
-| Medical | `config/families/medical.json` | Configured |
-| TeX | `config/families/tex.json` | Configured |
+| Family | Config file | Discovered | Verified | Status |
+|--------|------------|------------|----------|--------|
+| ZIP | `config/families/zip.json` | 66 | 61 | Production — 92.4% verified |
+| PSD | `config/families/psd.json` | 391 | 347 | Production — 88.7% verified |
+| HTML | `config/families/html.json` | 16 | 14 | Production — 87.5% verified |
+| Email | `config/families/email.json` | 20 | 17 | Production — 85.0% verified |
+| Words | `config/families/words.json` | 147 | 123 | Production — 83.7% verified |
+| PDF | `config/families/pdf.json` | 825 | 684 | Production — 82.9% verified |
+| TeX | `config/families/tex.json` | 45 | 37 | Production — 82.2% verified |
+| Barcode | `config/families/barcode.json` | 201 | 161 | Production — 80.1% verified |
+| CAD | `config/families/cad.json` | 10 | 8 | Production — 80.0% verified |
+| Imaging | `config/families/imaging.json` | 217 | 138 | Production — 63.6% verified |
+| Cells | `config/families/cells.json` | 196 | 121 | Production — 61.7% verified |
+| Slides | `config/families/slides.json` | 551 | 223 | Production — 40.5% verified |
+| OCR | `config/families/ocr.json` | 115 | 41 | Production — 35.7% verified |
+| Medical | `config/families/medical.json` | 88 | 6 | Early — 6.8% verified |
+| Page | `config/families/page.json` | 8 | 0 | Early — 0% verified |
+| Tasks | `config/families/tasks.json` | 6 | 0 | Early — 0% verified |
 
 To add a new family: copy any existing family JSON, update `content_roots` and `nuget_config`,
 generate the API catalog, and run `backfill`.

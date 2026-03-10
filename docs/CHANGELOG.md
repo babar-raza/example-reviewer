@@ -28,7 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Benefits**: Clean production analytics, safe experimentation, audit trail of committed changes
   - **Testing**: 7/7 database schema tests pass, config backward compatibility verified
   - **Documentation**: Updated configuration.md, operations.md, README.md
-  - **Plan**: C:\Users\prora\.claude\plans\sunny-churning-quilt.md
   - **Migration Script**: Deferred (starting fresh with production DB)
 
 ### Added - 2026-01-16
