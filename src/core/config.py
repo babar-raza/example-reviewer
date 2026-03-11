@@ -451,6 +451,23 @@ class DiscoveryPatternsConfig(BaseModel):
         description="Gist pattern detection and filtering settings"
     )
 
+    allow_cross_block_variable_context: bool = Field(
+        default=False,
+        description="Skip undeclared-variable filter; for families using sequential multi-block tutorials"
+    )
+    frontmatter_step_prefix: str = Field(
+        default="step",
+        description="Frontmatter key prefix for numbered steps (e.g. 'step' for step1..step10)"
+    )
+    frontmatter_intent_fields: List[str] = Field(
+        default_factory=lambda: ["title", "description"],
+        description="Frontmatter keys to extract as article intent (beyond steps)"
+    )
+    intent_fallback_to_prose: bool = Field(
+        default=True,
+        description="Fall back to H1 + first prose paragraph if no YAML frontmatter or no relevant keys found"
+    )
+
 
 class FinalReviewConfig(BaseModel):
     """Final review phase configuration."""
@@ -502,6 +519,18 @@ class FinalReviewConfig(BaseModel):
     api_key_env_var: Optional[str] = Field(
         default=None,
         description="Env var name holding API key for final review (if None, inherits from main LLM config)"
+    )
+    enable_intent_review: bool = Field(
+        default=False,
+        description="Include intent-alignment checking in Phase E review"
+    )
+    intent_review_all_examples: bool = Field(
+        default=False,
+        description="Run intent review on all verified examples (informational, non-blocking)"
+    )
+    intent_review_ignores_fix_type: bool = Field(
+        default=False,
+        description="When intent review is enabled, apply it to all verified examples regardless of only_review_llm_fixed setting"
     )
 
 
@@ -739,6 +768,10 @@ class RuntimeValidationConfig(BaseModel):
     file_aliases: Dict[str, List[str]] = Field(default_factory=dict)
     expected_outputs: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
+    extension_fallbacks: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Last-resort file extension -> canonical filename fallback. Family-specific; empty by default."
+    )
 
 
 class TestDataConfig(BaseModel):

@@ -22,6 +22,8 @@ class IssueType(str, Enum):
     SECURITY_CONCERN = "security_concern"
     FORMATTING_ISSUE = "formatting_issue"
     DOCUMENTATION_GAP = "documentation_gap"
+    INTENT_MISMATCH = "intent_mismatch"
+    OUTDATED_API = "outdated_api"
     OTHER = "other"
 
 

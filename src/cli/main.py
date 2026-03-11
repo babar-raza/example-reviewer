@@ -787,6 +787,11 @@ def main() -> int:
                             help='Commit verified changes to git (overrides config)')
     run_parser.add_argument('--content-roots', nargs='+', metavar='PATH',
                             help='Override content_roots from family config (space-separated paths)')
+    run_parser.add_argument('--section', metavar='NAME',
+                            help='Run on a single named section from content_pattern (e.g. kb, blog, docs). '
+                                 'Selects the matching content_root automatically.')
+    run_parser.add_argument('--safe-workspace', action='store_true',
+                            help='Use safe workspace outside OneDrive/DrvFS (same as top-level flag)')
 
     # List families command
     list_parser = subparsers.add_parser('list-families',
@@ -859,6 +864,7 @@ def main() -> int:
     setup_logging(args.verbose)
 
     # Task 1B: Handle safe workspace mode
+    # --safe-workspace is accepted both as a top-level flag and on the run subcommand
     db_path = Path(args.db_path)
     workspace_dir = Path(args.workspace_dir)
     artifacts_dir = Path(args.artifacts_dir)
@@ -1010,6 +1016,35 @@ def main() -> int:
             'enable_learned_patterns': default_enabled or getattr(args, 'enable_learned_patterns', False),
         }
 
+        # Resolve --section into a positional content_roots list
+        content_roots = getattr(args, 'content_roots', None)
+        section = getattr(args, 'section', None)
+        if section and not content_roots:
+            # Load family config to look up the section's position and root
+            try:
+                family_cfg = tools.orchestrator.config_manager.load_family_config(args.family)
+                if family_cfg.content_pattern and section in family_cfg.content_pattern:
+                    pattern_keys = list(family_cfg.content_pattern.keys())
+                    section_idx = pattern_keys.index(section)
+                    if section_idx < len(family_cfg.content_roots):
+                        # Build positional list: empty strings for preceding roots, real path at index
+                        import os as _os
+                        positional = []
+                        for i, root in enumerate(family_cfg.content_roots):
+                            if i == section_idx:
+                                positional.append(_os.path.expandvars(root))
+                            else:
+                                positional.append('/nonexistent-section-skip')
+                        content_roots = positional
+                        print(f"[--section {section}] Using content root: {_os.path.expandvars(family_cfg.content_roots[section_idx])}")
+                    else:
+                        print(f"[--section {section}] WARNING: section index {section_idx} out of range for content_roots")
+                else:
+                    available = list(family_cfg.content_pattern.keys()) if family_cfg.content_pattern else []
+                    print(f"[--section {section}] WARNING: section not found. Available: {available}")
+            except Exception as e:
+                print(f"[--section] WARNING: could not resolve section: {e}")
+
         result = tools.run_pipeline(
             family=args.family,
             max_examples=args.max_examples,
@@ -1020,7 +1055,7 @@ def main() -> int:
             allow_md_write=getattr(args, 'allow_md_write', False),
             allow_commit=getattr(args, 'commit', False),
             strategy_config=strategy_config,
-            content_roots=getattr(args, 'content_roots', None),
+            content_roots=content_roots,
         )
     
     elif args.command == 'list-families':

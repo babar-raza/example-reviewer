@@ -102,7 +102,8 @@ class RuntimeService:
         required_name: str,
         source_dir: Path,
         file_aliases: Dict[str, List[str]],
-        inventory: Optional[Dict[str, str]] = None
+        inventory: Optional[Dict[str, str]] = None,
+        extension_fallbacks: Optional[Dict[str, str]] = None
     ) -> Optional[Path]:
         """
         Find a test file recursively in source_dir.
@@ -112,12 +113,14 @@ class RuntimeService:
         2. Alias match anywhere under source_dir (recursive)
         3. Case-insensitive basename match with same extension (recursive)
         4. Inventory mapping (if inventory contains full relative paths)
+        5. Config-driven extension fallback (family-specific last resort)
 
         Args:
             required_name: Required filename
             source_dir: Root directory to search in
             file_aliases: Alias mappings for files
             inventory: Optional inventory dict mapping canonical names to actual paths
+            extension_fallbacks: Optional dict mapping file extension to fallback filename
 
         Returns:
             Path to found file, or None if not found
@@ -154,6 +157,20 @@ class RuntimeService:
             mapped_path = source_dir / inventory[required_name]
             if mapped_path.exists() and mapped_path.is_file():
                 return mapped_path
+
+        # Tier 5: Config-driven extension fallback (family-specific)
+        if extension_fallbacks:
+            req_suffix = Path(required_name).suffix.lower()
+            fallback_name = extension_fallbacks.get(req_suffix)
+            if fallback_name:
+                for candidate in source_dir.rglob(fallback_name):
+                    if candidate.is_file():
+                        logger.warning(
+                            f"find_test_file: '{required_name}' not found; "
+                            f"using extension fallback '{fallback_name}' "
+                            f"-- add explicit alias to family config if this recurs"
+                        )
+                        return candidate
 
         return None
 
@@ -313,7 +330,8 @@ class RuntimeService:
                 required_file,
                 test_data_path,
                 file_aliases,
-                inventory
+                inventory,
+                extension_fallbacks=runtime_config.extension_fallbacks
             )
 
             if found is None:
@@ -382,7 +400,8 @@ class RuntimeService:
                 required_file,
                 source_dir,
                 file_aliases,
-                inventory
+                inventory,
+                extension_fallbacks=runtime_config.extension_fallbacks
             )
 
             if source_found:

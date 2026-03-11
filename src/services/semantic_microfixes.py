@@ -16,9 +16,90 @@ import json
 import difflib
 import logging
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+
+# ─── BCL Platform Type Layer ──────────────────────────────────────────────────
+# Applies to ALL families, catalog-independent.
+# These are .NET runtime (platform) types, not product APIs.
+# They must never be flagged as UNFIXABLE_API.
+BCL_PLATFORM_TYPES: Set[str] = {
+    # Primitives and core types
+    'String', 'Int32', 'Boolean', 'Object', 'Exception', 'DateTime',
+    'TimeSpan', 'Guid', 'Nullable', 'IDisposable', 'Type', 'Attribute',
+    # Delegates / events
+    'Func', 'Action', 'EventArgs', 'EventHandler',
+    # Generic interfaces
+    'IEnumerable', 'ICollection', 'IList', 'IDictionary',
+    'IEnumerator', 'IComparable', 'IEquatable',
+    # System.Collections (pre-LINQ)
+    'ArrayList', 'Hashtable', 'SortedList', 'Queue', 'Stack',
+    'BitArray', 'DictionaryEntry', 'CollectionBase', 'DictionaryBase',
+    # System.Collections.Generic
+    'List', 'Dictionary', 'HashSet', 'SortedDictionary', 'SortedSet',
+    'LinkedList', 'KeyValuePair',
+    # System.Text
+    'StringBuilder', 'Encoding', 'Decoder', 'Encoder',
+    # System.Text.RegularExpressions
+    'Regex', 'Match', 'MatchCollection', 'Group', 'Capture',
+    # System.Linq
+    'Enumerable', 'Queryable',
+    # System.IO
+    'Stream', 'MemoryStream', 'FileStream', 'StreamReader', 'StreamWriter',
+    'BinaryReader', 'BinaryWriter', 'TextReader', 'TextWriter',
+    'Path', 'File', 'Directory', 'FileInfo', 'DirectoryInfo', 'DriveInfo',
+    # System.Threading / async
+    'Task', 'CancellationToken', 'CancellationTokenSource', 'Thread', 'Monitor',
+    'Mutex', 'Semaphore', 'AutoResetEvent', 'ManualResetEvent',
+    'TaskCompletionSource',
+    # System.Net
+    'WebClient', 'HttpClient', 'Uri',
+    # Miscellaneous BCL
+    'Convert', 'Math', 'Random', 'Console', 'Environment', 'Array',
+    'Tuple', 'ValueTuple',
+}
+
+# BCL using directives: maps BCL type name -> using directive.
+# Separate from USING_DIRECTIVE_ALLOWLIST (which is product-catalog-adjacent).
+BCL_USING_DIRECTIVES: Dict[str, str] = {
+    'ArrayList':              'using System.Collections;',
+    'Hashtable':              'using System.Collections;',
+    'SortedList':             'using System.Collections;',
+    'Queue':                  'using System.Collections;',
+    'Stack':                  'using System.Collections;',
+    'BitArray':               'using System.Collections;',
+    'DictionaryEntry':        'using System.Collections;',
+    'CollectionBase':         'using System.Collections;',
+    'DictionaryBase':         'using System.Collections;',
+    'List':                   'using System.Collections.Generic;',
+    'Dictionary':             'using System.Collections.Generic;',
+    'HashSet':                'using System.Collections.Generic;',
+    'SortedDictionary':       'using System.Collections.Generic;',
+    'SortedSet':              'using System.Collections.Generic;',
+    'LinkedList':             'using System.Collections.Generic;',
+    'KeyValuePair':           'using System.Collections.Generic;',
+    'StringBuilder':          'using System.Text;',
+    'Encoding':               'using System.Text;',
+    'Decoder':                'using System.Text;',
+    'Encoder':                'using System.Text;',
+    'Regex':                  'using System.Text.RegularExpressions;',
+    'Match':                  'using System.Text.RegularExpressions;',
+    'MatchCollection':        'using System.Text.RegularExpressions;',
+    'Group':                  'using System.Text.RegularExpressions;',
+    'Capture':                'using System.Text.RegularExpressions;',
+    'Enumerable':             'using System.Linq;',
+    'Queryable':              'using System.Linq;',
+    'Task':                   'using System.Threading.Tasks;',
+    'CancellationToken':      'using System.Threading;',
+    'CancellationTokenSource':'using System.Threading;',
+    'TaskCompletionSource':   'using System.Threading.Tasks;',
+    'WebClient':              'using System.Net;',
+    'HttpClient':             'using System.Net.Http;',
+    'Uri':                    'using System;',
+}
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 # Allowlist for CS0246: Type/Namespace -> Using Directive
@@ -2220,6 +2301,13 @@ def apply_semantic_microfixes(
         using_directives = USING_DIRECTIVE_ALLOWLIST
         if family:
             logger.debug(f"No registry provided for family '{family}', using base allowlist only ({len(using_directives)} types)")
+
+    # Always include BCL platform directives (catalog-independent).
+    # BCL directives have the lowest priority: product/catalog directives override them.
+    if using_directives is not None:
+        using_directives = {**BCL_USING_DIRECTIVES, **using_directives}
+    else:
+        using_directives = dict(BCL_USING_DIRECTIVES)
 
     # 0. Fix stream disposal patterns (proactive, always run - generic)
     fixed_code, fix_desc = fix_stream_disposal_pattern(fixed_code)

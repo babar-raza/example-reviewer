@@ -2027,6 +2027,7 @@ Return the C# code now:"""
         code_snippets: List[Dict[str, Any]],
         catalog=None,
         family: str = None,
+        article_intent: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Review markdown with GUARANTEED structured output using Instructor.
@@ -2041,6 +2042,7 @@ Return the C# code now:"""
                 Each snippet should have: code, example_id, line, language
             catalog: Optional API catalog service
             family: Family identifier for catalog-based validation (e.g., 'ocr', 'zip', 'words')
+            article_intent: Optional compact intent string from YAML frontmatter (title + description + steps)
 
         Returns:
             Structured dictionary with:
@@ -2060,10 +2062,10 @@ Return the C# code now:"""
 
         # Use Instructor if available for guaranteed schema compliance
         if INSTRUCTOR_AVAILABLE:
-            return self._review_with_instructor(markdown_content, code_snippets, catalog=catalog, family=family)
+            return self._review_with_instructor(markdown_content, code_snippets, catalog=catalog, family=family, article_intent=article_intent)
         else:
             logger.warning("Instructor not available, falling back to manual JSON parsing")
-            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog, family=family)
+            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog, family=family, article_intent=article_intent)
 
     def _review_with_instructor(
         self,
@@ -2071,6 +2073,7 @@ Return the C# code now:"""
         code_snippets: List[Dict[str, Any]],
         catalog=None,
         family: str = None,
+        article_intent: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Review using Instructor for guaranteed schema compliance.
@@ -2080,6 +2083,7 @@ Return the C# code now:"""
 
         Args:
             family: Family identifier for catalog-based validation (e.g., 'ocr', 'zip', 'words')
+            article_intent: Optional compact intent string from YAML frontmatter
         """
         system_prompt = """You are a technical documentation reviewer specializing in code example quality.
 
@@ -2088,6 +2092,10 @@ Your task is to verify code snippets in markdown documentation are:
 2. Relevant to the surrounding documentation context
 3. Properly formatted with correct language tags
 4. Free from security concerns or anti-patterns
+5. Semantically aligned — the code actually achieves what the article's intent states.
+   Flag intent_mismatch (severity: error) if a step in the article intent is contradicted or silently omitted.
+6. Using the best available API — flag outdated_api (severity: warning) if the catalog
+   shows a dedicated method/property that replaces the approach used.
 
 Issue type definitions:
 - syntax_error: Code has syntax errors or won't compile
@@ -2097,6 +2105,8 @@ Issue type definitions:
 - security_concern: Code has potential security issues
 - formatting_issue: Code formatting or language tag is wrong
 - documentation_gap: Code doesn't match what documentation describes
+- intent_mismatch: Code is technically correct but does not achieve what the article claims
+- outdated_api: A more idiomatic or dedicated API exists per the catalog
 - other: Other issues not in categories above
 
 Severity definitions:
@@ -2111,7 +2121,7 @@ CRITICAL: You MUST respond with a JSON object matching this EXACT schema:
   "issues": [
     {
       "snippet_index": integer (0-based index of code snippet),
-      "issue_type": "syntax_error"|"missing_context"|"incomplete_code"|"api_mismatch"|"security_concern"|"formatting_issue"|"documentation_gap"|"other",
+      "issue_type": "syntax_error"|"missing_context"|"incomplete_code"|"api_mismatch"|"security_concern"|"formatting_issue"|"documentation_gap"|"intent_mismatch"|"outdated_api"|"other",
       "description": "string (minimum 10 characters)",
       "suggestion": "string or null",
       "severity": "info"|"warning"|"error"|"critical"
@@ -2140,6 +2150,12 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
             ])
 
         prompt_parts.append("")
+
+        # Add article intent if available
+        if article_intent:
+            prompt_parts.append("## Article Intent (from frontmatter):")
+            prompt_parts.append(article_intent)
+            prompt_parts.append("")
 
         # Add catalog context if available
         if catalog:
@@ -2296,7 +2312,7 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
                     )
 
             # Final fallback: manual parsing
-            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog, family=family)
+            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog, family=family, article_intent=article_intent)
 
     def _review_with_manual_parsing(
         self,
@@ -2304,6 +2320,7 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
         code_snippets: List[Dict[str, Any]],
         catalog=None,
         family: str = None,
+        article_intent: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Fallback review method with manual JSON parsing.
@@ -2312,6 +2329,7 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
 
         Args:
             family: Family identifier for catalog-based validation (e.g., 'ocr', 'zip', 'words')
+            article_intent: Optional compact intent string from YAML frontmatter
         """
         system_prompt = """You are a technical documentation reviewer specializing in code example quality.
 
@@ -2320,6 +2338,10 @@ Your task is to verify code snippets in markdown documentation are:
 2. Relevant to the surrounding documentation context
 3. Properly formatted with correct language tags
 4. Free from security concerns or anti-patterns
+5. Semantically aligned — the code actually achieves what the article's intent states.
+   Flag intent_mismatch (severity: error) if a step in the article intent is contradicted or silently omitted.
+6. Using the best available API — flag outdated_api (severity: warning) if the catalog
+   shows a dedicated method/property that replaces the approach used.
 
 Return a JSON object with the following structure:
 {
@@ -2327,7 +2349,7 @@ Return a JSON object with the following structure:
     "issues": [
         {
             "snippet_index": 0,
-            "issue_type": "syntax_error|missing_context|incomplete_code|api_mismatch|security_concern|formatting_issue|documentation_gap|other",
+            "issue_type": "syntax_error|missing_context|incomplete_code|api_mismatch|security_concern|formatting_issue|documentation_gap|intent_mismatch|outdated_api|other",
             "description": "Clear description of the issue",
             "suggestion": "Optional suggestion for fixing",
             "severity": "info|warning|error|critical"
@@ -2353,6 +2375,12 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
                 snippet.get('code', ''),
                 "```",
             ])
+
+        # Add article intent if available
+        if article_intent:
+            prompt_parts.append("")
+            prompt_parts.append("## Article Intent (from frontmatter):")
+            prompt_parts.append(article_intent)
 
         prompt_parts.extend([
             "",

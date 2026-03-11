@@ -29,7 +29,7 @@ from ..services.markdown_service import MarkdownUpdateService
 from ..services.vector_db_service import VectorDBService
 from ..services.telemetry_service import TelemetryService
 from ..services.example_substitution_service import ExampleSubstitutionService, apply_quick_fixes
-from ..services.semantic_microfixes import apply_semantic_microfixes
+from ..services.semantic_microfixes import apply_semantic_microfixes, BCL_PLATFORM_TYPES
 from .failure_tracker import track_infra_missing_test_data, track_failure, track_compile_failure
 from ..core.path_guard import is_read_only_path
 from .escalation_classifier import classify_escalation_reason, should_escalate_to_review
@@ -196,6 +196,9 @@ class PipelineOrchestrator:
 
         # Track examples that received LLM fixes (for final review filtering)
         self._llm_fixed_example_ids: set = set()
+
+        # Track examples where LLM fixed by deleting the error token rather than correcting it
+        self._deletion_fixed_example_ids: set = set()
 
         # Write-back diff guard: track original code before proactive fixes
         # so we can detect examples where only infrastructure changes were applied
@@ -1218,6 +1221,11 @@ class PipelineOrchestrator:
                 with track_phase_timing(self.db, run_id, family, "final_review"):
                     review_stats = self._run_final_review_phase(run_id, family)
                 results['phases']['final_review'] = review_stats
+
+                # Phase E.1: Non-blocking intent review sweep (when intent_review_all_examples=True)
+                intent_stats = self._run_intent_review_pass(run_id, family)
+                if intent_stats.get('files_checked', 0) > 0:
+                    results['phases']['intent_review'] = intent_stats
             else:
                 # Auto-promote MD_UPDATED -> FINAL_REVIEW_PASSED when Phase E is skipped
                 md_updated = self.db.get_examples_by_family(family, ExampleStatus.MD_UPDATED, run_id=run_id)
@@ -2393,6 +2401,8 @@ class PipelineOrchestrator:
                     # Get LLM fix with all context including content context for relevance
                     # TASK-DLL-07: Pass API catalog for enriched error context
                     _catalog = self.registry.get_api_catalog(family) if family else None
+                    # Capture pre-fix errors for deletion-fix detection (Addition C3)
+                    _pre_fix_errors = list(result.errors)
                     llm_response = self.llm_service.fix_code(
                         code=current_code,
                         error_logs='\n'.join(result.errors),
@@ -2661,6 +2671,13 @@ class PipelineOrchestrator:
 
                         stats['compiled_with_fix'] += 1
                         self._llm_fixed_example_ids.add(example.example_id)
+                        # Check if LLM fixed by deletion rather than correction (Addition C3)
+                        if self._is_deletion_fix(current_code, fixed_code, _pre_fix_errors):
+                            self._deletion_fixed_example_ids.add(example.example_id)
+                            logger.warning(
+                                f"DELETION_FIX: LLM removed error token in {example.example_id} "
+                                f"(fix accepted but intent may be lost)"
+                            )
                         try:
                             from ..core.telemetry import emit_telemetry_event
                             emit_telemetry_event(
@@ -3086,6 +3103,7 @@ class PipelineOrchestrator:
                             example.example_id,
                             ExampleStatus.INFRA_BLOCKED,
                             escalation_reason=infra_escalation_reason,
+                            failure_reason=f"missing_test_data: {', '.join(missing_files)}" if missing_files else "infra_blocked",
                             run_id=run_id,
                         )
 
@@ -3317,6 +3335,7 @@ class PipelineOrchestrator:
                             example.example_id,
                             ExampleStatus.INFRA_BLOCKED,
                             escalation_reason=EscalationReason.INFRA_BLOCKED_RAR_FIXTURE,
+                            failure_reason=f"missing_test_data: {rar_filename or 'unknown.rar'}",
                             run_id=run_id,
                         )
                         stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
@@ -3367,6 +3386,7 @@ class PipelineOrchestrator:
                         example.example_id,
                         ExampleStatus.INFRA_BLOCKED,
                         escalation_reason=EscalationReason.INFRA_BLOCKED_PASSWORD,
+                        failure_reason="missing_test_data: password/secret required for archive",
                         run_id=run_id,
                     )
                     stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
@@ -3389,6 +3409,7 @@ class PipelineOrchestrator:
                         example.example_id,
                         ExampleStatus.INFRA_BLOCKED,
                         escalation_reason=EscalationReason.INFRA_BLOCKED_7Z_FIXTURE,
+                        failure_reason="missing_test_data: 7z format issue at runtime",
                         run_id=run_id,
                     )
                     stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
@@ -3502,6 +3523,34 @@ class PipelineOrchestrator:
                 if deterministic_fixed:
                     continue
 
+                # Family-specific runtime fixes (P2: dispatch is generic; fix logic is in family module)
+                if not deterministic_fixed:
+                    from ..services.family_fix_registry import apply_family_runtime_fixes
+                    _error_text = (result.stderr or "") + (result.exception_message or "")
+                    _family_fix_result = apply_family_runtime_fixes(family, current_code, _error_text)
+                    if _family_fix_result is not None:
+                        _fixed_code, _fix_desc = _family_fix_result
+                        logger.info(f"Family runtime fix applied ({family}): {_fix_desc}")
+                        example.compilable_code = _fixed_code
+                        _ff_success, _ff_result = self.get_runtime_service(family).execute_example(
+                            example, family_config, test_data_path
+                        )
+                        if _ff_success:
+                            deterministic_fixed = True
+                            stats['deterministic_fixes'] = stats.get('deterministic_fixes', 0) + 1
+                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                            self.db.update_example_code(
+                                example.example_id, verified_code=_fixed_code, run_id=run_id
+                            )
+                            logger.info(f"Family runtime fix succeeded for {example.example_id}")
+                            continue
+                        else:
+                            current_code = _fixed_code
+                            result = _ff_result
+
+                if deterministic_fixed:
+                    continue
+
                 # If skip_llm_fixes is True and deterministic fix didn't work, mark as failed
                 if skip_llm_fixes:
                     stats['failed'] += 1
@@ -3519,6 +3568,7 @@ class PipelineOrchestrator:
                             example.example_id,
                             ExampleStatus.INFRA_BLOCKED,
                             escalation_reason="missing_test_data",
+                            failure_reason=f"missing_test_data: {failure_reason[:200]}",
                             run_id=run_id,
                         )
                         logger.info(f"Example {example.example_id}: INFRA_BLOCKED (missing file: {failure_reason[:100]})")
@@ -4150,6 +4200,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                 example.example_id,
                                 ExampleStatus.INFRA_BLOCKED,
                                 escalation_reason="missing_rar_fixture",
+                                failure_reason=f"missing_test_data: {error_text[:200]}",
                                 run_id=run_id,
                             )
                             logger.info(f"Marked {example.example_id} as INFRA_BLOCKED (missing RAR fixture)")
@@ -4261,11 +4312,13 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             if indexed_count > 0:
                 logger.info(f"Indexed {indexed_count} verified CS_FILE examples in vector DB")
 
-        # Write-back diff guard: prevent proactive-only changes from reaching markdown.
-        # If verified_code matches the pre-proactive original, no substantive fix was
-        # applied (only infrastructure changes like using directives, stream disposal).
-        # Reset verified_code to the pre-proactive original so the markdown service
-        # sees no diff and naturally skips the file (preserves provenance invariant).
+        # Write-back guard (layer 1 of 2): prevent proactive-only infrastructure changes
+        # (using directives, stream disposal) from reaching markdown when no substantive
+        # code fix was applied. Resets verified_code in DB to pre-proactive original so
+        # the markdown service sees an identical value.
+        # Layer 2 is the no-op guard in _replace_block(), which independently skips the
+        # file write when block content + language tag already match verified_code.
+        # Both guards must be satisfied for a write to be suppressed; they are complementary.
         if self._pre_proactive_codes:
             proactive_only_ids = set()
             for ex in (verified or []):
@@ -4362,6 +4415,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         run_id: Optional[str] = None,
         family: Optional[str] = None,
         catalog=None,
+        article_intent: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run multiple review passes and require consensus for approval.
@@ -4382,7 +4436,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             # Use dedicated final_review LLM service (C.6)
             # TASK-FIX-REVIEW-03: Pass family for catalog-based validation
             result = self.final_review_llm_service.review_markdown_structured(
-                content, snippets, catalog=catalog, family=family
+                content, snippets, catalog=catalog, family=family, article_intent=article_intent
             )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
@@ -4441,7 +4495,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             # Use dedicated final_review LLM service (C.6)
             # TASK-FIX-REVIEW-03: Pass family for catalog-based validation
             tiebreaker = self.final_review_llm_service.review_markdown_structured(
-                content, snippets, catalog=catalog, family=family
+                content, snippets, catalog=catalog, family=family, article_intent=article_intent
             )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
@@ -4494,6 +4548,16 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
         # When only_review_llm_fixed is True, only review files containing LLM-fixed examples
         only_review_llm_fixed = getattr(final_review_config, 'only_review_llm_fixed', True)
+
+        # Addition D: If intent_review is enabled and ignores fix_type, override only_review_llm_fixed
+        intent_ignores_fix_type = (
+            getattr(final_review_config, 'enable_intent_review', False) and
+            getattr(final_review_config, 'intent_review_ignores_fix_type', False)
+        )
+        if intent_ignores_fix_type:
+            # Include all VERIFIED/MD_UPDATED examples for intent review
+            # (override only_review_llm_fixed for this phase)
+            only_review_llm_fixed = False
 
         # Group by file
         files: Dict[str, List[ExampleRecord]] = {}
@@ -4554,6 +4618,11 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     for e in file_examples
                 ]
 
+                # Extract file-level article intent (all examples from same file share frontmatter)
+                article_intent = next(
+                    (e.article_intent for e in file_examples if e.article_intent), None
+                )
+
                 # Review loop with retries
                 for attempt in range(1, max_attempts + 1):
                     stats['review_attempts'] += 1
@@ -4562,8 +4631,22 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     catalog = self.registry.get_api_catalog(family)
 
                     # Call consensus review (2 passes for reliability)
+                    # Pass article_intent when enable_intent_review is set
+                    intent_for_review = article_intent if getattr(final_review_config, 'enable_intent_review', False) else None
+                    # Inject deletion-fix reviewer note if applicable (Addition C4)
+                    deletion_note = ""
+                    if any(e.example_id in self._deletion_fixed_example_ids for e in file_examples):
+                        deletion_note = (
+                            "\n[REVIEWER NOTE: A prior LLM compile fix worked by removing the offending "
+                            "code rather than correcting it. Verify no intended behavior was silently dropped.]"
+                        )
+                    if intent_for_review is not None:
+                        intent_for_review = intent_for_review + deletion_note
+                    elif deletion_note:
+                        intent_for_review = deletion_note.strip()
                     review_result = self._consensus_review(
-                        content, snippets, run_id=run_id, family=family, catalog=catalog
+                        content, snippets, run_id=run_id, family=family, catalog=catalog,
+                        article_intent=intent_for_review
                     )
 
                     # Create ReviewResult model
@@ -4626,6 +4709,26 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             self.db.update_example_status(
                                 e.example_id, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id
                             )
+                        # Annotate examples where review passed but non-trivial concerns remain open (Addition B)
+                        unresolved_concerns = [
+                            i for i in review_issues
+                            if i.severity in (IssueSeverity.WARNING, IssueSeverity.ERROR)
+                        ]
+                        if unresolved_concerns:
+                            concern_str = "; ".join(
+                                i.description[:80] for i in unresolved_concerns[:3]
+                            )
+                            logger.warning(
+                                f"CONCERNS_OPEN: {len(unresolved_concerns)} unresolved concern(s) in "
+                                f"{file_path}: {concern_str}"
+                            )
+                            for e in file_examples:
+                                self.db.update_example_status(
+                                    e.example_id,
+                                    ExampleStatus.FINAL_REVIEW_PASSED,
+                                    run_id=run_id,
+                                    escalation_reason=f"CONCERNS_OPEN:{len(unresolved_concerns)}:{concern_str[:200]}",
+                                )
                         break  # Exit retry loop
 
                     else:
@@ -4677,7 +4780,120 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     )
 
         return stats
-    
+
+    def _run_intent_review_pass(self, run_id: str, family: str) -> Dict[str, Any]:
+        """
+        Non-blocking intent review sweep over all VERIFIED/FINAL_REVIEW_PASSED examples.
+
+        When intent_review_all_examples=True, runs intent-alignment checking on all
+        verified examples and saves ReviewResult rows with issues flagged, but does NOT
+        change example.status. Returns a summary with flagged-file count.
+
+        Args:
+            run_id: Run identifier
+            family: Family identifier
+        """
+        stats = {'files_checked': 0, 'flagged_files': 0, 'intent_issues': 0}
+
+        global_config = self.config_manager.load_global_config()
+        final_review_config = global_config.final_review
+        if not getattr(final_review_config, 'intent_review_all_examples', False):
+            return stats
+
+        # Collect all verified + final_review_passed examples for this run
+        verified = self.db.get_examples_by_family(family, ExampleStatus.VERIFIED, run_id=run_id)
+        passed = self.db.get_examples_by_family(family, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
+        all_examples = verified + passed
+
+        # Group by file
+        files: Dict[str, List[ExampleRecord]] = {}
+        for example in all_examples:
+            if example.article_intent:  # Only process files with frontmatter intent
+                fp = example.file_path
+                if fp not in files:
+                    files[fp] = []
+                files[fp].append(example)
+
+        for file_path, file_examples in files.items():
+            stats['files_checked'] += 1
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                article_intent = next(
+                    (e.article_intent for e in file_examples if e.article_intent), None
+                )
+                snippets = [
+                    {
+                        'code': e.verified_code or e.compilable_code or e.original_code,
+                        'example_id': e.example_id,
+                        'line': e.location.start_line,
+                        'language': e.language,
+                    }
+                    for e in file_examples
+                ]
+
+                catalog = self.registry.get_api_catalog(family)
+                result = self.final_review_llm_service.review_markdown_structured(
+                    content, snippets, catalog=catalog, family=family, article_intent=article_intent
+                )
+
+                # Build ReviewIssue models for intent-related issues
+                all_raw_issues = result.get('issues', [])
+                review_issues = []
+                for issue_data in all_raw_issues:
+                    try:
+                        issue_type = IssueType(issue_data.get('issue_type', 'other'))
+                    except ValueError:
+                        issue_type = IssueType.OTHER
+                    try:
+                        severity = IssueSeverity(issue_data.get('severity', 'warning'))
+                    except ValueError:
+                        severity = IssueSeverity.WARNING
+                    review_issues.append(ReviewIssue(
+                        review_id="",
+                        example_id=issue_data.get('example_id', 'unknown'),
+                        issue_type=issue_type,
+                        description=issue_data.get('description', 'No description'),
+                        suggestion=issue_data.get('suggestion'),
+                        severity=severity,
+                    ))
+
+                # Save ReviewResult to DB (non-blocking — approved always True here,
+                # example status unchanged)
+                review_record = ReviewResult(
+                    file_path=file_path,
+                    run_id=run_id,
+                    family=family,
+                    approved=True,  # non-blocking: never fails examples
+                    review_attempt=1,
+                    issues=review_issues,
+                    llm_response=result.get('raw_response', ''),
+                )
+                for issue in review_record.issues:
+                    issue.review_id = review_record.review_id
+                self.db.save_review_result(review_record)
+
+                intent_issues = [
+                    i for i in review_issues
+                    if i.issue_type in (IssueType.INTENT_MISMATCH, IssueType.OUTDATED_API)
+                ]
+                if intent_issues:
+                    stats['flagged_files'] += 1
+                    stats['intent_issues'] += len(intent_issues)
+                    logger.info(
+                        f"[intent-review] {file_path}: {len(intent_issues)} intent issue(s) found "
+                        f"(non-blocking, saved to DB review_id={review_record.review_id})"
+                    )
+                    for issue in intent_issues:
+                        logger.info(
+                            f"  [{issue.issue_type.value}] {issue.description[:120]}"
+                        )
+            except Exception as e:
+                logger.warning(f"Intent review failed for {file_path}: {e}")
+
+        return stats
+
     # ── Commit message helpers ──────────────────────────────────────────
 
     @staticmethod
@@ -5335,12 +5551,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     user_defined_types.add(m.group(1))
 
         unfixable = []
-        bcl_types = {
-            'String', 'Int32', 'Boolean', 'Object', 'Exception', 'DateTime',
-            'TimeSpan', 'Guid', 'Nullable', 'IDisposable', 'IEnumerable',
-            'ICollection', 'IList', 'IDictionary', 'Func', 'Action',
-            'EventArgs', 'EventHandler', 'Attribute', 'Type',
-        }
+        bcl_types = BCL_PLATFORM_TYPES
         for err in errors:
             if 'CS0246' not in err:
                 continue
@@ -5707,6 +5918,55 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             return None
 
         return "\n".join(f"- {hint}" for hint in hints)
+
+    def _is_deletion_fix(
+        self,
+        original_code: str,
+        fixed_code: str,
+        compile_errors: List[str],
+    ) -> bool:
+        """
+        Return True if the LLM 'fixed' by removing the error-causing token rather than correcting it.
+
+        Two signals (either is sufficient):
+        1. Error token extracted from CS error messages no longer appears in fixed_code
+        2. Line count decreased by more than 3 lines
+        """
+        import re as _re
+        from src.services.semantic_microfixes import parse_cs0246_error, parse_cs0103_error
+
+        error_tokens: List[str] = []
+        for err in compile_errors:
+            token_246 = parse_cs0246_error(err)
+            if token_246:
+                error_tokens.append(token_246)
+            token_103 = parse_cs0103_error(err)
+            if token_103:
+                error_tokens.append(token_103)
+            # CS0117/CS1061: 'Type' does not contain a definition for 'MemberName'
+            # Extracts the MEMBER name (the deleted token), not the type name.
+            m117 = _re.search(r"does not contain a definition for '(\w+)'", err)
+            if m117:
+                error_tokens.append(m117.group(1))
+            # Generic: 'identifier' is not accessible / is not defined / does not ...
+            # Captures the leading quoted identifier; may be type name (harmless: if the
+            # type still appears in fixed_code, signal 1 won't fire for it).
+            m_generic = _re.search(r"'(\w+)' (?:is not|does not)", err)
+            if m_generic and m_generic.group(1) not in error_tokens:
+                error_tokens.append(m_generic.group(1))
+
+        # Signal 1: error token disappeared entirely
+        for token in error_tokens:
+            if token and token in original_code and token not in fixed_code:
+                return True
+
+        # Signal 2: significant line count reduction
+        original_lines = len(original_code.splitlines())
+        fixed_lines = len(fixed_code.splitlines())
+        if original_lines - fixed_lines > 3:
+            return True
+
+        return False
 
     def _is_code_identical(self, code1: str, code2: str) -> bool:
         """

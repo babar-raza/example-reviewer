@@ -70,7 +70,8 @@ class Database:
         example_key TEXT,
         app_context TEXT DEFAULT NULL,
         code_block_signature TEXT DEFAULT NULL,
-        extraction_warning TEXT DEFAULT NULL
+        extraction_warning TEXT DEFAULT NULL,
+        article_intent TEXT DEFAULT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_examples_family ON example_records(family);
@@ -848,8 +849,8 @@ class Database:
                         gist_owner, gist_id, gist_filename,
                         original_code, created_at, updated_at,
                         section_heading, description_context, topic, app_context, example_key,
-                        code_block_signature, extraction_warning
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        code_block_signature, extraction_warning, article_intent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(example_id) DO UPDATE SET
                         family = excluded.family,
                         file_path = excluded.file_path,
@@ -870,7 +871,8 @@ class Database:
                         app_context = excluded.app_context,
                         example_key = excluded.example_key,
                         code_block_signature = excluded.code_block_signature,
-                        extraction_warning = excluded.extraction_warning
+                        extraction_warning = excluded.extraction_warning,
+                        article_intent = excluded.article_intent
                 """, (
                     example.example_id,
                     example.family,
@@ -894,6 +896,7 @@ class Database:
                     example.example_key,
                     example.code_block_signature,
                     example.extraction_warning,
+                    example.article_intent,
                 ))
 
             # If run_id provided, also save/update run-scoped state (outside conn context)
@@ -1527,6 +1530,8 @@ class Database:
         code_block_signature = row['code_block_signature'] if 'code_block_signature' in row.keys() else None
         extraction_warning = row['extraction_warning'] if 'extraction_warning' in row.keys() else None
         app_context = row['app_context'] if 'app_context' in row.keys() else None
+        # Handle article_intent field (Migration 012)
+        article_intent = row['article_intent'] if 'article_intent' in row.keys() else None
 
         return ExampleRecord(
             example_id=row['example_id'],
@@ -1553,6 +1558,7 @@ class Database:
             section_heading=section_heading,
             description_context=description_context,
             topic=topic,
+            article_intent=article_intent,
             example_key=example_key,
             app_context=app_context,
             code_block_signature=code_block_signature,
@@ -1584,6 +1590,8 @@ class Database:
         code_block_signature = row['code_block_signature'] if 'code_block_signature' in row.keys() else None
         extraction_warning = row['extraction_warning'] if 'extraction_warning' in row.keys() else None
         app_context = row['app_context'] if 'app_context' in row.keys() else None
+        # Handle article_intent field (Migration 012)
+        article_intent = row['article_intent'] if 'article_intent' in row.keys() else None
 
         # Read run-scoped fields (prefixed with run_)
         status = ExampleStatus(row['run_status']) if 'run_status' in row.keys() else ExampleStatus.DISCOVERED
@@ -1617,6 +1625,7 @@ class Database:
             section_heading=section_heading,
             description_context=description_context,
             topic=topic,
+            article_intent=article_intent,
             example_key=example_key,
             app_context=app_context,
             code_block_signature=code_block_signature,

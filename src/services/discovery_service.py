@@ -7,6 +7,7 @@ import re
 import hashlib
 import json
 import logging
+import yaml
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Generator
 from glob import glob
@@ -245,7 +246,8 @@ class DiscoveryService:
             return False, "using_only_snippet"
 
         # Check: Short fragments referencing undeclared variables (outer-context dependency)
-        if len(meaningful_lines) <= 25:
+        # Skip when allow_cross_block_variable_context is True (e.g. Words sequential tutorials)
+        if len(meaningful_lines) <= 25 and not self.discovery_patterns.allow_cross_block_variable_context:
             if self._has_undeclared_loop_variables(code):
                 return False, "fragment_outer_context"
             if self._has_undeclared_context_variables(code):
@@ -333,13 +335,24 @@ class DiscoveryService:
             return False
         # Find method signatures (lines with return type + method name + parentheses)
         method_sig_pattern = r'^\s*(public|private|protected|internal)?\s*(static\s+)?(async\s+)?(override\s+)?(virtual\s+)?(void|Task|string|int|bool|[\w.<>]+)\s+\w+\s*\('
-        method_sigs = [l for l in meaningful if re.match(method_sig_pattern, l)]
-        if not method_sigs:
+        method_sig_indices = [i for i, l in enumerate(meaningful) if re.match(method_sig_pattern, l)]
+        if not method_sig_indices:
             return False
-        # Check if ALL method signatures end with ';' (no body)
-        sigs_without_body = [l for l in method_sigs if l.rstrip().endswith(';') or l.rstrip().endswith(')')]
-        # If all method-like lines are just signatures (no { after ), it's a stub
-        return len(sigs_without_body) == len(method_sigs)
+        # A method has no body if its signature line ends with ';' (abstract/interface),
+        # OR ends with ')' and is NOT followed by a '{' in the next 1-2 meaningful lines.
+        # This avoids false-positives for allman-brace style: "void Main()\n{"
+        stubs_count = 0
+        for idx in method_sig_indices:
+            sig = meaningful[idx].rstrip()
+            if sig.endswith(';'):
+                stubs_count += 1
+            elif sig.endswith(')'):
+                # Check if opening brace appears within the next 2 meaningful lines
+                next_lines = meaningful[idx + 1: idx + 3]
+                if not any('{' in l for l in next_lines):
+                    stubs_count += 1
+            # A line ending with '{' already opens the body — not a stub
+        return stubs_count == len(method_sig_indices)
 
     def _count_placeholder_indicators(self, code: str) -> int:
         """Count placeholder path/key indicators in code."""
@@ -574,6 +587,152 @@ class DiscoveryService:
 
         return topic.strip()
 
+    def _extract_frontmatter_intent(
+        self,
+        content: str,
+        step_prefix: str = "step",
+        intent_fields: Optional[List[str]] = None,
+        fallback_to_prose: bool = False,
+    ) -> Optional[str]:
+        """
+        Extract a compact intent string from YAML frontmatter or prose.
+
+        Strategy 1: Parse YAML frontmatter if present (--- block). Extracts
+        fields listed in intent_fields (default: title, description) and
+        numbered step keys using step_prefix (default: step1..step10).
+
+        Strategy 2: If Strategy 1 yields nothing and fallback_to_prose is True,
+        extract H1 heading + first two prose paragraphs (capped at 600 chars).
+
+        Returns:
+            Compact intent string or None if nothing useful was found.
+        """
+        if intent_fields is None:
+            intent_fields = ["title", "description"]
+
+        # Strategy 1: YAML frontmatter
+        if content.startswith('---'):
+            rest = content[3:]
+            end_idx = rest.find('\n---')
+            if end_idx != -1:
+                yaml_block = rest[:end_idx]
+                try:
+                    data = yaml.safe_load(yaml_block)
+                except Exception:
+                    data = None
+
+                if isinstance(data, dict):
+                    # Extract configured intent fields
+                    field_values: Dict[str, str] = {}
+                    for field_name in intent_fields:
+                        val = data.get(field_name, '')
+                        if val:
+                            field_values[field_name] = str(val)
+
+                    # Extract numbered steps using step_prefix
+                    steps = []
+                    for i in range(1, 11):
+                        step = data.get(f'{step_prefix}{i}', '')
+                        if not step:
+                            break
+                        steps.append(str(step))
+
+                    if field_values or steps:
+                        parts = []
+                        # title gets "Title:" label, description gets "Summary:", others get capitalized key
+                        title_val = field_values.get('title', '')
+                        desc_val = field_values.get('description', '')
+                        if title_val:
+                            parts.append(f"Title: {title_val}")
+                        if desc_val:
+                            parts.append(f"Summary: {desc_val[:300]}")
+                        for field_name, val in field_values.items():
+                            if field_name not in ('title', 'description'):
+                                parts.append(f"{field_name.capitalize()}: {val[:300]}")
+                        if steps:
+                            parts.append(f"Steps: {'; '.join(steps)}")
+                        intent = '\n'.join(parts)
+                        return intent[:800]
+
+        # Strategy 2: Prose fallback
+        if not fallback_to_prose:
+            return None
+
+        h1_title = None
+        prose_paragraphs: List[str] = []
+        lines = content.splitlines()
+        past_h1 = False
+
+        for line in lines:
+            stripped = line.strip()
+            if not past_h1:
+                if stripped.startswith('# '):
+                    h1_title = stripped[2:].strip()
+                    past_h1 = True
+            else:
+                # Skip headings, fences, and empty lines while collecting prose
+                if stripped.startswith('#') or stripped.startswith('```') or stripped.startswith('---'):
+                    continue
+                if stripped:
+                    prose_paragraphs.append(stripped)
+                    if len(prose_paragraphs) >= 2:
+                        break
+
+        if h1_title is None and not prose_paragraphs:
+            return None
+
+        prose_text = ' '.join(prose_paragraphs)
+        parts = []
+        if h1_title:
+            parts.append(f"Title: {h1_title}")
+        if prose_text:
+            parts.append(f"Context: {prose_text[:400]}")
+
+        intent = '\n'.join(parts)
+        return intent[:600] if intent else None
+
+    def _extract_product_calls(self, code: str, catalog) -> Optional[str]:
+        """
+        Scan framework-wrapper code for family API catalog calls.
+
+        If the code contains calls to types in the family catalog, extract
+        those lines as a minimal product-logic snippet. Returns None if no
+        catalog types are found.
+
+        P1 compliance: Detection uses catalog type names only, not hardcoded strings.
+        P2 compliance: Generic mechanism -- family-specific harness wrapping is separate.
+
+        Args:
+            code: The framework-wrapper code (e.g., ASP.NET controller action)
+            catalog: APICatalogService instance for the family
+
+        Returns:
+            Extracted product-relevant lines joined as string, or None
+        """
+        if not catalog:
+            return None
+
+        try:
+            catalog_types = set(catalog.get_all_type_names() if hasattr(catalog, 'get_all_type_names') else [])
+            if not catalog_types:
+                return None
+        except Exception:
+            return None
+
+        product_lines = []
+        for line in code.split('\n'):
+            stripped = line.strip()
+            if not stripped or stripped.startswith('//') or stripped.startswith('*'):
+                continue
+            # Check if any catalog type appears in this line
+            if any(t in line for t in catalog_types):
+                product_lines.append(line)
+
+        if not product_lines:
+            return None
+
+        return '\n'.join(product_lines)
+
     def _compute_code_signature(self, code: str) -> str:
         """
         Compute SHA256 signature of normalized code content.
@@ -745,6 +904,9 @@ class DiscoveryService:
         # Update family config for this discovery run (enables family-specific overrides)
         self.family_config = family_config
         self.discovery_patterns = self._get_effective_discovery_patterns()
+        # Sync filtering_config so filter_snippet() picks up family overrides
+        # (e.g. require_code_indicators: [] in words.json)
+        self.filtering_config = self.discovery_patterns
         self.compiled_fence_patterns = self._compile_fence_patterns()
 
         # CD-03: Recompile gist patterns for family-specific overrides
@@ -804,6 +966,27 @@ class DiscoveryService:
 
                 stats['files_processed'] += 1
 
+                # Track files that produced zero examples (Task 4 -- zero-example reporting)
+                if not examples:
+                    file_path_obj = Path(file_path)
+                    file_skipped = [
+                        s for s in self.skipped_candidates
+                        if s.get('file_path') == str(file_path)
+                    ]
+                    reason_summary = ', '.join(
+                        set(s.get('reason', 'unknown') for s in file_skipped)
+                    ) or 'no extractable snippets'
+                    logger.warning(
+                        f"Zero examples from {file_path_obj.name} "
+                        f"-- all snippets filtered ({reason_summary})"
+                    )
+                    if 'zero_example_files' not in stats:
+                        stats['zero_example_files'] = []
+                    stats['zero_example_files'].append({
+                        'file': file_path_obj.name,
+                        'reasons': reason_summary,
+                    })
+
                 # Check again after processing this file
                 if max_examples and stats['examples_found'] >= max_examples:
                     logger.info(
@@ -830,6 +1013,10 @@ class DiscoveryService:
         stats['snippets_found'] = stats['examples_found']
 
         logger.info(f"Discovery complete: {stats['examples_found']} examples found, {stats['snippets_filtered_out']} snippets filtered out, {stats['filtered_gists']} gists filtered out")
+
+        zero_count = len(stats.get('zero_example_files', []))
+        if zero_count > 0:
+            logger.info(f"Discovery: {zero_count} files produced zero examples (see WARNING logs above)")
 
         return stats
 
@@ -1212,25 +1399,34 @@ class DiscoveryService:
             List of extracted ExampleRecord objects
         """
         examples = []
-        
+
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        
+
+        # Extract article intent from YAML frontmatter or prose (once per file)
+        article_intent = self._extract_frontmatter_intent(
+            content,
+            step_prefix=getattr(self.discovery_patterns, 'frontmatter_step_prefix', 'step'),
+            intent_fields=getattr(self.discovery_patterns, 'frontmatter_intent_fields', ['title', 'description']),
+            fallback_to_prose=getattr(self.discovery_patterns, 'intent_fallback_to_prose', True),
+        )
+
         # Extract inline code examples
-        inline_examples = self._extract_inline_examples(content, file_path, family)
+        inline_examples = self._extract_inline_examples(content, file_path, family, article_intent=article_intent)
         examples.extend(inline_examples)
-        
+
         # Extract gist examples
-        gist_examples = self._extract_gist_examples(content, file_path, family)
+        gist_examples = self._extract_gist_examples(content, file_path, family, article_intent=article_intent)
         examples.extend(gist_examples)
-        
+
         return examples
     
     def _extract_inline_examples(
         self,
         content: str,
         file_path: str,
-        family: str
+        family: str,
+        article_intent: Optional[str] = None,
     ) -> List[ExampleRecord]:
         """
         Extract inline fenced code blocks with content context.
@@ -1294,6 +1490,14 @@ class DiscoveryService:
                 )
                 # Track in filter stats for reporting
                 self._track_filter_reason(filter_reason)
+                # TODO (Task 4 -- Product Logic Extraction): Call _extract_product_calls() here
+                # to extract product API calls from framework-wrapper snippets before discarding.
+                # Only attempt if catalog is available and snippet was filtered for foreign_framework reason.
+                # Example:
+                #   if 'foreign_framework' in filter_reason and self._catalog:
+                #       extracted = self._extract_product_calls(code_content, self._catalog)
+                #       if extracted:
+                #           ... synthesize harness and add to examples
                 # Skip this block (but block_index already accounted for in all_blocks)
                 continue
 
@@ -1339,6 +1543,7 @@ class DiscoveryService:
                 section_heading=section_heading or None,
                 description_context=description_context or None,
                 topic=topic or None,
+                article_intent=article_intent or None,
                 app_context=app_context.value,
                 # Code block location metadata (Migration 011)
                 code_block_signature=code_signature,  # From canonical parser
@@ -1352,7 +1557,8 @@ class DiscoveryService:
         self,
         content: str,
         file_path: str,
-        family: str
+        family: str,
+        article_intent: Optional[str] = None,
     ) -> List[ExampleRecord]:
         """Extract gist shortcode references with content context."""
         examples = []
@@ -1414,6 +1620,7 @@ class DiscoveryService:
                         section_heading=section_heading or None,
                         description_context=description_context or None,
                         topic=topic or None,
+                        article_intent=article_intent or None,
                     )
                     examples.append(example)
 
@@ -1463,6 +1670,7 @@ class DiscoveryService:
                         section_heading=section_heading or None,
                         description_context=description_context or None,
                         topic=topic or None,
+                        article_intent=article_intent or None,
                     )
                     examples.append(example)
 

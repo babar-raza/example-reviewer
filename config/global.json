@@ -153,7 +153,10 @@
     "only_review_llm_fixed": true,
     "enable_signature_validation": true,
     "enable_family_drift_validation": true,
-    "reject_critical_enum_changes": true
+    "reject_critical_enum_changes": true,
+    "enable_intent_review": false,
+    "intent_review_all_examples": false,
+    "intent_review_ignores_fix_type": false
   },
   "drift": {
     "enabled": true,

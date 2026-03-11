@@ -110,6 +110,7 @@ class ExampleRecord(BaseModel):
     section_heading: Optional[str] = Field(default=None, description="Markdown heading above code block")
     description_context: Optional[str] = Field(default=None, description="Paragraphs before code block")
     topic: Optional[str] = Field(default=None, description="Topic inferred from file path")
+    article_intent: Optional[str] = Field(default=None, description="Compact article intent from YAML frontmatter (title + description + steps)")
 
     # Application context classification (Phase-2 Gate B: prevent cross-context substitution)
     app_context: Optional[str] = Field(default=None, description="Application architecture type (console, aspnet_core_minimal, mvc, webapi, library)")
@@ -528,6 +529,8 @@ class IssueType(str, Enum):
     SECURITY_CONCERN = "security_concern"
     FORMATTING_ISSUE = "formatting_issue"
     DOCUMENTATION_GAP = "documentation_gap"
+    INTENT_MISMATCH = "intent_mismatch"
+    OUTDATED_API = "outdated_api"
     OTHER = "other"
 
 

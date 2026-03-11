@@ -105,6 +105,14 @@
         "Resources"
       ]
     },
+    "extension_fallbacks": {
+      ".docx": "Document.docx",
+      ".doc":  "Document.doc",
+      ".html": "Document.html",
+      ".odt":  "Document.odt",
+      ".txt":  "English text.txt",
+      ".rtf":  "Document.docx"
+    },
     "expected_outputs": [
       "*.docx",
       "*.pdf",
@@ -156,7 +164,8 @@
     },
     "require_code_indicators": [],
     "min_line_count": 1,
-    "max_line_count": 500
+    "max_line_count": 500,
+    "allow_cross_block_variable_context": true
   },
   "context_enforcement": {
     "enabled": true

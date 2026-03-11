@@ -455,6 +455,12 @@ class MarkdownUpdateService:
         - If block_index points to correct signature → use it
         - If mismatch but unique signature match found → self-heal and update DB
         - If ambiguous or not found → skip with NEEDS_REVIEW
+
+        Returns:
+            Tuple of (updated_content, change_info) if the block was replaced, or
+            None if block content + language tag already match verified_code
+            (intentional no-op from _replace_block — no file write needed), or
+            None if block resolution failed (NEEDS_REVIEW status set on the example).
         """
         # Resolve target block with self-healing
         resolution = self.resolve_target_block(example, blocks)
@@ -478,7 +484,9 @@ class MarkdownUpdateService:
         # Perform replacement
         result = self._replace_block(content, target_block, example)
 
-        # If self-healing occurred, update DB location
+        # DB location update proceeds even when _replace_block returns None (no-op).
+        # Self-healed block_index metadata is persisted regardless of whether a file
+        # write occurred, so future runs resolve the block on first try without re-healing.
         if resolution.needs_db_update:
             self._update_example_location(
                 example.example_id,
@@ -576,21 +584,41 @@ class MarkdownUpdateService:
         content: str,
         block: Dict[str, Any],
         example: ExampleRecord,
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> Optional[Tuple[str, Dict[str, Any]]]:
         """
         Replace a specific block in the content with verified code.
+
+        Returns:
+            Tuple of (updated_content, change_info) if the block was replaced, or
+            None if the block content + language tag already match verified_code
+            (intentional no-op — no write needed).
         """
+        # No-op guard: skip write when both code AND language tag already match what
+        # the pipeline would emit. This preserves language-tag normalisation (e.g.
+        # empty fence -> 'csharp') as an active fix while avoiding redundant file I/O.
+        # Normalisation: rstrip('\n') removes trailing newlines that compilation/runtime
+        # harnesses may append, while preserving all leading whitespace (indentation changes
+        # are substantive and must NOT be suppressed).
+        resolved_language = block['language'] or (example.language or '') or 'csharp'
+        code_identical = (block['content'] or '').rstrip('\n') == (example.verified_code or '').rstrip('\n')
+        language_identical = block['language'] == resolved_language
+        if code_identical and language_identical:
+            logger.debug(
+                f"Skipped block {block['block_index']} in {example.file_path} "
+                f"(no change) for {example.example_id}"
+            )
+            return None
+
         lines = content.split('\n')
 
         fence_start_idx = block['fence_start_idx']
         fence_end_idx = block['fence_end_idx']
 
-        # Use the language from the original fence (or default to example language)
-        language = block['language'] or example.language or 'csharp'
+        # resolved_language already computed above for the no-op guard; reuse it.
 
         # Build replacement lines
         new_lines = [
-            f"```{language}",
+            f"```{resolved_language}",
             example.verified_code,
             "```"
         ]
@@ -613,7 +641,7 @@ class MarkdownUpdateService:
             'block_index': block['block_index'],
             'start_line': block['start_line'],
             'end_line': block['end_line'],
-            'language': language,
+            'language': resolved_language,
         }
     
     def _update_gist_example(
