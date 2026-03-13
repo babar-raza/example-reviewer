@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from ..core.path_roles import PathRole, classify_path_role, is_safe_path_alias
+
 # Deferred import to avoid circular dependency
 try:
     from ..core.models import SourceType
@@ -492,6 +494,8 @@ class FixtureResolverService:
         filename_lower = filename.lower()
 
         for canonical, aliases in self._file_aliases.items():
+            if not is_safe_path_alias(canonical, filename):
+                continue
             aliases_lower = [a.lower() for a in aliases]
             if filename_lower in aliases_lower or filename_lower == canonical.lower():
                 # Found canonical — check if it exists in test-data
@@ -592,6 +596,8 @@ class FixtureResolverService:
     def _should_skip(self, filename: str) -> bool:
         """Check if filename matches output patterns (shouldn't be generated)."""
         import fnmatch
+        if classify_path_role(filename) == PathRole.OUTPUT:
+            return True
         lower = filename.lower()
         for pattern in self._skip_patterns:
             if fnmatch.fnmatch(lower, pattern.lower()):

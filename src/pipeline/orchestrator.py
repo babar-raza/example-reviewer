@@ -19,6 +19,7 @@ from ..core.models import (
 )
 from ..core.database import Database
 from ..core.config import ConfigurationManager, FamilyConfig, GlobalConfig
+from ..core.path_roles import validate_path_role_preservation
 from ..core.telemetry import track_phase_timing, export_run_telemetry, log_resource_decision
 from ..services.discovery_service import DiscoveryService
 from ..services.resource_detection_service import ResourceDetectionService
@@ -28,6 +29,8 @@ from ..services.llm_service import LLMService, LLMServiceFactory
 from ..services.markdown_service import MarkdownUpdateService
 from ..services.vector_db_service import VectorDBService
 from ..services.telemetry_service import TelemetryService
+from ..services.behavioral_pattern_scanner import BehavioralPatternScanner
+from ..services.article_validator import ArticleValidator
 from ..services.example_substitution_service import ExampleSubstitutionService, apply_quick_fixes
 from ..services.semantic_microfixes import apply_semantic_microfixes, BCL_PLATFORM_TYPES
 from .failure_tracker import track_infra_missing_test_data, track_failure, track_compile_failure
@@ -190,6 +193,8 @@ class PipelineOrchestrator:
         self._vector_db_service: Optional[VectorDBService] = None
         self._resource_detection_service: Optional[ResourceDetectionService] = None
         self._telemetry_service: Optional[TelemetryService] = None
+        self._behavioral_pattern_scanner: Optional[BehavioralPatternScanner] = None
+        self._article_validator: Optional[ArticleValidator] = None
         # Note: _substitution_service removed - use self.registry.get_substitution_service(family)
         self._context_drift_validator: Optional['ContextDriftValidator'] = None
         self._context_harness_service: Optional['ContextHarnessService'] = None
@@ -203,6 +208,8 @@ class PipelineOrchestrator:
         # Write-back diff guard: track original code before proactive fixes
         # so we can detect examples where only infrastructure changes were applied
         self._pre_proactive_codes: Dict[str, str] = {}  # example_id -> original code before proactive fixes
+        self._behavioral_findings_by_example: Dict[str, List[Dict[str, Any]]] = {}
+        self._article_validation_results: Dict[str, List[Dict[str, Any]]] = {}
 
         # Learned patterns service cache (per family)
         self._learned_patterns_service_cache: Dict[str, Optional['LearnedPatternsService']] = {}
@@ -402,8 +409,21 @@ class PipelineOrchestrator:
                 use_workspace_copy=self.use_workspace_copy,
                 workspace_root=self.artifacts_dir / "workspace",
                 run_id="default",  # Will be overridden when run starts
+                llm_service=self._llm_service,
             )
         return self._markdown_service
+
+    @property
+    def behavioral_pattern_scanner(self) -> BehavioralPatternScanner:
+        if self._behavioral_pattern_scanner is None:
+            self._behavioral_pattern_scanner = BehavioralPatternScanner()
+        return self._behavioral_pattern_scanner
+
+    @property
+    def article_validator(self) -> ArticleValidator:
+        if self._article_validator is None:
+            self._article_validator = ArticleValidator()
+        return self._article_validator
 
     @property
     def vector_db_service(self) -> VectorDBService:
@@ -977,6 +997,8 @@ class PipelineOrchestrator:
         allow_commit: bool = False,
         strategy_config: Optional[dict] = None,
         content_roots: Optional[List[str]] = None,
+        file_list: Optional[List[str]] = None,
+        audit_prose: bool = False,
     ) -> Dict[str, Any]:
         """
         Run the full pipeline for a family.
@@ -993,6 +1015,10 @@ class PipelineOrchestrator:
             strategy_config: Dict controlling which fix strategies to enable
             content_roots: Override content_roots from family config (paths to
                 markdown directories). If omitted the family config paths are used.
+            file_list: Run on specific .md files (absolute paths). When provided,
+                bypasses content_roots discovery entirely.
+            audit_prose: If True, run prose/code alignment audits during article validation
+                and markdown update when an LLM reviewer is available.
 
         Returns:
             Pipeline results dictionary
@@ -1128,12 +1154,23 @@ class PipelineOrchestrator:
             # Phase A: Discovery
             logger.info(f"Phase A: Discovery for {family}")
             with track_phase_timing(self.db, run_id, family, "discovery"):
-                discovery_stats = self._run_discovery_phase(run_id, family, family_config, max_examples)
+                discovery_stats = self._run_discovery_phase(run_id, family, family_config, max_examples, file_list=file_list)
             results['phases']['discovery'] = discovery_stats
 
             if discovery_stats.get('error'):
                 results['success'] = False
                 return results
+
+            logger.info(f"Phase A.2: Article validation for {family}")
+            with track_phase_timing(self.db, run_id, family, "article_validation"):
+                article_validation_stats = self._run_article_validation_phase(
+                    run_id,
+                    family,
+                    family_config,
+                    file_list=file_list,
+                    audit_prose=audit_prose,
+                )
+            results['phases']['article_validation'] = article_validation_stats
 
             # Phase A.5: Gist backfill (fetch source code for gist-referenced examples)
             try:
@@ -1150,6 +1187,34 @@ class PipelineOrchestrator:
                     logger.info(f"Gist backfill skipped: {backfill_result.skip_reason}")
             except Exception as e:
                 logger.warning(f"Gist backfill failed (continuing): {e}")
+
+            # Phase A.5b: Fixture pre-fetch — fetch missing encrypted fixture files
+            # (e.g. certificate.pfx) from example_repo before runtime attempts.
+            # Uses fixture_passwords config to identify which files need fetching.
+            try:
+                from ..services.backfill_service import BackfillService as _BS
+                _family_cfg = self.config_manager.load_family_config(family)
+                if _family_cfg.fixture_passwords:
+                    _bsvc = _BS(config_manager=self.config_manager)
+                    _test_data_dir = resolve_test_data_path(family, _family_cfg)
+                    for _fixture_name in _family_cfg.fixture_passwords:
+                        if _fixture_name == 'default':
+                            continue
+                        # Only fetch if not already present in local test-data
+                        _present = False
+                        if _test_data_dir:
+                            _present = any(_test_data_dir.rglob(_fixture_name))
+                        if not _present:
+                            _fetched = _bsvc.fetch_fixture_file(
+                                family, _fixture_name,
+                                dest_dir=_test_data_dir or Path("artifacts/backfill") / family / "test-data"
+                            )
+                            if _fetched:
+                                logger.info(f"Phase A.5b: pre-fetched fixture '{_fixture_name}' → {_fetched}")
+                            else:
+                                logger.warning(f"Phase A.5b: could not fetch fixture '{_fixture_name}'")
+            except Exception as e:
+                logger.warning(f"Phase A.5b fixture pre-fetch failed (continuing): {e}")
 
             # Phase A.6: Preload learned patterns for performance
             learned_service = self.get_learned_patterns_service(family)
@@ -1207,11 +1272,16 @@ class PipelineOrchestrator:
                     )
                 results['phases']['runtime'] = runtime_stats
 
+            logger.info(f"Phase C.5: Behavioral scan for {family}")
+            with track_phase_timing(self.db, run_id, family, "behavioral_scan"):
+                behavioral_stats = self._run_behavioral_scan_phase(run_id, family)
+            results['phases']['behavioral_scan'] = behavioral_stats
+
             # Phase D: Markdown Update
             logger.info(f"Phase D: Markdown update for {family}")
             with track_phase_timing(self.db, run_id, family, "markdown_update"):
                 update_stats = self._run_markdown_update_phase(
-                    run_id, family, dry_run, allow_md_write=allow_md_write
+                    run_id, family, dry_run, allow_md_write=allow_md_write, audit_prose=audit_prose
                 )
             results['phases']['markdown_update'] = update_stats
 
@@ -1437,6 +1507,7 @@ class PipelineOrchestrator:
         family: str,
         family_config: FamilyConfig,
         max_examples: Optional[int],
+        file_list: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Run Phase A: Discovery and Extraction.
@@ -1451,6 +1522,7 @@ class PipelineOrchestrator:
             family: Family name
             family_config: FamilyConfig object
             max_examples: Maximum number of examples to discover (None = no limit)
+            file_list: Specific .md files to process (bypasses content_roots discovery).
 
         Returns:
             Discovery statistics dictionary
@@ -1460,7 +1532,8 @@ class PipelineOrchestrator:
             family, family_config,
             max_files=None,  # No file limit unless explicit
             max_examples=max_examples,  # Limit total examples discovered
-            run_id=run_id
+            run_id=run_id,
+            file_list=file_list,
         )
 
         # Emit discovery summary event
@@ -1566,7 +1639,20 @@ class PipelineOrchestrator:
                 'enable_learned_patterns': True,
             }
 
+        # Apply per-family strategy_overrides on top of the base strategy_config (Gap 3 fix)
+        try:
+            _s_overrides = getattr(family_config, 'strategy_overrides', {}) or {}
+            if _s_overrides:
+                strategy_config.update(_s_overrides)
+                logger.info(f"[strategy] Applied per-family strategy_overrides for {family}: {list(_s_overrides.keys())}")
+        except Exception as _sexc:
+            logger.warning(f"[strategy] Failed to apply strategy_overrides for {family}: {_sexc}")
+
         logger.info(f"Strategy configuration: {strategy_config}")
+
+        # Auto-enable audit_prose when strategy_config requests it
+        if strategy_config.get('enable_prose_audit', False):
+            audit_prose = True
 
         # Phase and per-example timeout enforcement (Fix 4: RC3)
         import time as _time
@@ -1783,6 +1869,54 @@ class PipelineOrchestrator:
                         )
                     except Exception:
                         pass
+
+                # NEW: Top-slice proactive LLM audit (Gap 3 implementation)
+                # Runs before first compile; detects known-bad semantic patterns via
+                # family-specific review hints in config/families/{family}_review_hints.json.
+                if strategy_config.get('enable_proactive_llm_audit', False) and self.llm_service and self.llm_service.is_available():
+                    try:
+                        from ..services.proactive_llm_audit import load_family_hints, run_proactive_audit, _filter_hints
+                        _config_dir = str(self.config_manager.config_dir)
+                        _all_hints = load_family_hints(family, _config_dir)
+                        _active_hints = _filter_hints(
+                            _all_hints,
+                            code=example.original_code or "",
+                            article_intent=example.article_intent or "",
+                            markdown_snippet="",
+                        )
+                        if _active_hints:
+                            _audit_issues = run_proactive_audit(
+                                code=example.original_code or "",
+                                article_intent=example.article_intent or "",
+                                section_heading=example.section_heading or "",
+                                family_hints=_active_hints,
+                                llm_service=self.llm_service,
+                            )
+                            for _issue in _audit_issues:
+                                logger.info(
+                                    f"[proactive_audit] {example.example_id} "
+                                    f"hint={_issue.hint_id} severity={_issue.severity}: {_issue.description}"
+                                )
+                                if _issue.severity == "error":
+                                    _fix_result = self.llm_service.generate_semantic_fix(
+                                        code=example.original_code or "",
+                                        issue_type=_issue.issue_type,
+                                        issue_description=_issue.description,
+                                        issue_suggestion=_issue.correction,
+                                        catalog_context=self._build_semantic_fix_context(
+                                            family, _issue.issue_type, _issue.description
+                                        ),
+                                        article_intent=example.article_intent or "",
+                                        section_heading=example.section_heading or "",
+                                    )
+                                    if _fix_result.get("changed") and _fix_result.get("fixed_code"):
+                                        example.original_code = _fix_result["fixed_code"]
+                                        logger.info(
+                                            f"[proactive_audit] Applied fix for {example.example_id} "
+                                            f"hint={_issue.hint_id}"
+                                        )
+                    except Exception as _audit_exc:
+                        logger.warning(f"[proactive_audit] Failed for {example.example_id}: {_audit_exc}")
 
                 # Proactive CS discovery fixes (data-dir patterns + namespace collision)
                 if family_config.cs_discovery.enabled:
@@ -2003,6 +2137,63 @@ class PipelineOrchestrator:
                             )
                             current_code = pre_smf_code
                             example.compilable_code = pre_smf_code
+
+                # Family-specific compile fixes: small, catalog-backed transforms for known
+                # family regressions that generic semantic micro-fixes should not encode.
+                if not success:
+                    try:
+                        from ..services.family_fix_registry import apply_family_runtime_fixes
+
+                        family_fix_result = apply_family_runtime_fixes(
+                            family,
+                            current_code,
+                            '\n'.join(result.errors or []),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Error applying family compile fixes for {example.example_id}: {e}")
+                        family_fix_result = None
+
+                    if family_fix_result is not None:
+                        fixed_code, fix_desc = family_fix_result
+                        logger.info(f"Applied family compile fix for {example.example_id}: {fix_desc}")
+                        pre_family_errors = result.errors[:] if result and result.errors else []
+                        pre_family_code = current_code
+                        current_code = fixed_code
+
+                        example.compilable_code = fixed_code
+                        success, result = self.get_compilation_service(family).compile_example(
+                            example, family_config
+                        )
+
+                        self.get_compilation_service(family).record_attempt(
+                            example.example_id,
+                            result,
+                            example.original_code,
+                            output_code=fixed_code if success else None,
+                            llm_request=f"family_compile_fix:{fix_desc}",
+                            llm_response=fixed_code if success else None,
+                            run_id=run_id,
+                        )
+
+                        if success:
+                            stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
+                            stats['family_compile_fixes'] = stats.get('family_compile_fixes', 0) + 1
+                            self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                            self.db.update_example_code(
+                                example.example_id,
+                                compilable_code=fixed_code,
+                                run_id=run_id,
+                            )
+                            logger.info(f"Family compile fix succeeded for {example.example_id}")
+                            continue
+
+                        if self._is_error_regression(pre_family_errors, result.errors):
+                            logger.warning(
+                                f"Family compile fix regression for {example.example_id}: "
+                                f"{len(pre_family_errors)} -> {len(result.errors)} errors. Rolling back."
+                            )
+                            current_code = pre_family_code
+                            example.compilable_code = pre_family_code
 
                 # E4.5: Learned Patterns - Try patterns from auto-learn (2026-02-06)
                 if not success and strategy_config.get('enable_learned_patterns', False):
@@ -2527,6 +2718,22 @@ class PipelineOrchestrator:
                             )
                             # Skip this fix attempt and continue to next retry
                             continue
+
+                    path_role_result = validate_path_role_preservation(current_code, fixed_code)
+                    if not path_role_result.valid:
+                        reasons = [issue.message for issue in path_role_result.issues]
+                        logger.warning(
+                            f"Rejecting LLM fix for {example.example_id} due to path-role drift: {reasons}"
+                        )
+                        self.db.save_drift_rejection(
+                            example_id=example.example_id,
+                            run_id=run_id,
+                            attempt_id=f"compile_{attempt}",
+                            phase='compilation',
+                            rejection_reason=f"Path role validation: {'; '.join(reasons)}",
+                            drift_score=1.0,
+                        )
+                        continue
 
                     # Track 2: No-change loop detection
                     if previous_code is not None and self._is_code_identical(previous_code, fixed_code):
@@ -3350,20 +3557,51 @@ class PipelineOrchestrator:
                 if error_category == "invalid_password":
                     from .escalation_classifier import EscalationReason
                     from ..services.semantic_microfixes import fix_placeholder_passwords as _fix_pw
+                    from ..services.family_fix_registry import apply_family_runtime_fixes as _apply_family_pw
 
                     current_pw_code = example.compilable_code or example.original_code or ""
+
+                    # Try family-specific password fix first (e.g., certificate.pfx password)
+                    _family_pw_result = _apply_family_pw(family, current_pw_code, "")
+                    if _family_pw_result is not None:
+                        _fixed_family_pw, _family_pw_desc = _family_pw_result
+                        logger.info(f"Pre-escalation family password fix for {example.example_id}: {_family_pw_desc}")
+                        example.compilable_code = _fixed_family_pw
+                        example.verified_code = _fixed_family_pw  # CRITICAL: verified_code takes priority in execute_example
+                        _family_pw_success, _family_pw_retry = self.get_runtime_service(family).execute_example(
+                            example, family_config, test_data_path
+                        )
+                        if _family_pw_success:
+                            logger.info(f"Example {example.example_id}: family password retry PASSED")
+                            stats['passed_first_try'] = stats.get('passed_first_try', 0) + 1
+                            stats['verified'] = stats.get('verified', 0) + 1
+                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                            self.db.update_example_code(example.example_id, verified_code=_fixed_family_pw, run_id=run_id)
+                            continue
+                        # Retry failed — log the actual error for diagnosis
+                        logger.warning(
+                            f"Family password retry FAILED for {example.example_id}: "
+                            f"exit={_family_pw_retry.exit_code} "
+                            f"stderr={(_family_pw_retry.stderr or '')[:300]!r} "
+                            f"stdout={(_family_pw_retry.stdout or '')[:200]!r}"
+                        )
+                        current_pw_code = _fixed_family_pw  # Continue with family-fixed code
+
                     fixed_pw_code, pw_fix_desc = _fix_pw(current_pw_code)
                     if pw_fix_desc:
                         # Password was a placeholder — fix and retry runtime once
                         logger.info(f"Pre-escalation password fix for {example.example_id}: {pw_fix_desc}")
                         example.compilable_code = fixed_pw_code
-                        retry_result = self.get_runtime_service(family).run_example(
+                        example.verified_code = fixed_pw_code  # CRITICAL: verified_code takes priority in execute_example
+                        _retry_success, retry_result = self.get_runtime_service(family).execute_example(
                             example, family_config, test_data_path
                         )
-                        if retry_result.success:
+                        if _retry_success:
                             logger.info(f"Example {example.example_id}: password retry PASSED")
                             stats['passed_first_try'] = stats.get('passed_first_try', 0) + 1
                             stats['verified'] = stats.get('verified', 0) + 1
+                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                            self.db.update_example_code(example.example_id, verified_code=fixed_pw_code, run_id=run_id)
                             continue
                         # Retry also failed — fall through to escalation
 
@@ -3933,6 +4171,22 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                 # Skip this fix attempt and continue to next retry
                                 continue
 
+                        path_role_result = validate_path_role_preservation(current_code, fixed_code)
+                        if not path_role_result.valid:
+                            reasons = [issue.message for issue in path_role_result.issues]
+                            logger.warning(
+                                f"Rejecting LLM fix for {example.example_id} due to path-role drift: {reasons}"
+                            )
+                            self.db.save_drift_rejection(
+                                example_id=example.example_id,
+                                run_id=run_id,
+                                attempt_id=f"runtime_{attempt}",
+                                phase='runtime',
+                                rejection_reason=f"Path role validation: {'; '.join(reasons)}",
+                                drift_score=1.0,
+                            )
+                            continue
+
                         # Track 2: No-change loop detection (runtime)
                         if previous_runtime_code is not None and self._is_code_identical(previous_runtime_code, fixed_code):
                             logger.warning(
@@ -4251,13 +4505,229 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
         stats['verified'] = stats['passed_first_try'] + stats['passed_with_fix']
         return stats
-    
+
+    def _run_article_validation_phase(
+        self,
+        run_id: str,
+        family: str,
+        family_config: FamilyConfig,
+        *,
+        file_list: Optional[List[str]] = None,
+        audit_prose: bool = False,
+    ) -> Dict[str, Any]:
+        """Run deterministic article validation for the files in the current run scope."""
+        target_files = file_list or self._get_run_file_paths(run_id, family)
+        if not target_files:
+            target_files = self.discovery_service._find_markdown_files(family_config)
+
+        llm_service = None
+        if audit_prose:
+            llm_service = self.llm_service if self.llm_service.is_available() else None
+
+        result = self.article_validator.validate_files(
+            target_files,
+            audit_prose=audit_prose,
+            llm_service=llm_service,
+        )
+        self._article_validation_results = {
+            report["file_path"]: report.get("warnings", []) + report.get("prose_audit", [])
+            for report in result.get("reports", [])
+        }
+
+        # Persist issues to JSON log for later inspection
+        all_issues = [
+            issue
+            for warnings in self._article_validation_results.values()
+            for issue in warnings
+        ]
+        if all_issues:
+            self._store_article_validation_issues(run_id, family, all_issues)
+
+        return result
+
+    def _store_article_validation_issues(
+        self,
+        run_id: str,
+        family: str,
+        issues: List[Dict[str, Any]],
+    ) -> None:
+        """Write article validation issues to a JSON log file under artifacts/<family>/."""
+        try:
+            log_dir = Path(self.artifacts_dir) / family
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / f"article_validation_{run_id}.json"
+            log_path.write_text(
+                json.dumps({"run_id": run_id, "family": family, "issues": issues}, indent=2),
+                encoding="utf-8",
+            )
+            logger.debug(
+                f"[article_validator] Wrote {len(issues)} issue(s) to {log_path}"
+            )
+        except Exception as exc:
+            logger.warning(f"[article_validator] Failed to write validation log: {exc}")
+
+    def _run_behavioral_scan_phase(
+        self,
+        run_id: str,
+        family: str,
+    ) -> Dict[str, Any]:
+        """Run deterministic behavioral scanning on verified examples before write-back."""
+        stats = {
+            "examples_scanned": 0,
+            "examples_with_findings": 0,
+            "blocking_examples": 0,
+            "warning_findings": 0,
+            "blocking_findings": 0,
+        }
+
+        examples = self.db.get_examples_by_family(family, ExampleStatus.VERIFIED, run_id=run_id) or []
+        if not examples:
+            self._behavioral_findings_by_example = {}
+            return stats
+
+        content_cache: Dict[str, str] = {}
+        findings_by_example: Dict[str, List[Dict[str, Any]]] = {}
+
+        for example in examples:
+            stats["examples_scanned"] += 1
+            code = example.verified_code or example.compilable_code or example.original_code or ""
+            if not code.strip():
+                continue
+
+            markdown_content = content_cache.get(example.file_path)
+            if markdown_content is None:
+                try:
+                    markdown_content = Path(example.file_path).read_text(encoding="utf-8")
+                except Exception:
+                    markdown_content = ""
+                content_cache[example.file_path] = markdown_content
+
+            findings = self.behavioral_pattern_scanner.scan_example(
+                family,
+                code,
+                article_intent=example.article_intent or "",
+                section_heading=example.section_heading or "",
+                markdown_content=markdown_content,
+            )
+            if not findings:
+                continue
+
+            serialized = [
+                {
+                    "pattern_id": finding.pattern_id,
+                    "issue_type": finding.issue_type,
+                    "severity": finding.severity,
+                    "description": finding.description,
+                    "suggestion": finding.suggestion,
+                }
+                for finding in findings
+            ]
+            findings_by_example[example.example_id] = serialized
+            stats["examples_with_findings"] += 1
+
+            blocking = [finding for finding in findings if finding.is_blocking]
+            stats["warning_findings"] += sum(1 for finding in findings if not finding.is_blocking)
+            stats["blocking_findings"] += len(blocking)
+
+            if blocking:
+                # Attempt deterministic behavioral fix before marking NEEDS_REVIEW
+                from ..services.family_fix_registry import apply_family_behavioral_fixes
+                fix_result = apply_family_behavioral_fixes(family, code)
+                if fix_result is not None:
+                    fixed_code, fix_desc = fix_result
+                    # Persist the fix and keep example as VERIFIED
+                    self.db.update_example_code(
+                        example.example_id,
+                        verified_code=fixed_code,
+                        run_id=run_id,
+                    )
+                    logger.info(
+                        f"[behavioral_fix] {example.example_id}: {fix_desc}"
+                    )
+                    # Re-scan to confirm the fix resolved the blocking issues
+                    re_findings = self.behavioral_pattern_scanner.scan_example(
+                        family,
+                        fixed_code,
+                        article_intent=example.article_intent or "",
+                        section_heading=example.section_heading or "",
+                        markdown_content=markdown_content,
+                    )
+                    re_blocking = [f for f in re_findings if f.is_blocking]
+                    if not re_blocking:
+                        # Fix resolved all blocking findings — keep VERIFIED
+                        stats["blocking_examples"] += 1  # still counts as fixed
+                        continue
+                    # Fix didn't resolve all issues — fall through to NEEDS_REVIEW
+                    blocking = re_blocking
+                    code = fixed_code
+
+                stats["blocking_examples"] += 1
+                summary = self.behavioral_pattern_scanner.summarize_findings(blocking)
+                self.db.update_example_status(
+                    example.example_id,
+                    ExampleStatus.NEEDS_REVIEW,
+                    failure_reason=summary[:500],
+                    escalation_reason="behavioral_semantic_mismatch",
+                    run_id=run_id,
+                )
+
+        self._behavioral_findings_by_example = findings_by_example
+        return stats
+
+    def _get_run_file_paths(self, run_id: str, family: str) -> List[str]:
+        """Return deterministically sorted file paths present in the current run state."""
+        file_paths: set[str] = set()
+        for status in (
+            ExampleStatus.DISCOVERED,
+            ExampleStatus.COMPILABLE,
+            ExampleStatus.VERIFIED,
+            ExampleStatus.MD_UPDATED,
+            ExampleStatus.FINAL_REVIEW_PASSED,
+        ):
+            for example in self.db.get_examples_by_family(family, status, run_id=run_id) or []:
+                if example.file_path:
+                    file_paths.add(example.file_path)
+        return sorted(file_paths, key=lambda path: path.lower())
+
+    def _build_review_context_for_file(
+        self,
+        file_path: str,
+        file_examples: List[ExampleRecord],
+    ) -> str:
+        """Build deterministic supplemental review context from earlier validator phases."""
+        lines: List[str] = []
+
+        article_findings = self._article_validation_results.get(file_path, [])
+        if article_findings:
+            lines.append("Article validation findings:")
+            for finding in article_findings[:8]:
+                lines.append(
+                    f"- [{finding.get('severity', 'warning')}] {finding.get('type', 'warning')}: "
+                    f"{finding.get('message', '')}"
+                )
+
+        behavioral_lines: List[str] = []
+        for example in file_examples:
+            for finding in self._behavioral_findings_by_example.get(example.example_id, []):
+                behavioral_lines.append(
+                    f"- Example {example.example_id}: [{finding.get('severity', 'warning')}] "
+                    f"{finding.get('issue_type', 'other')} ({finding.get('pattern_id', 'unknown')}): "
+                    f"{finding.get('description', '')}"
+                )
+
+        if behavioral_lines:
+            lines.append("Behavioral scan findings:")
+            lines.extend(behavioral_lines[:12])
+
+        return "\n".join(lines).strip()
+
     def _run_markdown_update_phase(
         self,
         run_id: str,
         family: str,
         dry_run: bool,
         allow_md_write: bool = False,
+        audit_prose: bool = False,
     ) -> Dict[str, Any]:
         """
         Run Phase D: Markdown Update.
@@ -4271,15 +4741,16 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         Returns:
             Statistics dictionary
         """
-        # Auto-promote CS_FILE examples past markdown update (no markdown to edit)
+        # Auto-promote CS_FILE and EXTRACTED_FROM_WRAPPER examples past markdown update
+        # (synthesized examples must never be written back to the source markdown)
         verified = self.db.get_examples_by_family(family, ExampleStatus.VERIFIED, run_id=run_id)
         cs_promoted = 0
         for ex in (verified or []):
-            if ex.source_type == SourceType.CS_FILE:
+            if ex.source_type in (SourceType.CS_FILE, SourceType.EXTRACTED_FROM_WRAPPER):
                 self.db.update_example_status(ex.example_id, ExampleStatus.MD_UPDATED, run_id=run_id)
                 cs_promoted += 1
         if cs_promoted:
-            logger.info(f"Auto-promoted {cs_promoted} CS_FILE examples past markdown update")
+            logger.info(f"Auto-promoted {cs_promoted} CS_FILE/extracted examples past markdown update")
 
         # Index verified CS_FILE examples in vector DB for knowledge retrieval
         if self.vector_db_service and cs_promoted > 0:
@@ -4381,6 +4852,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             gist_upload_mode=gist_upload_mode,
             gist_target_account=gist_target_account,
             gist_readme_service=gist_readme_service,
+            llm_service=self.llm_service if audit_prose and self.llm_service.is_available() else None,
+            audit_prose=audit_prose,
         )
 
         if allow_md_write:
@@ -4416,6 +4889,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         family: Optional[str] = None,
         catalog=None,
         article_intent: Optional[str] = None,
+        review_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run multiple review passes and require consensus for approval.
@@ -4436,7 +4910,12 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             # Use dedicated final_review LLM service (C.6)
             # TASK-FIX-REVIEW-03: Pass family for catalog-based validation
             result = self.final_review_llm_service.review_markdown_structured(
-                content, snippets, catalog=catalog, family=family, article_intent=article_intent
+                content,
+                snippets,
+                catalog=catalog,
+                family=family,
+                article_intent=article_intent,
+                review_context=review_context,
             )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
@@ -4495,7 +4974,12 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             # Use dedicated final_review LLM service (C.6)
             # TASK-FIX-REVIEW-03: Pass family for catalog-based validation
             tiebreaker = self.final_review_llm_service.review_markdown_structured(
-                content, snippets, catalog=catalog, family=family, article_intent=article_intent
+                content,
+                snippets,
+                catalog=catalog,
+                family=family,
+                article_intent=article_intent,
+                review_context=review_context,
             )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
@@ -4517,6 +5001,211 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     'confidence': 'medium',
                     'raw_response': tiebreaker.get('raw_response', ''),
                 }
+
+    # ------------------------------------------------------------------
+    # Phase E helpers: semantic fix context and remediation application
+    # ------------------------------------------------------------------
+
+    def _build_semantic_fix_context(
+        self,
+        family: str,
+        issue_type: str,
+        issue_description: str,
+    ) -> str:
+        """Build compact catalog context for a detected semantic review issue.
+
+        Extracts type names mentioned in the issue description, looks up their
+        sibling types and constructors in the catalog, and formats a brief
+        context string suitable for injection into the LLM remediation prompt.
+
+        Args:
+            family: Product family (e.g. "zip", "words")
+            issue_type: Issue category (e.g. "intent_mismatch", "api_mismatch")
+            issue_description: Human-readable description from the review LLM
+
+        Returns:
+            Compact catalog context string (empty string if no catalog data available)
+        """
+        catalog = self.registry.get_api_catalog(family)
+        if catalog is None or not catalog.is_loaded:
+            return ""
+
+        # Extract candidate type names from the issue description (PascalCase words)
+        candidate_types = re.findall(r'\b([A-Z][A-Za-z0-9]+Settings|[A-Z][A-Za-z0-9]+Options|[A-Z][A-Za-z0-9]{3,})\b', issue_description)
+        # Also check all known types for any that appear verbatim
+        candidate_types = [t for t in candidate_types if catalog.has_type(t)][:4]
+
+        if not candidate_types:
+            return ""
+
+        lines = []
+        seen_groups: set = set()
+
+        for type_name in candidate_types:
+            ns = catalog.get_namespace_for_type(type_name)
+            kind = catalog.get_type_kind(type_name) if catalog.has_hierarchy() else None
+            siblings = catalog.get_sibling_types(type_name)
+            group = catalog.get_type_group(type_name)
+            ctors = catalog.get_constructor_signatures(type_name)
+
+            group_key = frozenset(group)
+            if group_key in seen_groups:
+                continue
+            seen_groups.add(group_key)
+
+            lines.append(f"Type: {type_name}")
+            if ns:
+                lines.append(f"  Namespace: {ns}")
+            if kind:
+                lines.append(f"  Kind: {kind}")
+            if ctors:
+                ctor_strs = [f"new {type_name}({c.get('params', '')})" for c in ctors[:2]]
+                lines.append(f"  Constructors: {', '.join(ctor_strs)}")
+            if siblings:
+                lines.append(f"  Sibling types (same base class): {', '.join(siblings[:8])}")
+                # Show constructors for siblings (helps LLM know how to instantiate them)
+                for sib in siblings[:4]:
+                    sib_ctors = catalog.get_constructor_signatures(sib)
+                    if sib_ctors:
+                        sib_ctor_strs = [f"new {sib}({c.get('params', '')})" for c in sib_ctors[:1]]
+                        lines.append(f"    {sib}: {sib_ctor_strs[0]}")
+            lines.append("")
+
+        return "\n".join(lines).strip()
+
+    # Remediable issue types for Phase E auto-remediation loop
+    _REMEDIABLE_ISSUE_TYPES: frozenset = frozenset([
+        "intent_mismatch",
+        "api_mismatch",
+        "outdated_api",
+    ])
+
+    def _apply_review_remediation(
+        self,
+        file_path: str,
+        file_examples: list,
+        review_issues: list,
+        family: str,
+        run_id: str,
+        article_intent: str,
+    ) -> bool:
+        """Apply LLM-based semantic fixes for Phase E review issues.
+
+        For each fixable issue (intent_mismatch, api_mismatch, outdated_api),
+        calls generate_semantic_fix() with catalog-grounded context, re-compiles
+        the result, and if it passes, updates the DB with the corrected code.
+
+        Args:
+            file_path: Path to the markdown file
+            file_examples: List of ExampleRecord objects for this file
+            review_issues: List of ReviewIssue objects from the failed review
+            family: Product family name
+            run_id: Current pipeline run ID
+            article_intent: Article intent from DB
+
+        Returns:
+            True if at least one example was patched (triggers re-review)
+        """
+        fixable_issues = [
+            i for i in review_issues
+            if getattr(i, 'issue_type', None) in self._REMEDIABLE_ISSUE_TYPES
+        ]
+        if not fixable_issues:
+            return False
+
+        # Build a map of example_id -> example for quick lookup
+        example_map = {e.example_id: e for e in file_examples}
+
+        # Build LLM service (reuse final review service config)
+        try:
+            global_config = self.config_manager.load_global_config()
+            review_llm = LLMServiceFactory.from_config(
+                global_config.model_dump(), use_final_review=True
+            )
+        except Exception as e:
+            logger.warning(f"Could not create remediation LLM service: {e}")
+            return False
+
+        any_patched = False
+
+        for issue in fixable_issues:
+            example_id = getattr(issue, 'example_id', None)
+            if example_id and example_id not in example_map:
+                continue
+
+            # If issue has example_id, target that example; else target all examples
+            target_examples = (
+                [example_map[example_id]] if example_id and example_id in example_map
+                else list(file_examples)
+            )
+
+            for ex in target_examples:
+                code = ex.verified_code or ex.compilable_code or ex.original_code
+                if not code:
+                    continue
+
+                # Build catalog context for this issue
+                catalog_context = self._build_semantic_fix_context(
+                    family,
+                    str(getattr(issue, 'issue_type', '')),
+                    getattr(issue, 'description', ''),
+                )
+
+                # Call semantic fix LLM
+                fix_result = review_llm.generate_semantic_fix(
+                    code=code,
+                    issue_type=str(getattr(issue, 'issue_type', '')),
+                    issue_description=getattr(issue, 'description', ''),
+                    issue_suggestion=getattr(issue, 'suggestion', '') or '',
+                    catalog_context=catalog_context,
+                    article_intent=article_intent or '',
+                    section_heading=getattr(ex, 'heading', '') or '',
+                )
+
+                if not fix_result.get('success') or not fix_result.get('changed'):
+                    logger.debug(
+                        f"Semantic fix not applied for {ex.example_id}: "
+                        f"changed={fix_result.get('changed')}, "
+                        f"error={fix_result.get('error')}"
+                    )
+                    continue
+
+                fixed_code = fix_result['fixed_code']
+                explanation = fix_result.get('explanation', '')
+
+                path_role_result = validate_path_role_preservation(code, fixed_code)
+                if not path_role_result.valid:
+                    logger.warning(
+                        f"Semantic remediation rejected for {ex.example_id} due to path-role drift: "
+                        f"{[issue.message for issue in path_role_result.issues]}"
+                    )
+                    continue
+
+                # Re-compile the fixed code to ensure it's still valid
+                try:
+                    compile_result = self.compilation_service.compile_code(fixed_code)
+                    if not compile_result.success:
+                        logger.warning(
+                            f"Semantic fix for {ex.example_id} failed re-compilation: "
+                            f"{compile_result.errors[:200]}"
+                        )
+                        continue
+                except Exception as ce:
+                    logger.warning(f"Re-compilation check failed: {ce}")
+                    continue
+
+                # Patch succeeded — update verified_code in DB and in-memory record
+                ex.verified_code = fixed_code
+                try:
+                    self.db.update_example_code(ex.example_id, verified_code=fixed_code)
+                    logger.info(
+                        f"Semantic remediation applied to {ex.example_id}: {explanation[:120]}"
+                    )
+                    any_patched = True
+                except Exception as de:
+                    logger.warning(f"DB update failed after semantic fix: {de}")
+
+        return any_patched
 
     def _run_final_review_phase(self, run_id: str, family: str) -> Dict[str, Any]:
         """
@@ -4541,6 +5230,21 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         # Load final review config
         global_config = self.config_manager.load_global_config()
         final_review_config = global_config.final_review
+
+        # Apply per-family final_review_overrides (Gap 2 fix)
+        try:
+            _family_cfg = self.config_manager.load_family_config(family)
+            _fr_overrides = getattr(_family_cfg, 'final_review_overrides', {}) or {}
+            if _fr_overrides:
+                # FinalReviewConfig is a Pydantic model — use model_copy to apply overrides
+                # Only apply keys that are actual fields on FinalReviewConfig
+                valid_keys = {k: v for k, v in _fr_overrides.items() if hasattr(final_review_config, k)}
+                if valid_keys:
+                    final_review_config = final_review_config.model_copy(update=valid_keys)
+                    logger.info(f"[final_review] Applied per-family overrides for {family}: {list(valid_keys.keys())}")
+        except Exception as _exc:
+            logger.warning(f"[final_review] Failed to load family final_review_overrides for {family}: {_exc}")
+
         max_attempts = final_review_config.max_review_attempts
 
         # Get updated examples
@@ -4622,6 +5326,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 article_intent = next(
                     (e.article_intent for e in file_examples if e.article_intent), None
                 )
+                review_context = self._build_review_context_for_file(file_path, file_examples)
 
                 # Review loop with retries
                 for attempt in range(1, max_attempts + 1):
@@ -4646,7 +5351,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                         intent_for_review = deletion_note.strip()
                     review_result = self._consensus_review(
                         content, snippets, run_id=run_id, family=family, catalog=catalog,
-                        article_intent=intent_for_review
+                        article_intent=intent_for_review,
+                        review_context=review_context,
                     )
 
                     # Create ReviewResult model
@@ -4745,7 +5451,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             )
                             break  # Don't retry on critical
 
-                        # Check if auto-remediation is enabled (future feature)
+                        # Check if auto-remediation is enabled
                         if not final_review_config.auto_remediation_enabled:
                             # No auto-remediation, mark as failed after max attempts
                             if attempt >= max_attempts:
@@ -4754,8 +5460,37 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             logger.info(f"Retrying review for {file_path} (attempt {attempt + 1})")
                             continue
 
-                        # Future: Auto-remediation would go here
-                        # For now, just retry without changes
+                        # Auto-remediation: apply LLM semantic fix and re-review
+                        max_remed = getattr(final_review_config, 'max_remediation_attempts', 1)
+                        if attempt <= max_remed:
+                            logger.info(
+                                f"Phase E remediation: attempting semantic fix for {file_path} "
+                                f"(remediation attempt {attempt}/{max_remed})"
+                            )
+                            patched = self._apply_review_remediation(
+                                file_path=file_path,
+                                file_examples=file_examples,
+                                review_issues=review_issues,
+                                family=family,
+                                run_id=run_id,
+                                article_intent=article_intent or "",
+                            )
+                            if patched:
+                                # Rebuild snippets from updated verified_code and re-review
+                                snippets = [
+                                    {
+                                        'code': e.verified_code or e.compilable_code or e.original_code,
+                                        'example_id': e.example_id,
+                                        'line': e.location.start_line,
+                                        'language': e.language,
+                                    }
+                                    for e in file_examples
+                                ]
+                                logger.info(f"Re-reviewing {file_path} after semantic remediation")
+                                continue  # re-run the review with patched code
+                            else:
+                                logger.info(f"Semantic remediation produced no changes for {file_path}")
+
                         if attempt >= max_attempts:
                             break
 
@@ -4835,7 +5570,12 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                 catalog = self.registry.get_api_catalog(family)
                 result = self.final_review_llm_service.review_markdown_structured(
-                    content, snippets, catalog=catalog, family=family, article_intent=article_intent
+                    content,
+                    snippets,
+                    catalog=catalog,
+                    family=family,
+                    article_intent=article_intent,
+                    review_context=self._build_review_context_for_file(file_path, file_examples),
                 )
 
                 # Build ReviewIssue models for intent-related issues
@@ -5321,9 +6061,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 return stats
 
         # Get candidate files from FINAL_REVIEW_PASSED examples
-        # Exclude CS_FILE examples — they are reference-only and live in a different repo
+        # Exclude CS_FILE (reference-only, different repo) and EXTRACTED_FROM_WRAPPER (never written back)
+        _no_commit_types = {SourceType.CS_FILE, SourceType.EXTRACTED_FROM_WRAPPER}
         all_examples = self.db.get_examples_by_family(family, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
-        examples = [e for e in all_examples if e.source_type != SourceType.CS_FILE]
+        examples = [e for e in all_examples if e.source_type not in _no_commit_types]
         candidate_files = list(set(e.file_path for e in examples))
 
         if not candidate_files:

@@ -1003,6 +1003,67 @@ class BackfillService:
                 duration_seconds=(datetime.now() - start_time).total_seconds()
             )
 
+    def fetch_fixture_file(self, family: str, filename: str, dest_dir: Optional[Path] = None) -> Optional[Path]:
+        """
+        Fetch a single fixture file from the family's example_repo and place it locally.
+
+        Uses _get_or_clone_repo() to obtain the repo, then searches for `filename`
+        under example_repo.test_data_path. The file is placed at:
+            <dest_dir>/<filename>   (if dest_dir provided)
+            OR artifacts/backfill/<family>/test-data/<filename>  (default)
+
+        Returns the placed path, or None on failure (missing config, git error, file not found).
+        """
+        try:
+            family_config = self.config_manager.load_family_config(family)
+        except Exception as e:
+            logger.warning(f"fetch_fixture_file: cannot load config for '{family}': {e}")
+            return None
+
+        if not family_config.example_repo.url:
+            logger.debug(f"fetch_fixture_file: example_repo.url not configured for '{family}'")
+            return None
+
+        # Default destination: artifacts/backfill/<family>/test-data/ (read by resolve_test_data_path)
+        if dest_dir is None:
+            dest_dir = Path("artifacts/backfill") / family / "test-data"
+        dest_path = dest_dir / filename
+
+        if dest_path.exists():
+            logger.debug(f"fetch_fixture_file: '{filename}' already exists at {dest_path}")
+            return dest_path
+
+        if not GIT_AVAILABLE:
+            logger.warning("fetch_fixture_file: GitPython not installed — cannot clone repo")
+            return None
+
+        repo_path = self._get_or_clone_repo(
+            url=family_config.example_repo.url,
+            ref=family_config.example_repo.ref or 'main',
+            family=family,
+        )
+        if repo_path is None:
+            return None
+
+        # Search for the file under test_data_path
+        test_data_path = family_config.example_repo.test_data_path or ""
+        search_root = repo_path / test_data_path if test_data_path else repo_path
+        for candidate in search_root.rglob(filename):
+            if candidate.is_file():
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                assert_write_allowed(dest_path, reason="fetch_fixture_file backfill")
+                shutil.copy2(candidate, dest_path)
+                logger.info(
+                    f"fetch_fixture_file: fetched '{filename}' from {candidate} → {dest_path}"
+                )
+                return dest_path
+
+        logger.warning(
+            f"fetch_fixture_file: '{filename}' not found in {search_root} "
+            f"(family='{family}', repo={family_config.example_repo.url})"
+        )
+        return None
+
     def _copy_directory(self, source: Path, destination: Path) -> int:
         """
         Copy all files from source to destination recursively.

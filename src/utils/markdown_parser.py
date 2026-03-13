@@ -156,6 +156,43 @@ def find_block_by_signature(
     ]
 
 
+def _normalize_code_lines(lines: List[str]) -> List[str]:
+    """Normalize code lines for fuzzy comparison: strip whitespace, lowercase."""
+    return [line.strip().lower().rstrip(';') for line in lines if line.strip()]
+
+
+def find_block_by_signature_fuzzy(
+    blocks: List[Dict[str, Any]],
+    original_code: str,
+    head_lines: int = 5,
+) -> List[Dict[str, Any]]:
+    """
+    Fuzzy fallback for find_block_by_signature when exact SHA256 misses.
+
+    Compares normalized first N lines of original_code against each block.
+    Useful when the block was lightly edited (trailing whitespace, comment added)
+    but the structural beginning is unchanged.
+
+    Args:
+        blocks: List of blocks from parse_fenced_blocks()
+        original_code: Original code content to match (from example record)
+        head_lines: Number of leading lines to compare (default 5)
+
+    Returns:
+        List of matching blocks (empty if no match). Caller must handle ambiguity.
+    """
+    needle_lines = _normalize_code_lines(original_code.splitlines()[:head_lines])
+    if not needle_lines:
+        return []
+
+    matches = []
+    for block in blocks:
+        block_head = _normalize_code_lines(block['content'].splitlines()[:head_lines])
+        if block_head == needle_lines:
+            matches.append(block)
+    return matches
+
+
 def normalize_language_tag(language: str) -> str:
     """
     Normalize language tag to canonical form.

@@ -30,6 +30,7 @@ MCP, and HTTP wrappers share the same core behavior.
 - `final-review`
 - `commit`
 - `run`
+- `validate-articles`
 
 ### Additional Commands
 
@@ -51,7 +52,7 @@ If not enabled, the markdown update phase behaves like a dry run.
 
 ### Content Roots Override
 
-`scan`, `extract`, and `run` can override the family config's `content_roots`
+`scan`, `extract`, `run`, and `validate-articles` can override the family config's `content_roots`
 without editing the JSON file:
 
 ```bash
@@ -59,7 +60,16 @@ PYTHONPATH=. python -m src.cli.main scan --family zip --content-roots C:/content
 
 PYTHONPATH=. python -m src.cli.main run --family zip \
     --content-roots C:/content/blog/zip C:/content/docs/zip
+
+PYTHONPATH=. python -m src.cli.main validate-articles --family words \
+    --content-roots D:/content/kb.aspose.net/words --audit-prose
 ```
+
+### Article Validation and Prose Audit
+
+- `validate-articles` runs deterministic article-structure checks and optional prose/code audits.
+- `run --audit-prose` forwards the same prose audit into the markdown update phase for changed code blocks.
+- `md-update --audit-prose` reuses the latest completed run and only audits prose adjacent to changed code blocks.
 
 ## MCP
 
@@ -87,6 +97,7 @@ The MCP tool names mirror the CLI commands with underscore-style naming:
 - `backfill`
 - `status`
 - `run_pipeline`
+- `validate_articles`
 - `validate_code_snippet`
 
 ### Deployment Model

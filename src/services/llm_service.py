@@ -8,6 +8,7 @@ import re
 import time
 import json
 import logging
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
@@ -1647,14 +1648,16 @@ If you cannot fix the code without major changes, return the original code uncha
                 test_data_info,
                 "",
                 "CRITICAL FILE PATH RULES:",
-                "1. When you see placeholder paths (e.g., 'path\\\\to\\\\file.zip', 'C:\\\\data\\\\input'), replace with actual test files from above",
-                "2. When you see aliased file names (check 'File Aliases' section if present), use the REAL file name (left side of ->)",
-                "3. Use relative paths from the workspace directory - DO NOT use absolute paths",
-                "4. Examples of placeholder -> real file transformations:",
+                "1. Replace only read-side placeholder paths (input/template/sample/fixture) with actual test files from above",
+                "2. NEVER rewrite a save/output/generated destination to a fixture-like or template-like filename",
+                "3. File aliases apply only to read-side paths; preserve the original source/output role of each path",
+                "4. Use relative paths from the workspace directory - DO NOT use absolute paths",
+                "5. Examples of placeholder -> real file transformations:",
                 "   BAD: 'parent.zip' -> GOOD: use real file from alias mapping",
                 "   BAD: 'path\\\\to\\\\input.zip' -> GOOD: use real file from available list",
                 "   BAD: 'C:\\\\data\\\\archive.zip' -> GOOD: 'archive.zip' (if available)",
                 "   BAD: 'input_folder' -> GOOD: use real directory from alias mapping",
+                "   BAD: 'output.docx' -> GOOD: keep an output filename; do not replace it with 'Blank.docx'",
             ])
 
         # Inject API context from error analysis if not already provided
@@ -2028,6 +2031,7 @@ Return the C# code now:"""
         catalog=None,
         family: str = None,
         article_intent: Optional[str] = None,
+        review_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Review markdown with GUARANTEED structured output using Instructor.
@@ -2062,10 +2066,24 @@ Return the C# code now:"""
 
         # Use Instructor if available for guaranteed schema compliance
         if INSTRUCTOR_AVAILABLE:
-            return self._review_with_instructor(markdown_content, code_snippets, catalog=catalog, family=family, article_intent=article_intent)
+            return self._review_with_instructor(
+                markdown_content,
+                code_snippets,
+                catalog=catalog,
+                family=family,
+                article_intent=article_intent,
+                review_context=review_context,
+            )
         else:
             logger.warning("Instructor not available, falling back to manual JSON parsing")
-            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog, family=family, article_intent=article_intent)
+            return self._review_with_manual_parsing(
+                markdown_content,
+                code_snippets,
+                catalog=catalog,
+                family=family,
+                article_intent=article_intent,
+                review_context=review_context,
+            )
 
     def _review_with_instructor(
         self,
@@ -2074,6 +2092,7 @@ Return the C# code now:"""
         catalog=None,
         family: str = None,
         article_intent: Optional[str] = None,
+        review_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Review using Instructor for guaranteed schema compliance.
@@ -2157,14 +2176,29 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
             prompt_parts.append(article_intent)
             prompt_parts.append("")
 
+        family_review_hints = self._build_family_review_hints(
+            family=family,
+            code_snippets=code_snippets,
+            article_intent=article_intent or "",
+            markdown_content=markdown_content,
+        )
+        if family_review_hints:
+            prompt_parts.append("## Family Review Hints:")
+            prompt_parts.append(family_review_hints)
+            prompt_parts.append("")
+
         # Add catalog context if available
         if catalog:
             catalog_context = self._build_catalog_context_for_review(catalog)
             if catalog_context:
-                prompt_parts.append("")
                 prompt_parts.append("## API Catalog Context:")
                 prompt_parts.append(catalog_context)
                 prompt_parts.append("")
+
+        if review_context:
+            prompt_parts.append("## Deterministic Review Context:")
+            prompt_parts.append(review_context)
+            prompt_parts.append("")
 
         prompt_parts.extend([
             "Review these snippets and provide your assessment.",
@@ -2312,7 +2346,14 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
                     )
 
             # Final fallback: manual parsing
-            return self._review_with_manual_parsing(markdown_content, code_snippets, catalog=catalog, family=family, article_intent=article_intent)
+            return self._review_with_manual_parsing(
+                markdown_content,
+                code_snippets,
+                catalog=catalog,
+                family=family,
+                article_intent=article_intent,
+                review_context=review_context,
+            )
 
     def _review_with_manual_parsing(
         self,
@@ -2321,6 +2362,7 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
         catalog=None,
         family: str = None,
         article_intent: Optional[str] = None,
+        review_context: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Fallback review method with manual JSON parsing.
@@ -2381,6 +2423,22 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
             prompt_parts.append("")
             prompt_parts.append("## Article Intent (from frontmatter):")
             prompt_parts.append(article_intent)
+
+        family_review_hints = self._build_family_review_hints(
+            family=family,
+            code_snippets=code_snippets,
+            article_intent=article_intent or "",
+            markdown_content=markdown_content,
+        )
+        if family_review_hints:
+            prompt_parts.append("")
+            prompt_parts.append("## Family Review Hints:")
+            prompt_parts.append(family_review_hints)
+
+        if review_context:
+            prompt_parts.append("")
+            prompt_parts.append("## Deterministic Review Context:")
+            prompt_parts.append(review_context)
 
         prompt_parts.extend([
             "",
@@ -2488,6 +2546,128 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
         parts.append("")
         parts.append("VALIDATION: Flag 'api_mismatch' if code uses types/namespaces NOT in this list.")
         return "\n".join(parts)
+
+    def _build_family_review_hints(
+        self,
+        *,
+        family: Optional[str],
+        code_snippets: List[Dict[str, Any]],
+        article_intent: str,
+        markdown_content: str,
+    ) -> str:
+        if not family:
+            return ""
+
+        hints_path = Path("config/families") / f"{family}_review_hints.json"
+        if not hints_path.exists():
+            return ""
+
+        try:
+            raw_hints = json.loads(hints_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Failed to load review hints for %s: %s", family, exc)
+            return ""
+
+        code_blob = "\n".join(snippet.get("code", "") for snippet in code_snippets)
+        context_blob = "\n".join([article_intent, markdown_content[:4000]]).lower()
+        selected: List[str] = []
+        for hint in raw_hints:
+            pattern = hint.get("pattern")
+            if pattern and pattern not in code_blob:
+                continue
+            context_key = hint.get("context", "").lower()
+            if context_key and context_key not in context_blob:
+                continue
+            issue_type = hint.get("issue_type")
+            prefix = f"[{issue_type}] " if issue_type else ""
+            selected.append(f"- {prefix}{hint.get('hint', '').strip()}")
+
+        return "\n".join(selected[:8])
+
+    def review_prose_against_code(
+        self,
+        *,
+        prose_text: str,
+        code_text: str,
+        article_intent: str = "",
+        section_heading: str = "",
+    ) -> Dict[str, Any]:
+        """Audit whether prose accurately describes adjacent code, with optional corrected prose."""
+        if not self._client:
+            return {"accurate": True, "issues": "", "corrected_prose": None, "success": False, "error": "LLM client not initialized"}
+
+        system_prompt = """You review technical prose against adjacent C# code.
+
+Return valid JSON with:
+- accurate: boolean
+- issues: short string
+- corrected_prose: string or null
+
+Rules:
+- accurate=true if the prose is materially correct
+- corrected_prose must be concise and preserve the author's meaning
+- If prose is already accurate, return corrected_prose as null
+- Return JSON only
+"""
+
+        prompt_parts = [
+            "Assess whether this prose accurately describes the adjacent code.",
+            "",
+        ]
+        if section_heading:
+            prompt_parts.extend(["Section:", section_heading, ""])
+        if article_intent:
+            prompt_parts.extend(["Article intent:", article_intent, ""])
+        prompt_parts.extend(
+            [
+                "Prose:",
+                prose_text,
+                "",
+                "Code:",
+                "```csharp",
+                code_text,
+                "```",
+                "",
+                'Return JSON only: {"accurate": true|false, "issues": "...", "corrected_prose": "..." or null}',
+            ]
+        )
+
+        response = self.complete(
+            prompt="\n".join(prompt_parts),
+            system_prompt=system_prompt,
+            temperature=0,
+            max_tokens=1200,
+        )
+        if not response.success:
+            return {"accurate": True, "issues": "", "corrected_prose": None, "success": False, "error": response.error}
+
+        content = response.content.strip()
+        if content.startswith("```"):
+            lines = content.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            content = "\n".join(lines).strip()
+
+        try:
+            parsed = json.loads(content)
+            return {
+                "accurate": bool(parsed.get("accurate", True)),
+                "issues": parsed.get("issues", ""),
+                "corrected_prose": parsed.get("corrected_prose"),
+                "success": True,
+                "error": None,
+            }
+        except Exception as exc:
+            logger.warning("Failed to parse prose review JSON: %s", exc)
+            return {
+                "accurate": True,
+                "issues": "",
+                "corrected_prose": None,
+                "success": False,
+                "error": str(exc),
+            }
 
     def _load_api_catalog(self, family: str) -> dict:
         """
@@ -2803,6 +2983,132 @@ Return ONLY the JSON object, no other text."""
         except Exception as e:
             logger.warning(f"Unexpected error in final review: {e}")
             default_result['error'] = f"Unexpected error: {str(e)}"
+            return default_result
+
+    def generate_semantic_fix(
+        self,
+        code: str,
+        issue_type: str,
+        issue_description: str,
+        issue_suggestion: str,
+        catalog_context: str = "",
+        article_intent: str = "",
+        section_heading: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Generate a semantically corrected version of code based on a detected review issue.
+
+        Unlike fix_code() (which is error-driven), this method is intent-driven:
+        it takes a detected semantic issue (from Phase E review) and produces a
+        corrected code block grounded in catalog-verified alternatives.
+
+        Args:
+            code: Current code block to fix
+            issue_type: Issue category (e.g. "intent_mismatch", "api_mismatch", "outdated_api")
+            issue_description: Human-readable description of the issue
+            issue_suggestion: The review LLM's suggested fix (may be empty)
+            catalog_context: Compact catalog context — related types, constructors, sibling types
+            article_intent: The article's high-level intent (from DB article_intent field)
+            section_heading: Markdown section heading above the code block
+
+        Returns:
+            Dictionary with:
+                - fixed_code: str — corrected code (or original if fix not possible)
+                - changed: bool — True if code was modified
+                - explanation: str — what was changed and why
+                - success: bool — True if call completed, False on error
+                - error: Optional[str] — error message if success=False
+        """
+        default_result: Dict[str, Any] = {
+            "fixed_code": code,
+            "changed": False,
+            "explanation": "",
+            "success": False,
+            "error": None,
+        }
+
+        system_prompt = """You are an expert C# code corrector specializing in Aspose product APIs.
+
+Your task is to fix a SEMANTIC issue in a C# code block — the code compiles and runs, but it is
+semantically incorrect, misleading, or uses wrong API choices.
+
+Rules:
+- Return ONLY the corrected code block — no markdown fences, no explanation in the code output
+- Preserve the overall structure and purpose of the code
+- Only change what is explicitly identified in the issue
+- Use ONLY types and methods confirmed in the catalog context provided
+- Do NOT hallucinate types or method signatures not listed in the catalog
+- If the issue is ambiguous or you cannot determine the correct fix with confidence,
+  return the original code unchanged
+
+Return valid JSON with keys: fixed_code (string), explanation (string), changed (boolean)."""
+
+        intent_section = f"\n## Article Intent\n{article_intent}\n" if article_intent else ""
+        heading_section = f"\n## Section\n{section_heading}\n" if section_heading else ""
+        catalog_section = f"\n## Catalog Context (catalog-verified types and alternatives)\n{catalog_context}\n" if catalog_context else ""
+        suggestion_section = f"\n## Reviewer Suggestion\n{issue_suggestion}\n" if issue_suggestion else ""
+
+        prompt = f"""Fix the semantic issue in the following C# code block.
+{intent_section}{heading_section}
+## Issue
+Type: {issue_type}
+Description: {issue_description}
+{suggestion_section}{catalog_section}
+## Current Code
+```csharp
+{code}
+```
+
+Return ONLY valid JSON in this exact format:
+{{
+  "fixed_code": "<corrected code here>",
+  "explanation": "<what you changed and why>",
+  "changed": true or false
+}}
+
+If you cannot determine the correct fix with confidence, set changed=false and return the original code in fixed_code."""
+
+        try:
+            response = self.complete(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.1,
+                max_tokens=2000,
+            )
+
+            if not response.success:
+                default_result["error"] = response.error
+                return default_result
+
+            # Parse JSON response
+            content = response.content.strip()
+            # Strip markdown fences if model wrapped in them
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+
+            parsed = json.loads(content)
+            fixed_code = parsed.get("fixed_code", code)
+            changed = bool(parsed.get("changed", False)) and fixed_code != code
+            explanation = parsed.get("explanation", "")
+
+            return {
+                "fixed_code": fixed_code,
+                "changed": changed,
+                "explanation": explanation,
+                "success": True,
+                "error": None,
+            }
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse semantic fix JSON: {e}")
+            default_result["error"] = f"JSON parsing failed: {str(e)}"
+            return default_result
+        except Exception as e:
+            logger.warning(f"Unexpected error in generate_semantic_fix: {e}")
+            default_result["error"] = f"Unexpected error: {str(e)}"
             return default_result
 
 

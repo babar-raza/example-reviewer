@@ -44,8 +44,8 @@ class TestListTools:
         assert resp.status_code == 200
         data = resp.json()
         assert "tools" in data
-        # Should return all 13 tool definitions (12 original + validate_code_snippet)
-        assert len(data["tools"]) == 13
+        # Should return all 14 tool definitions (12 original + validate_code_snippet + validate_articles)
+        assert len(data["tools"]) == 14
         tool_names = [t["name"] for t in data["tools"]]
         assert "scan" in tool_names
         assert "validate_code_snippet" in tool_names

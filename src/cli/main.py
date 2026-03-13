@@ -736,6 +736,8 @@ def main() -> int:
                                    help="Don't write changes")
     md_update_parser.add_argument('--allow-md-write', action='store_true',
                                    help='REQUIRED to write .md files (safety guard)')
+    md_update_parser.add_argument('--audit-prose', action='store_true',
+                                   help='Audit and correct adjacent prose for changed code blocks when LLM review is available')
     
     # Final review command
     final_review_parser = subparsers.add_parser('final-review',
@@ -792,6 +794,24 @@ def main() -> int:
                                  'Selects the matching content_root automatically.')
     run_parser.add_argument('--safe-workspace', action='store_true',
                             help='Use safe workspace outside OneDrive/DrvFS (same as top-level flag)')
+    run_parser.add_argument('--files', nargs='+', metavar='PATH',
+                            help='Run on specific .md files (space-separated paths). '
+                                 'Bypasses content_roots discovery. Paths resolved to absolute.')
+    run_parser.add_argument('--audit-prose', action='store_true',
+                            help='Audit prose adjacent to updated code blocks when LLM review is available')
+
+    validate_articles_parser = subparsers.add_parser('validate-articles',
+                                                     help='Validate markdown article structure and optional prose/code alignment')
+    validate_articles_parser.add_argument('--family', '-f', type=str, required=True,
+                                          help='Family identifier')
+    validate_articles_parser.add_argument('--files', nargs='+', metavar='PATH',
+                                          help='Specific markdown files to validate. Paths resolved to absolute.')
+    validate_articles_parser.add_argument('--content-roots', nargs='+', metavar='PATH',
+                                          help='Override content_roots from family config (space-separated paths)')
+    validate_articles_parser.add_argument('--audit-prose', action='store_true',
+                                          help='Audit prose against adjacent code when LLM review is available')
+    validate_articles_parser.add_argument('--format', choices=['text', 'json'], default='text',
+                                          help='Output format (default: text)')
 
     # List families command
     list_parser = subparsers.add_parser('list-families',
@@ -983,6 +1003,7 @@ def main() -> int:
             family=args.family,
             dry_run=args.dry_run,
             allow_md_write=getattr(args, 'allow_md_write', False),
+            audit_prose=getattr(args, 'audit_prose', False),
         )
     
     elif args.command == 'final-review':
@@ -1045,6 +1066,15 @@ def main() -> int:
             except Exception as e:
                 print(f"[--section] WARNING: could not resolve section: {e}")
 
+        # Resolve --files into absolute paths
+        file_list = getattr(args, 'files', None)
+        if file_list:
+            import os as _os
+            file_list = [_os.path.abspath(f) for f in file_list]
+            missing = [f for f in file_list if not _os.path.exists(f)]
+            if missing:
+                print(f"[--files] WARNING: {len(missing)} file(s) not found: {missing}")
+
         result = tools.run_pipeline(
             family=args.family,
             max_examples=args.max_examples,
@@ -1056,6 +1086,26 @@ def main() -> int:
             allow_commit=getattr(args, 'commit', False),
             strategy_config=strategy_config,
             content_roots=content_roots,
+            file_list=file_list,
+            audit_prose=getattr(args, 'audit_prose', False),
+        )
+
+    elif args.command == 'validate-articles':
+        file_list = getattr(args, 'files', None)
+        if file_list:
+            import os as _os
+            file_list = [_os.path.abspath(f) for f in file_list]
+            missing = [f for f in file_list if not _os.path.exists(f)]
+            if missing:
+                print(f"[--files] WARNING: {len(missing)} file(s) not found: {missing}")
+        if getattr(args, 'format', 'text') == 'json':
+            args.json = True
+
+        result = tools.validate_articles(
+            family=args.family,
+            file_list=file_list,
+            content_roots=getattr(args, 'content_roots', None),
+            audit_prose=getattr(args, 'audit_prose', False),
         )
     
     elif args.command == 'list-families':

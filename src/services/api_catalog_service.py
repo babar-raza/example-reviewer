@@ -38,6 +38,8 @@ class APICatalogService:
         self._constructors: Dict[str, List[Dict]] = {}  # type_name -> [{params: ...}]
         self._key_methods: Dict[str, List[Dict]] = {}   # type_name -> [{name, params, returns, static}]
         self._properties: Dict[str, List[str]] = {}      # type_name -> [property_names]
+        self._hierarchy: Dict[str, Dict] = {}             # type_name -> {base_class, interfaces, is_abstract, is_sealed, kind}
+        self._type_groups: Dict[str, List[str]] = {}      # base_class -> [sibling type names]
         self._metadata: Dict = {}
         self._loaded = False
 
@@ -65,6 +67,8 @@ class APICatalogService:
             self._constructors = data.get("constructors", {})
             self._key_methods = data.get("key_methods", {})
             self._properties = data.get("properties", {})
+            self._hierarchy = data.get("hierarchy", {})
+            self._type_groups = data.get("type_groups", {})
             self._loaded = True
 
             enrichment_parts = []
@@ -76,6 +80,10 @@ class APICatalogService:
                 enrichment_parts.append(f"{len(self._key_methods)} key_methods")
             if self._properties:
                 enrichment_parts.append(f"{len(self._properties)} properties")
+            if self._hierarchy:
+                enrichment_parts.append(f"{len(self._hierarchy)} hierarchy")
+            if self._type_groups:
+                enrichment_parts.append(f"{len(self._type_groups)} type_groups")
             enrichment_str = f", {', '.join(enrichment_parts)}" if enrichment_parts else ""
 
             logger.info(
@@ -216,8 +224,80 @@ class APICatalogService:
         return None
 
     def has_enrichment(self) -> bool:
-        """Check whether the catalog includes enrichment data (enums, constructors, methods, properties)."""
-        return bool(self._enums or self._constructors or self._key_methods or self._properties)
+        """Check whether the catalog includes enrichment data (enums, constructors, methods, properties, hierarchy)."""
+        return bool(self._enums or self._constructors or self._key_methods or self._properties or self._hierarchy)
+
+    # --- Hierarchy query methods (T2b — catalog hierarchy enrichment) ---
+
+    def get_base_class(self, type_name: str) -> Optional[str]:
+        """Return the direct base class name for a type, or None if not known.
+
+        Only returns base classes that are within the same product namespace
+        (i.e. BCL types like System.Object are excluded).
+
+        Args:
+            type_name: Simple type name (e.g. "DeflateCompressionSettings")
+
+        Returns:
+            Base class name (e.g. "CompressionSettings") or None
+        """
+        info = self._hierarchy.get(type_name)
+        if info is None:
+            return None
+        return info.get("base_class")
+
+    def get_sibling_types(self, type_name: str) -> List[str]:
+        """Return all types that share the same direct base class as type_name.
+
+        Excludes type_name itself from the result.
+
+        Args:
+            type_name: Simple type name (e.g. "DeflateCompressionSettings")
+
+        Returns:
+            Sorted list of sibling type names, or [] if no hierarchy data / no siblings
+        """
+        base = self.get_base_class(type_name)
+        if not base:
+            return []
+        group = self._type_groups.get(base, [])
+        return sorted(t for t in group if t != type_name)
+
+    def get_type_group(self, type_name: str) -> List[str]:
+        """Return the full group of types sharing the same base class as type_name.
+
+        Includes type_name itself in the result.
+
+        Args:
+            type_name: Simple type name OR a base class name
+
+        Returns:
+            Sorted list of all types in the group (including type_name), or []
+        """
+        # Check if type_name is itself a base class key
+        if type_name in self._type_groups:
+            return sorted(self._type_groups[type_name])
+        # Otherwise look up via hierarchy
+        base = self.get_base_class(type_name)
+        if not base:
+            return [type_name] if type_name in self._types else []
+        return sorted(self._type_groups.get(base, [type_name]))
+
+    def get_type_kind(self, type_name: str) -> Optional[str]:
+        """Return the kind descriptor for a type.
+
+        Returns:
+            One of: "class", "abstract class", "sealed class", "static class",
+                    "interface", "struct", "enum", or None if not in catalog.
+        """
+        info = self._hierarchy.get(type_name)
+        if info is None:
+            return None
+        return info.get("kind")
+
+    def has_hierarchy(self) -> bool:
+        """Check whether the catalog includes type hierarchy data."""
+        return bool(self._hierarchy)
 
     def mine_using_patterns(self, family: str, db) -> Dict[str, List[str]]:
         """Extract {API_type: [required_usings]} from verified .cs examples.

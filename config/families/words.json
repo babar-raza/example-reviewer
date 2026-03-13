@@ -95,8 +95,7 @@
       "Blank.docx": [
         "empty.docx",
         "new.docx",
-        "template.docx",
-        "output.docx"
+        "template.docx"
       ],
       "Images": [
         "images",
@@ -174,7 +173,9 @@
     "default": "p@s$",
     "Encrypted.docx": "p@s$",
     "Encrypted.odt": "p@s$",
-    "Encrypted.ott": "p@s$"
+    "Encrypted.ott": "p@s$",
+    "certificate.pfx": "aw",
+    "morzal.pfx": "aw"
   },
   "api_catalog": {
     "enabled": true,
@@ -209,5 +210,15 @@
   "dependency_resolution": {
     "enabled": true,
     "confidence_threshold": 0.7
+  },
+  "final_review_overrides": {
+    "only_review_llm_fixed": false,
+    "enable_intent_review": true,
+    "intent_review_ignores_fix_type": true,
+    "enabled": true
+  },
+  "strategy_overrides": {
+    "enable_proactive_llm_audit": true,
+    "enable_prose_audit": true
   }
 }

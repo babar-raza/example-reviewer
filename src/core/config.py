@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field, ConfigDict
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
+from .path_roles import sanitize_file_aliases
+
 logger = logging.getLogger(__name__)
 
 
@@ -480,7 +482,13 @@ class FinalReviewConfig(BaseModel):
     confidence_threshold: float = Field(default=0.85, ge=0.0, le=1.0, description="Confidence threshold for intent drift rejection")
     auto_remediation_enabled: bool = Field(
         default=False,
-        description="Enable automatic remediation of review issues (future feature)"
+        description="Enable automatic remediation of Phase E review issues via LLM semantic fix"
+    )
+    max_remediation_attempts: int = Field(
+        default=1,
+        ge=1,
+        le=3,
+        description="Maximum LLM semantic fix attempts per file when auto_remediation_enabled=True"
     )
     max_review_attempts: int = Field(
         default=2,
@@ -885,6 +893,27 @@ class FamilyConfig(BaseModel):
     # Pipeline overrides (per-family compile/runtime retry tuning)
     pipeline_overrides: Optional[PipelineOverrides] = None
 
+    # Encrypted fixture passwords: filename → password (str) or {index → password} (dict)
+    fixture_passwords: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Filename to password mapping for encrypted test fixtures. Value is str (single password) or dict (multiple passwords by index)."
+    )
+
+    # Per-family strategy overrides (merged into strategy_config before Phase B)
+    # Supported keys: enable_proactive_llm_audit, enable_prose_audit, and any
+    # standard strategy_config boolean keys.
+    strategy_overrides: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-family overrides for strategy_config keys (e.g. enable_proactive_llm_audit)."
+    )
+
+    # Per-family final_review overrides (applied on top of global FinalReviewConfig)
+    # Keys must match FinalReviewConfig field names.
+    final_review_overrides: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-family overrides for FinalReviewConfig fields (e.g. only_review_llm_fixed, enable_intent_review)."
+    )
+
     def get_nuget_package_name(self) -> str:
         """Get primary NuGet package name."""
         if self.nuget_config:
@@ -1098,6 +1127,13 @@ class ConfigurationManager:
             ]
 
         config = self._parse_family_config(data, family)
+        sanitized_aliases, alias_warnings = sanitize_file_aliases(
+            config.runtime_validation.file_aliases
+        )
+        if sanitized_aliases != config.runtime_validation.file_aliases:
+            config.runtime_validation.file_aliases = sanitized_aliases
+        for warning in alias_warnings:
+            logger.warning("Family config %s: %s", family, warning)
         self._family_configs[family] = config
         return config
     
@@ -1106,9 +1142,9 @@ class ConfigurationManager:
         parsed = {'family': family}
         
         # Simple fields
-        for key in ['display_name', 'auto_commit', 'commit_message_template', 
+        for key in ['display_name', 'auto_commit', 'commit_message_template',
                     'content_roots', 'content_pattern',
-                    'api_patterns']:
+                    'api_patterns', 'fixture_passwords']:
             if key in data:
                 parsed[key] = data[key]
         
@@ -1175,6 +1211,14 @@ class ConfigurationManager:
         # Pipeline overrides (per-family compile/runtime retry tuning)
         if 'pipeline_overrides' in data:
             parsed['pipeline_overrides'] = PipelineOverrides(**data['pipeline_overrides'])
+
+        # Per-family strategy overrides (Gap 3 / Workstream B)
+        if 'strategy_overrides' in data:
+            parsed['strategy_overrides'] = data['strategy_overrides']
+
+        # Per-family final_review overrides (Gap 2 / Workstream B)
+        if 'final_review_overrides' in data:
+            parsed['final_review_overrides'] = data['final_review_overrides']
 
         return FamilyConfig(**parsed)
     

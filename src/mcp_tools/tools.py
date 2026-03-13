@@ -366,6 +366,7 @@ class ExampleReviewerTools:
         family: str,
         dry_run: bool = False,
         allow_md_write: bool = False,
+        audit_prose: bool = False,
     ) -> ToolResult:
         """
         Update markdown files with verified code.
@@ -399,7 +400,7 @@ class ExampleReviewerTools:
             run_id = row[0]
 
             stats = self.orchestrator._run_markdown_update_phase(
-                run_id, family, dry_run, allow_md_write=allow_md_write
+                run_id, family, dry_run, allow_md_write=allow_md_write, audit_prose=audit_prose
             )
             return ToolResult(success=True, data=stats)
 
@@ -669,6 +670,8 @@ class ExampleReviewerTools:
         allow_commit: bool = False,
         strategy_config: Optional[dict] = None,
         content_roots: Optional[List[str]] = None,
+        file_list: Optional[List[str]] = None,
+        audit_prose: bool = False,
     ) -> ToolResult:
         """
         Run the full pipeline for a family.
@@ -685,6 +688,8 @@ class ExampleReviewerTools:
             strategy_config: Dict controlling which fix strategies to enable
             content_roots: Override content_roots from family config. Paths to
                 directories containing markdown files with code examples.
+            file_list: Run on specific .md files (absolute paths). When provided,
+                bypasses content_roots discovery entirely.
 
         Returns:
             ToolResult with full pipeline results
@@ -701,10 +706,49 @@ class ExampleReviewerTools:
                 allow_commit=allow_commit,
                 strategy_config=strategy_config,
                 content_roots=content_roots,
+                file_list=file_list,
+                audit_prose=audit_prose,
             )
 
             return ToolResult(success=results['success'], data=results)
 
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    def validate_articles(
+        self,
+        family: str,
+        file_list: Optional[List[str]] = None,
+        content_roots: Optional[List[str]] = None,
+        audit_prose: bool = False,
+    ) -> ToolResult:
+        """Run deterministic article validation outside the full pipeline."""
+        try:
+            family_config = self.orchestrator.config_manager.load_family_config(family)
+            if content_roots:
+                family_config = family_config.model_copy(update={"content_roots": content_roots})
+
+            target_files = [str(Path(path).resolve()) for path in (file_list or [])]
+            if not target_files:
+                target_files = self.orchestrator.discovery_service._find_markdown_files(family_config)
+
+            llm_service = None
+            if audit_prose:
+                llm_service = self.orchestrator.llm_service if self.orchestrator.llm_service.is_available() else None
+
+            result = self.orchestrator.article_validator.validate_files(
+                target_files,
+                audit_prose=audit_prose,
+                llm_service=llm_service,
+            )
+            return ToolResult(
+                success=True,
+                data={
+                    "family": family,
+                    "audit_prose": audit_prose,
+                    **result,
+                },
+            )
         except Exception as e:
             return ToolResult(success=False, error=str(e))
 
@@ -996,6 +1040,7 @@ TOOL_DEFINITIONS = [
                 "family": {"type": "string", "description": "Product family identifier"},
                 "dry_run": {"type": "boolean", "description": "Don't write changes", "default": False},
                 "allow_md_write": {"type": "boolean", "description": "Override global config to allow markdown writes", "default": False},
+                "audit_prose": {"type": "boolean", "description": "Audit and correct adjacent prose when LLM review is available", "default": False},
             },
             "required": ["family"],
         },
@@ -1068,6 +1113,42 @@ TOOL_DEFINITIONS = [
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Override content_roots from the family config. Paths to directories containing markdown files with code examples.",
+                },
+                "file_list": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Run on specific .md files (absolute paths). When provided, bypasses content_roots discovery entirely.",
+                },
+                "audit_prose": {
+                    "type": "boolean",
+                    "description": "Audit prose adjacent to code blocks using the LLM reviewer when available.",
+                    "default": False,
+                },
+            },
+            "required": ["family"],
+        },
+    },
+    {
+        "name": "validate_articles",
+        "description": "Validate markdown article structure, duplicate content, and optional prose/code alignment for a family.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "family": {"type": "string", "description": "Product family identifier"},
+                "file_list": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific markdown files to validate. Defaults to the family's discovered content roots.",
+                },
+                "content_roots": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional content root override when file_list is omitted.",
+                },
+                "audit_prose": {
+                    "type": "boolean",
+                    "description": "Audit prose against adjacent code using the LLM reviewer when available.",
+                    "default": False,
                 },
             },
             "required": ["family"],

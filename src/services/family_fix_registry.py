@@ -75,6 +75,71 @@ def apply_family_runtime_fixes(
     return None
 
 
+# Behavioral fix registry: family name -> list of proactive fix callables
+# Signature: def fix_fn(code: str) -> Optional[Tuple[str, str]]
+_BEHAVIORAL_FIX_REGISTRY: Dict[str, List[Callable]] = {}
+
+
+def register_behavioral_fix(family: str, fix_fn: Callable) -> None:
+    """Register a family-specific behavioral (proactive) fix function.
+
+    Unlike runtime fixes, behavioral fixes receive only the code (no error_text)
+    and are called after the behavioral scanner detects a blocking pattern.
+    """
+    if family not in _BEHAVIORAL_FIX_REGISTRY:
+        _BEHAVIORAL_FIX_REGISTRY[family] = []
+    _BEHAVIORAL_FIX_REGISTRY[family].append(fix_fn)
+    logger.debug(f"Registered behavioral fix '{fix_fn.__name__}' for family '{family}'")
+
+
+def apply_family_behavioral_fixes(family: str, code: str) -> Optional[Tuple[str, str]]:
+    """Apply family-specific behavioral fixes to code.
+
+    Tries each registered behavioral fix in order. Returns (fixed_code, description)
+    from the first fix that applies, or None if no fix applies.
+    """
+    _ensure_family_loaded(family)
+    fixes = _BEHAVIORAL_FIX_REGISTRY.get(family, [])
+    for fix_fn in fixes:
+        try:
+            result = fix_fn(code)
+            if result is not None:
+                fixed_code, desc = result
+                logger.info(f"Family behavioral fix applied [{family}]: {desc}")
+                return fixed_code, desc
+        except Exception as e:
+            logger.warning(f"Family behavioral fix '{fix_fn.__name__}' failed: {e}")
+    return None
+
+
+# Harness registry: family name -> callable(body, extra_usings, data_dir) -> str
+_HARNESS_REGISTRY: Dict[str, Callable] = {}
+
+
+def register_synthesis_harness(family: str, harness_fn: Callable) -> None:
+    """Register a family-specific synthesis harness function."""
+    _HARNESS_REGISTRY[family] = harness_fn
+    logger.debug(f"Registered synthesis harness for family '{family}'")
+
+
+def get_synthesis_harness(family: str, body: str, extra_usings: str = "", data_dir: str = ".") -> Optional[str]:
+    """
+    Return a testable harness wrapping extracted product API calls.
+
+    Dispatches to the family-specific harness function if registered.
+    Returns None if no harness is registered for the family.
+    """
+    _ensure_family_loaded(family)
+    fn = _HARNESS_REGISTRY.get(family)
+    if fn is None:
+        return None
+    try:
+        return fn(body=body, extra_usings=extra_usings, data_dir=data_dir)
+    except Exception as e:
+        logger.warning(f"Synthesis harness for '{family}' raised: {e}")
+        return None
+
+
 # Lazy family module loader
 _LOADED_FAMILIES: set = set()
 

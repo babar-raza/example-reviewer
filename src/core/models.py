@@ -47,6 +47,7 @@ class SourceType(str, Enum):
     INLINE = "inline"
     GIST = "gist"
     CS_FILE = "cs_file"
+    EXTRACTED_FROM_WRAPPER = "extracted_from_wrapper"
 
 
 class EditType(str, Enum):

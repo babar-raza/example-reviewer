@@ -1,0 +1,37 @@
+[
+  {
+    "id": "words-01",
+    "pattern": "WriteProtection",
+    "context": "encrypt",
+    "issue_type": "semantic_misuse",
+    "hint": "WriteProtection.SetPassword only restricts editing, it does NOT encrypt the file. The document remains fully readable without a password. For true encryption use OoxmlSaveOptions { Password = \"...\" } or DocSaveOptions { Password = \"...\" } passed to doc.Save()."
+  },
+  {
+    "id": "words-02",
+    "pattern": "MailMerge.Execute",
+    "context": "{{",
+    "issue_type": "missing_required_property",
+    "hint": "Mustache-style {{field}} placeholders require doc.MailMerge.UseNonMergeFields = true; set this immediately before the Execute() or ExecuteWithRegions() call, otherwise the placeholders are treated as plain text and no substitution occurs."
+  },
+  {
+    "id": "words-03",
+    "pattern": "ShapeType.TextPlainText",
+    "context": "watermark",
+    "issue_type": "outdated_api",
+    "hint": "Building a watermark by manually constructing a Shape with ShapeType.TextPlainText is the pre-19.2 approach. Use the dedicated Watermark class: doc.Watermark.SetText(text, new TextWatermarkOptions { FontFamily = \"Arial\", FontSize = 40, Color = Color.LightGray, Layout = WatermarkLayout.Diagonal })."
+  },
+  {
+    "id": "words-04",
+    "pattern": "File.WriteAllBytes",
+    "context": "memory",
+    "issue_type": "semantic_misuse",
+    "hint": "Saving to a MemoryStream and then calling File.WriteAllBytes buffers the entire document in RAM. For large documents use a FileStream directly: new FileStream(path, FileMode.Create) and pass it to doc.Save(stream, format)."
+  },
+  {
+    "id": "words-05",
+    "pattern": "LoadFormat",
+    "context": "memory",
+    "issue_type": "missing_required_property",
+    "hint": "Setting LoadOptions.LoadFormat alone has no effect on memory usage. To reduce peak memory when loading large documents add MemoryOptimization = true to the LoadOptions initializer: new LoadOptions { LoadFormat = ..., MemoryOptimization = true }."
+  }
+]

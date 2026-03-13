@@ -14,13 +14,14 @@ from typing import Optional, List, Dict, Any, Tuple
 from ..core.models import ExampleRecord, ExampleStatus, MarkdownEdit, SourceType
 from ..core.database import Database
 from ..core.path_guard import assert_write_allowed, READ_ONLY_PREFIXES, is_read_only_path, get_workspace_path
+from .article_validator import ArticleValidator
 from ..core.provenance_guard import (
     validate_batch_provenance,
     check_provenance_enabled,
     generate_provenance_report,
     ProvenanceViolationError,
 )
-from ..utils.markdown_parser import parse_fenced_blocks, compute_code_signature, find_block_by_signature
+from ..utils.markdown_parser import parse_fenced_blocks, compute_code_signature, find_block_by_signature, find_block_by_signature_fuzzy
 
 # Import GistPublisher - optional dependency
 try:
@@ -101,6 +102,8 @@ class MarkdownUpdateService:
         run_id: Optional[str] = None,
         unsafe_first_block: bool = False,
         gist_readme_service: Optional[Any] = None,
+        llm_service: Optional[Any] = None,
+        audit_prose: bool = False,
     ):
         """
         Initialize markdown update service.
@@ -130,6 +133,9 @@ class MarkdownUpdateService:
         self.run_id = run_id or "default"
         self.unsafe_first_block = unsafe_first_block
         self.gist_readme_service = gist_readme_service
+        self.llm_service = llm_service
+        self.audit_prose = audit_prose
+        self.article_validator = ArticleValidator()
 
     def _get_write_target_path(self, file_path: str) -> str:
         """
@@ -277,9 +283,17 @@ class MarkdownUpdateService:
             if result:
                 updated_content, change_info = result
                 changes.append(change_info)
-        
+
         if not changes:
             return True, []
+
+        updated_content, prose_changes = self._audit_and_update_adjacent_prose(
+            content=updated_content,
+            file_path=file_path,
+            file_examples=verified_examples,
+            code_changes=changes,
+        )
+        changes.extend(prose_changes)
         
         # Generate and store diff
         diff = self._generate_diff(original_content, updated_content, file_path)
@@ -327,6 +341,86 @@ class MarkdownUpdateService:
                 return False, changes
         
         return True, changes
+
+    def _audit_and_update_adjacent_prose(
+        self,
+        *,
+        content: str,
+        file_path: str,
+        file_examples: List[ExampleRecord],
+        code_changes: List[Dict[str, Any]],
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        """Audit prose adjacent to changed blocks and apply safe replacements when justified."""
+        if not self.audit_prose or self.llm_service is None:
+            return content, []
+
+        changed_block_indexes = {
+            change.get("block_index")
+            for change in code_changes
+            if change.get("type") == "inline_replace" and isinstance(change.get("block_index"), int)
+        }
+        if not changed_block_indexes:
+            return content, []
+
+        example_by_block = {
+            example.location.block_index: example
+            for example in file_examples
+            if example.location is not None
+        }
+        sections = self.article_validator.extract_adjacent_prose_sections(content)
+        target_sections = [
+            section for section in sections
+            if section["block_index"] in changed_block_indexes
+        ]
+        if not target_sections:
+            return content, []
+
+        lines = content.split("\n")
+        prose_changes: List[Dict[str, Any]] = []
+
+        for section in sorted(target_sections, key=lambda item: item["prose_span"][0], reverse=True):
+            prose_text = section.get("prose_text", "").strip()
+            if not prose_text:
+                continue
+
+            example = example_by_block.get(section["block_index"])
+            try:
+                review = self.llm_service.review_prose_against_code(
+                    prose_text=section["prose_text"],
+                    code_text=section["code"],
+                    article_intent=example.article_intent if example else "",
+                    section_heading=section.get("section_heading") or "",
+                )
+            except Exception as exc:
+                logger.warning("Prose audit failed for %s block %s: %s", file_path, section["block_index"], exc)
+                continue
+
+            corrected_prose = (review.get("corrected_prose") or "").strip()
+            if review.get("accurate", True) or not corrected_prose:
+                continue
+            if corrected_prose == prose_text:
+                continue
+
+            start_line, end_line = section["prose_span"]
+            start_idx = max(0, start_line - 1)
+            end_idx = max(start_idx, end_line)
+            replacement_lines = corrected_prose.splitlines()
+            lines[start_idx:end_idx] = replacement_lines
+            prose_changes.append(
+                {
+                    "type": "prose_replace",
+                    "block_index": section["block_index"],
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "section_heading": section.get("section_heading"),
+                }
+            )
+
+        if not prose_changes:
+            return content, []
+
+        logger.info("Updated %s prose section(s) adjacent to changed code in %s", len(prose_changes), file_path)
+        return "\n".join(lines), prose_changes
     
     def resolve_target_block(
         self,
@@ -378,6 +472,28 @@ class MarkdownUpdateService:
         signature_matches = find_block_by_signature(blocks, target_signature)
 
         if len(signature_matches) == 0:
+            # SHA256 miss — attempt fuzzy fallback (normalized first-5-lines comparison)
+            original_code = example.original_code or ""
+            if original_code:
+                fuzzy_matches = find_block_by_signature_fuzzy(blocks, original_code)
+                if len(fuzzy_matches) == 1:
+                    fuzzy_block = fuzzy_matches[0]
+                    logger.warning(
+                        f"FUZZY-MATCH: Exact signature not found for {example.example_id}; "
+                        f"using fuzzy head-line match at block {fuzzy_block['block_index']}. "
+                        f"Signature may be stale — consider re-running from a fresh workspace."
+                    )
+                    return BlockResolutionResult(
+                        block=fuzzy_block,
+                        used_fallback=True,
+                        updated_index=fuzzy_block['block_index'],
+                    )
+                elif len(fuzzy_matches) > 1:
+                    match_indices = [b['block_index'] for b in fuzzy_matches]
+                    return BlockResolutionResult(
+                        block=None,
+                        skip_reason=f"md_update_fuzzy_ambiguous: {len(fuzzy_matches)} blocks match first-5-lines at indices {match_indices}",
+                    )
             # No match found - file may have changed
             return BlockResolutionResult(
                 block=None,
@@ -916,6 +1032,7 @@ class MarkdownUpdateService:
             'files_processed': 0,
             'files_updated': 0,
             'examples_updated': 0,
+            'prose_sections_updated': 0,
             'errors': 0,
         }
         
@@ -933,11 +1050,12 @@ class MarkdownUpdateService:
             stats['files_processed'] += 1
             
             success, changes = self.update_markdown_file(file_path, dry_run)
-            
+
             if success and changes:
                 stats['files_updated'] += 1
-                stats['examples_updated'] += len(changes)
+                stats['examples_updated'] += sum(1 for change in changes if change.get('type') != 'prose_replace')
+                stats['prose_sections_updated'] += sum(1 for change in changes if change.get('type') == 'prose_replace')
             elif not success:
                 stats['errors'] += 1
-        
+
         return stats

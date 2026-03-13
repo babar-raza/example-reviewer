@@ -89,7 +89,7 @@ with `content` and `isError`.
 
 ## Tool Surface
 
-The server currently exposes 13 tools:
+The server currently exposes 14 tools:
 
 1. `scan`
 2. `extract`
@@ -103,7 +103,8 @@ The server currently exposes 13 tools:
 10. `backfill`
 11. `status`
 12. `run_pipeline`
-13. `validate_code_snippet`
+13. `validate_articles`
+14. `validate_code_snippet`
 
 ## Key Parameters
 
@@ -127,6 +128,35 @@ Example:
   }
 }
 ```
+
+### `validate_articles`
+
+`validate_articles` performs deterministic markdown checks without running the
+full compile/runtime pipeline:
+
+- fence and structure validation
+- duplicate code overlap detection
+- prose/code alignment audit when `audit_prose=true` and an LLM reviewer is available
+
+Example:
+
+```json
+{
+  "name": "validate_articles",
+  "arguments": {
+    "family": "words",
+    "file_list": [
+      "D:/onedrive/Documents/GitHub/aspose.net/content/kb.aspose.net/words/en/how-to-add-watermarks-word-documents-aspnet-api.md"
+    ],
+    "audit_prose": true
+  }
+}
+```
+
+### `run_pipeline`
+
+`run_pipeline` now also accepts `audit_prose=true` to pass the same prose/code
+alignment audit into the markdown update phase for changed code blocks.
 
 ### `validate_code_snippet`
 

@@ -14,6 +14,7 @@ from glob import glob
 import fnmatch
 
 from ..core.models import ExampleRecord, ExampleStatus, SourceType, Location, GistInfo
+from ..services.family_fix_registry import get_synthesis_harness as _get_synthesis_harness
 from ..core.database import Database
 from ..core.config import FamilyConfig, DiscoveryPatternsConfig, GlobalConfig
 from ..pipeline.app_context_classifier import classify_app_context
@@ -713,7 +714,7 @@ class DiscoveryService:
             return None
 
         try:
-            catalog_types = set(catalog.get_all_type_names() if hasattr(catalog, 'get_all_type_names') else [])
+            catalog_types = set(catalog.get_all_types() if hasattr(catalog, 'get_all_types') else [])
             if not catalog_types:
                 return None
         except Exception:
@@ -865,6 +866,7 @@ class DiscoveryService:
         max_pages: Optional[int] = None,
         max_examples: Optional[int] = None,
         run_id: Optional[str] = None,
+        file_list: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Discover code examples for a family, up to max_examples limit.
@@ -879,6 +881,8 @@ class DiscoveryService:
             max_pages: Alias for max_files (legacy compatibility)
             max_examples: Maximum examples to discover (stops when reached)
             run_id: Run identifier for run-scoped tracking
+            file_list: Specific .md files to process (absolute paths). When provided,
+                bypasses content_roots discovery and file_exclude_patterns filtering.
 
         Returns:
             Statistics dictionary with examples_found, files_processed, etc.
@@ -914,7 +918,11 @@ class DiscoveryService:
         self.compiled_gist_script_patterns = self._compile_gist_script_patterns()
 
         # Get files to process
-        files = self._find_markdown_files(family_config)
+        if file_list:
+            files = [str(f) for f in file_list]
+            logger.info(f"[--files] Using {len(files)} explicitly specified file(s) (bypassing content_roots discovery)")
+        else:
+            files = self._find_markdown_files(family_config)
         stats['files_found'] = len(files)
         
         if max_files:
@@ -1441,6 +1449,17 @@ class DiscoveryService:
         # Extract topic once for the file
         topic = self._extract_topic_from_path(file_path)
 
+        # Lazy-load catalog for product-call extraction (foreign_framework snippets only).
+        # Guarded: catalog file may be absent; extraction gracefully degrades to disabled.
+        _extraction_catalog = None
+        try:
+            from .api_catalog_service import APICatalogService
+            _extraction_catalog = APICatalogService(family)
+            if not _extraction_catalog.is_loaded:
+                _extraction_catalog = None
+        except Exception:
+            pass
+
         # CANONICAL PARSING: Use shared parser to ensure consistent block_index
         # This parser counts ALL fenced blocks (not just validatable languages)
         all_blocks = parse_fenced_blocks(content)
@@ -1490,14 +1509,42 @@ class DiscoveryService:
                 )
                 # Track in filter stats for reporting
                 self._track_filter_reason(filter_reason)
-                # TODO (Task 4 -- Product Logic Extraction): Call _extract_product_calls() here
-                # to extract product API calls from framework-wrapper snippets before discarding.
-                # Only attempt if catalog is available and snippet was filtered for foreign_framework reason.
-                # Example:
-                #   if 'foreign_framework' in filter_reason and self._catalog:
-                #       extracted = self._extract_product_calls(code_content, self._catalog)
-                #       if extracted:
-                #           ... synthesize harness and add to examples
+                # Product-logic extraction: attempt to salvage catalog API calls from wrappers.
+                # P1: detection uses catalog type names only. P2: harness is family-specific via registry.
+                if 'foreign_framework' in filter_reason and _extraction_catalog:
+                    extracted = self._extract_product_calls(code_content, _extraction_catalog)
+                    if extracted:
+                        harness = _get_synthesis_harness(family, body=extracted)
+                        if harness:
+                            wrapper_example = ExampleRecord(
+                                family=family,
+                                file_path=file_path,
+                                source_type=SourceType.EXTRACTED_FROM_WRAPPER,
+                                language='csharp',
+                                location=Location(
+                                    block_index=block_index,
+                                    start_line=code_start_line,
+                                    end_line=code_end_line,
+                                ),
+                                original_code=harness,
+                                status=ExampleStatus.DISCOVERED,
+                                section_heading=None,
+                                description_context=None,
+                                topic=topic or None,
+                                article_intent=article_intent or None,
+                                app_context='console',
+                                extraction_warning='synthesized_from_framework_wrapper',
+                            )
+                            examples.append(wrapper_example)
+                            logger.info(
+                                f"Extracted product API calls from framework wrapper: "
+                                f"{file_path}:{code_start_line} ({len(extracted.splitlines())} lines)"
+                            )
+                    else:
+                        logger.warning(
+                            f"Zero product API calls in framework wrapper "
+                            f"(no catalog types found): {file_path}:{code_start_line}"
+                        )
                 # Skip this block (but block_index already accounted for in all_blocks)
                 continue
 

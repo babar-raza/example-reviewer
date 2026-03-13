@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from ..core.models import ExampleRecord, ExampleStatus, RuntimeAttempt
 from ..core.database import Database
 from ..core.config import FamilyConfig, RuntimeValidationConfig
+from ..core.path_roles import PathRole, classify_path_role, is_safe_path_alias
 
 if TYPE_CHECKING:
     from ..pipeline.family_service_registry import FamilyServiceRegistry
@@ -103,7 +104,7 @@ class RuntimeService:
         source_dir: Path,
         file_aliases: Dict[str, List[str]],
         inventory: Optional[Dict[str, str]] = None,
-        extension_fallbacks: Optional[Dict[str, str]] = None
+        extension_fallbacks: Optional[Dict[str, str]] = None,
     ) -> Optional[Path]:
         """
         Find a test file recursively in source_dir.
@@ -127,6 +128,8 @@ class RuntimeService:
         """
         if not source_dir.exists():
             return None
+        if classify_path_role(required_name) == PathRole.OUTPUT:
+            return None
 
         # Tier 1: Exact match (recursive)
         for candidate in source_dir.rglob(required_name):
@@ -136,6 +139,8 @@ class RuntimeService:
         # Tier 2: Alias lookup (recursive)
         aliases = file_aliases.get(required_name, [])
         for alias in aliases:
+            if not is_safe_path_alias(required_name, alias):
+                continue
             for candidate in source_dir.rglob(alias):
                 if candidate.is_file():
                     return candidate
@@ -414,6 +419,8 @@ class RuntimeService:
                 # Create alias copies (so code using aliases also works)
                 aliases = file_aliases.get(required_file, [])
                 for alias in aliases:
+                    if not is_safe_path_alias(required_file, alias):
+                        continue
                     alias_dst = work_dir / alias
                     if not alias_dst.exists():
                         shutil.copy2(source_found, alias_dst)

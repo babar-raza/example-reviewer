@@ -61,6 +61,7 @@ class MCPServer:
             "backfill": self.tools.backfill,
             "status": self.tools.status,
             "run_pipeline": self.tools.run_pipeline,
+            "validate_articles": self.tools.validate_articles,
             "validate_code_snippet": self.tools.validate_code_snippet,
         }
     
