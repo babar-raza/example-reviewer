@@ -1,0 +1,58 @@
+[
+  {
+    "id": "words_write_protection_not_encryption",
+    "issue_type": "api_mismatch",
+    "severity": "error",
+    "code_regex": "\\bWriteProtection\\.SetPassword\\s*\\(",
+    "intent_keywords": ["encrypt", "encryption", "password required to open", "open password"],
+    "description": "WriteProtection restricts editing but does not encrypt the document for open-time password protection.",
+    "suggestion": "Use OoxmlSaveOptions.Password or DocSaveOptions.Password when the article claims encryption."
+  },
+  {
+    "id": "words_mailmerge_use_non_merge_fields",
+    "issue_type": "intent_mismatch",
+    "severity": "error",
+    "code_regex": "\\.MailMerge\\.Execute\\s*\\(",
+    "missing_regex": "UseNonMergeFields\\s*=\\s*true",
+    "context_keywords": ["{{", "mustache", "non merge", "mail merge"],
+    "description": "MailMerge.Execute is used in a mustache/non-merge-fields context without MailMerge.UseNonMergeFields = true.",
+    "suggestion": "Set doc.MailMerge.UseNonMergeFields = true before Execute()."
+  },
+  {
+    "id": "words_shape_watermark_outdated",
+    "issue_type": "outdated_api",
+    "severity": "warning",
+    "code_regex": "new\\s+Shape\\s*\\([^\\n]*ShapeType\\.TextPlainText",
+    "context_keywords": ["watermark", "watermarks"],
+    "description": "Manual Shape-based watermarking is used where Document.Watermark.SetText or SetImage is the dedicated API.",
+    "suggestion": "Prefer doc.Watermark.SetText(...) or doc.Watermark.SetImage(...)."
+  },
+  {
+    "id": "words_pdf_signature_mismatch",
+    "issue_type": "outdated_api",
+    "severity": "error",
+    "code_regex": "DigitalSignatureUtil\\.Sign\\s*\\(",
+    "context_keywords": ["pdf"],
+    "description": "Signing the DOCX package does not carry that PKCS#7 signature into a later PDF save. The resulting PDF will not have a digital signature.",
+    "suggestion": "Use PdfSaveOptions.DigitalSignatureDetails to embed a digital signature directly into the PDF: set options.DigitalSignatureDetails = new PdfDigitalSignatureDetails(CertificateHolder.Create(...), reason, location, DateTime.Now) and call doc.Save(path, options)."
+  },
+  {
+    "id": "words_blank_page_extract_approach",
+    "issue_type": "outdated_api",
+    "severity": "error",
+    "code_regex": "\\.ExtractPages\\s*\\(",
+    "context_keywords": ["blank", "blank page", "empty page", "remove page", "delete page"],
+    "description": "Removing blank pages via ExtractPages() plus page-range reconstruction is fragile and verbose. Aspose.Words provides a built-in dedicated method.",
+    "suggestion": "Use the built-in doc.RemoveBlankPages() method: load the document, call doc.RemoveBlankPages(), then save. This is the recommended single-call approach."
+  },
+  {
+    "id": "words_memory_optimization_missing",
+    "issue_type": "intent_mismatch",
+    "severity": "error",
+    "code_regex": "new LoadOptions\\s*\\(\\s*\\)",
+    "missing_regex": "MemoryOptimization\\s*=\\s*true",
+    "context_keywords": ["memory", "large", "optimize", "performance", "large document"],
+    "description": "Article context is about memory optimization for large documents, but LoadOptions.MemoryOptimization is not set. The explanation will be incorrect.",
+    "suggestion": "Add loadOptions.MemoryOptimization = true; before passing LoadOptions to the Document constructor. Also consider demonstrating LoadOptions.TempFolder and SaveOptions.TempFolder for documents that are too large to process in RAM."
+  }
+]

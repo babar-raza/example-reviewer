@@ -33,5 +33,37 @@
     "context": "memory",
     "issue_type": "missing_required_property",
     "hint": "Setting LoadOptions.LoadFormat alone has no effect on memory usage. To reduce peak memory when loading large documents add MemoryOptimization = true to the LoadOptions initializer: new LoadOptions { LoadFormat = ..., MemoryOptimization = true }."
+  },
+  {
+    "id": "words-06",
+    "pattern": "PageCount",
+    "context": "blank page",
+    "issue_type": "approach_quality",
+    "hint": "Removing blank pages by counting pages or iterating rendered output is error-prone. The reliable approach targets structural DOM causes: remove empty paragraphs, explicit page-break runs (ControlChar.PageBreakChar), and unnecessary section breaks directly via the document model."
+  },
+  {
+    "id": "words-07",
+    "pattern": ".Sections",
+    "context": "memory",
+    "issue_type": "semantic_misuse",
+    "hint": "Processing a document section-by-section or page-by-page does NOT reduce peak memory footprint. The entire DOM is loaded on Document construction regardless of iteration strategy. Only LoadOptions.MemoryOptimization = true reduces load-time memory."
+  },
+  {
+    "id": "words-08",
+    "pattern": "DigitalSignatureUtil.Sign",
+    "context": "pdf",
+    "issue_type": "outdated_api",
+    "hint": "DigitalSignatureUtil.Sign() creates a PKCS#7 signature on a DOCX package; it does NOT produce a cryptographically signed PDF when the file is later saved as PDF. Use PdfSaveOptions.DigitalSignatureDetails with a CertificateHolder to embed a digital signature directly in the PDF output.",
+    "detection_keywords": ["DigitalSignatureUtil", "Sign"],
+    "correction": "Replace the PDF save step with: var pdfOptions = new PdfSaveOptions { DigitalSignatureDetails = new PdfDigitalSignatureDetails(CertificateHolder.Create(\"certificate.pfx\", \"password\"), \"Signing Reason\", \"Location\", DateTime.Now) }; doc.Save(\"SignedDocument.pdf\", pdfOptions);"
+  },
+  {
+    "id": "words-09",
+    "pattern": ".ExtractPages(",
+    "context": "blank",
+    "issue_type": "outdated_api",
+    "hint": "Removing blank pages by iterating rendered page ranges with ExtractPages() is fragile and memory-heavy. Remove blank pages by walking the DOM: delete Paragraph nodes that are empty or contain only ControlChar.PageBreakChar, and remove empty Section nodes.",
+    "detection_keywords": [".ExtractPages(", "ExtractPages"],
+    "correction": "Replace with DOM traversal: var paragraphs = doc.GetChildNodes(NodeType.Paragraph, true).OfType<Paragraph>().ToList(); foreach (var para in paragraphs) { if (string.IsNullOrWhiteSpace(para.GetText().Replace(ControlChar.PageBreakChar.ToString(), string.Empty))) para.Remove(); }"
   }
 ]
