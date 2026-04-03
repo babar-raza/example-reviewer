@@ -2032,6 +2032,7 @@ Return the C# code now:"""
         family: str = None,
         article_intent: Optional[str] = None,
         review_context: Optional[str] = None,
+        content_type: str = "",
     ) -> Dict[str, Any]:
         """
         Review markdown with GUARANTEED structured output using Instructor.
@@ -2181,6 +2182,7 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
             code_snippets=code_snippets,
             article_intent=article_intent or "",
             markdown_content=markdown_content,
+            content_type=content_type,
         )
         if family_review_hints:
             prompt_parts.append("## Family Review Hints:")
@@ -2429,6 +2431,7 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
             code_snippets=code_snippets,
             article_intent=article_intent or "",
             markdown_content=markdown_content,
+            content_type=content_type,
         )
         if family_review_hints:
             prompt_parts.append("")
@@ -2554,6 +2557,7 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
         code_snippets: List[Dict[str, Any]],
         article_intent: str,
         markdown_content: str,
+        content_type: str = "",
     ) -> str:
         if not family:
             return ""
@@ -2578,11 +2582,23 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
             context_key = hint.get("context", "").lower()
             if context_key and context_key not in context_blob:
                 continue
+            allowed_types = hint.get("content_types")
+            if allowed_types and content_type and content_type not in allowed_types:
+                continue
             issue_type = hint.get("issue_type")
             prefix = f"[{issue_type}] " if issue_type else ""
             selected.append(f"- {prefix}{hint.get('hint', '').strip()}")
 
-        return "\n".join(selected[:8])
+        if not selected:
+            return ""
+        header = "## Known-Wrong Patterns — Flag These Regardless of Article Intent:"
+        preamble = (
+            "IMPORTANT: The following are documented API misuses and false claims for this "
+            "product family. If code matches any pattern below, flag it as an issue EVEN IF "
+            "the article's stated intent or prose appears to justify the approach. "
+            "The article itself may be wrong; these constraints take precedence over article intent."
+        )
+        return header + "\n" + preamble + "\n" + "\n".join(selected[:8])
 
     def review_prose_against_code(
         self,
@@ -2591,6 +2607,7 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
         code_text: str,
         article_intent: str = "",
         section_heading: str = "",
+        family_hints: str = "",
     ) -> Dict[str, Any]:
         """Audit whether prose accurately describes adjacent code, with optional corrected prose."""
         if not self._client:
@@ -2631,6 +2648,15 @@ Rules:
                 'Return JSON only: {"accurate": true|false, "issues": "...", "corrected_prose": "..." or null}',
             ]
         )
+
+        if family_hints:
+            prompt_parts.append("")
+            prompt_parts.append("## Family Knowledge Constraints:")
+            prompt_parts.append(family_hints)
+            prompt_parts.append(
+                "Use the above to identify factually incorrect claims in the prose "
+                "even if the claim seems internally consistent with the adjacent code."
+            )
 
         response = self.complete(
             prompt="\n".join(prompt_parts),

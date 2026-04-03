@@ -49,6 +49,7 @@ class BehavioralPatternScanner:
         article_intent: str = "",
         section_heading: str = "",
         markdown_content: str = "",
+        content_type: str = "",  # e.g. "blog", "docs", "kb"
     ) -> List[BehavioralFinding]:
         patterns = self._load_patterns(family)
         if not patterns or not code:
@@ -60,6 +61,11 @@ class BehavioralPatternScanner:
         ).lower()
 
         for pattern in patterns:
+            # Skip if pattern is restricted to specific content types and this doesn't match
+            allowed_types = pattern.get("content_types")
+            if allowed_types and content_type and content_type not in allowed_types:
+                continue
+
             finding = self._evaluate_pattern(pattern, code=code, context_blob=context_blob)
             if finding is not None:
                 findings.append(finding)

@@ -104,6 +104,7 @@ class MarkdownUpdateService:
         gist_readme_service: Optional[Any] = None,
         llm_service: Optional[Any] = None,
         audit_prose: bool = False,
+        family_hints_str: str = "",
     ):
         """
         Initialize markdown update service.
@@ -120,6 +121,7 @@ class MarkdownUpdateService:
             run_id: Run ID for workspace isolation
             unsafe_first_block: If True, allow replacement of first block when no signature exists (UNSAFE)
             gist_readme_service: Optional GistReadmeService for generating README.md in gists
+            family_hints_str: Formatted family-specific review hints for prose audit (newline-separated)
         """
         self.db = db
         self.artifacts_dir = artifacts_dir or Path("artifacts/diffs")
@@ -135,6 +137,7 @@ class MarkdownUpdateService:
         self.gist_readme_service = gist_readme_service
         self.llm_service = llm_service
         self.audit_prose = audit_prose
+        self.family_hints_str = family_hints_str
         self.article_validator = ArticleValidator()
 
     def _get_write_target_path(self, file_path: str) -> str:
@@ -342,6 +345,65 @@ class MarkdownUpdateService:
         
         return True, changes
 
+    def update_prose_only(
+        self,
+        file_path: str,
+        extra_hints: str = "",
+        dry_run: bool = False,
+    ) -> Tuple[bool, List[Dict[str, Any]]]:
+        """Correct prose in an article file using family hints, without touching code blocks.
+
+        Runs a prose-only audit pass on ALL prose sections in the file, regardless of
+        whether any code blocks changed. Intended for the standalone prose correction
+        pass (Phase D.5) which operates independently of the VFV pipeline.
+
+        Args:
+            file_path: Absolute path to the markdown file.
+            extra_hints: Additional hint text to append to self.family_hints_str
+                (e.g., duplicate-prose context from another article).
+            dry_run: If True, compute corrections but do not write to disk.
+
+        Returns:
+            Tuple of (changed: bool, prose_changes: List[Dict]).
+        """
+        if not self.audit_prose or self.llm_service is None:
+            return False, []
+
+        try:
+            content = Path(file_path).read_text(encoding="utf-8")
+        except Exception as exc:
+            logger.warning("update_prose_only: cannot read %s: %s", file_path, exc)
+            return False, []
+
+        # Temporarily extend family hints with any extra context
+        original_hints = self.family_hints_str
+        if extra_hints:
+            self.family_hints_str = (self.family_hints_str + "\n" + extra_hints).strip()
+
+        try:
+            updated_content, prose_changes = self._audit_and_update_adjacent_prose(
+                content=content,
+                file_path=file_path,
+                file_examples=[],
+                code_changes=[],
+                force_audit_all=True,
+            )
+        finally:
+            self.family_hints_str = original_hints
+
+        if not prose_changes:
+            return False, []
+
+        if not dry_run:
+            try:
+                Path(file_path).write_text(updated_content, encoding="utf-8")
+                logger.info("update_prose_only: wrote %d prose corrections to %s", len(prose_changes), file_path)
+            except Exception as exc:
+                logger.warning("update_prose_only: cannot write %s: %s", file_path, exc)
+                return False, prose_changes
+
+        return True, prose_changes
+
     def _audit_and_update_adjacent_prose(
         self,
         *,
@@ -349,6 +411,7 @@ class MarkdownUpdateService:
         file_path: str,
         file_examples: List[ExampleRecord],
         code_changes: List[Dict[str, Any]],
+        force_audit_all: bool = False,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """Audit prose adjacent to changed blocks and apply safe replacements when justified."""
         if not self.audit_prose or self.llm_service is None:
@@ -359,6 +422,12 @@ class MarkdownUpdateService:
             for change in code_changes
             if change.get("type") == "inline_replace" and isinstance(change.get("block_index"), int)
         }
+        # When force_audit_all is True, audit prose adjacent to every code block
+        # regardless of whether the code changed (enables standalone prose pass).
+        all_sections: Optional[List[Dict[str, Any]]] = None
+        if force_audit_all:
+            all_sections = self.article_validator.extract_adjacent_prose_sections(content)
+            changed_block_indexes = {s["block_index"] for s in all_sections}
         if not changed_block_indexes:
             return content, []
 
@@ -367,7 +436,7 @@ class MarkdownUpdateService:
             for example in file_examples
             if example.location is not None
         }
-        sections = self.article_validator.extract_adjacent_prose_sections(content)
+        sections = all_sections if all_sections is not None else self.article_validator.extract_adjacent_prose_sections(content)
         target_sections = [
             section for section in sections
             if section["block_index"] in changed_block_indexes
@@ -390,6 +459,7 @@ class MarkdownUpdateService:
                     code_text=section["code"],
                     article_intent=example.article_intent if example else "",
                     section_heading=section.get("section_heading") or "",
+                    family_hints=self.family_hints_str,
                 )
             except Exception as exc:
                 logger.warning("Prose audit failed for %s block %s: %s", file_path, section["block_index"], exc)
