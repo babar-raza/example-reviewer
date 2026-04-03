@@ -56,6 +56,58 @@ _QUOTED_FILENAME_RE = re.compile(
     r'"([\w\s.\-]+\.(?:docx|pdf|xlsx|zip|cs|txt|html|odt|rtf))"', re.IGNORECASE
 )
 
+# Detect files saved by a code block: doc.Save("file.docx") / doc.Save("file.pdf", ...)
+_SAVE_FILENAME_RE = re.compile(
+    r'\.Save\s*\(\s*"([\w\s.\-]+\.(?:docx|pdf|odt|rtf))"', re.IGNORECASE
+)
+# Detect files loaded by a code block: new Document("file.docx")
+_LOAD_FILENAME_RE = re.compile(
+    r'new\s+Document\s*\(\s*"([\w\s.\-]+\.(?:docx|doc|odt|rtf))"', re.IGNORECASE
+)
+
+
+def _check_cross_step_filename_chain(file_path: str, text: str) -> List[ArticleIssue]:
+    """Return issues when a later code block loads a file not saved by the previous block.
+
+    Scans consecutive fenced code blocks and checks that if block N saves file X,
+    the next block that performs a Document load uses X (not a different filename).
+    This catches copy-paste errors where a step loads the wrong intermediate file.
+    """
+    blocks = _extract_fenced_blocks(text)
+    issues: List[ArticleIssue] = []
+
+    last_saved: Optional[set] = None
+    last_saved_line: int = 0
+
+    for start_line, block_text in blocks:
+        saved = set(_SAVE_FILENAME_RE.findall(block_text))
+        loaded = set(_LOAD_FILENAME_RE.findall(block_text))
+
+        if last_saved and loaded:
+            # Files loaded in this block that were NOT saved by the previous block
+            unexpected = loaded - last_saved
+            if unexpected:
+                issues.append(ArticleIssue(
+                    file_path=file_path,
+                    line_number=start_line,
+                    issue_type="cross_step_filename_mismatch",
+                    description=(
+                        f"Code block at line {start_line} loads {sorted(unexpected)} "
+                        f"but the previous block saved {sorted(last_saved)}. "
+                        f"Possible copy-paste error: wrong input filename."
+                    ),
+                    severity="error",
+                ))
+
+        if saved:
+            last_saved = saved
+            last_saved_line = start_line
+        elif loaded and not saved:
+            # Block only loads, doesn't save — reset chain since this step terminates it
+            last_saved = None
+
+    return issues
+
 
 def _check_broken_fences(file_path: str, text: str) -> List[ArticleIssue]:
     """Return issues for C# code found outside fenced blocks."""
@@ -251,6 +303,7 @@ def validate_article(file_path: str) -> List[ArticleIssue]:
     issues: List[ArticleIssue] = []
     issues.extend(_check_broken_fences(file_path, text))
     issues.extend(_check_filename_mismatches(file_path, text))
+    issues.extend(_check_cross_step_filename_chain(file_path, text))
     return issues
 
 
@@ -273,9 +326,20 @@ def validate_family_articles(file_paths: List[str]) -> List[ArticleIssue]:
             continue
         issues.extend(_check_broken_fences(fp, contents[fp]))
         issues.extend(_check_filename_mismatches(fp, contents[fp]))
+        issues.extend(_check_cross_step_filename_chain(fp, contents[fp]))
 
     if len(file_paths) > 1:
         issues.extend(_check_duplicate_blocks(file_paths, contents))
+        validator = ArticleValidator()
+        prose_dup_warnings = validator._detect_prose_duplication(file_paths, contents)
+        for w in prose_dup_warnings:
+            for fp in w.get("file_paths", []):
+                issues.append(ArticleIssue(
+                    file_path=fp,
+                    line_number=0,
+                    issue_type="duplicate_prose",
+                    description=w["message"],
+                ))
 
     return issues
 
@@ -289,6 +353,63 @@ class ArticleValidator:
         re.compile(r"^\s*namespace\s+[A-Z]\w*(?:\.[A-Z]\w*)*"),
     )
     QUOTED_FILENAME = re.compile(r'["\']([^"\']+\.(?:docx|doc|pdf|odt|ott|rtf|txt|pfx))["\']', re.IGNORECASE)
+
+    # Tokens that strongly suggest a line is C# code rather than prose
+    _CS_TOKENS = re.compile(
+        r';\s*$|^\s*[{}]|\busing\b|\bvar\b|\bpublic\b|\bprivate\b'
+        r'|\bclass\b|\bvoid\b|\bnamespace\b|\bstatic\b|\bnew\b'
+    )
+
+    def _is_likely_prose(self, block_content: str) -> bool:
+        """Return True if a csharp-fenced block appears to contain prose, not code."""
+        lines = [l for l in block_content.splitlines() if l.strip()]
+        if len(lines) < 3:  # Too short to judge
+            return False
+        code_lines = sum(1 for l in lines if self._CS_TOKENS.search(l))
+        return (code_lines / len(lines)) < 0.1
+
+    def _detect_prose_inside_fence(self, file_path: str, content: str) -> List[Dict[str, Any]]:
+        """Return warnings for csharp-fenced blocks that appear to contain prose, not C# code."""
+        warnings: List[Dict[str, Any]] = []
+        lines = content.splitlines()
+        in_fence = False
+        fence_lang = ""
+        fence_start = 0
+        fence_lines: List[str] = []
+
+        for idx, line in enumerate(lines, start=1):
+            if line.startswith("```"):
+                if not in_fence:
+                    in_fence = True
+                    fence_start = idx
+                    # Extract language from opening fence marker (e.g. ```csharp)
+                    fence_lang = line[3:].strip().lower()
+                    fence_lines = []
+                else:
+                    in_fence = False
+                    if fence_lang in ("csharp", "cs", "c#"):
+                        block_content = "\n".join(fence_lines)
+                        if self._is_likely_prose(block_content):
+                            logger.info(
+                                "prose_inside_fence: %s line %d",
+                                file_path,
+                                fence_start,
+                            )
+                            warnings.append({
+                                "type": "prose_inside_fence",
+                                "severity": "warning",
+                                "line": fence_start,
+                                "message": (
+                                    f"Fenced csharp block at line {fence_start} "
+                                    f"appears to contain prose text, not C# code"
+                                ),
+                            })
+                    fence_lang = ""
+                    fence_lines = []
+            elif in_fence:
+                fence_lines.append(line)
+
+        return warnings
 
     def validate_files(
         self,
@@ -318,6 +439,15 @@ class ArticleValidator:
             warnings = []
             warnings.extend(self._validate_fences(file_path, content))
             warnings.extend(self._validate_filename_references(file_path, content))
+            warnings.extend(self._detect_prose_inside_fence(file_path, content))
+            # Cross-step filename chain check (detects fixture-masked wrong filenames)
+            for issue in _check_cross_step_filename_chain(file_path, content):
+                warnings.append({
+                    "type": issue.issue_type,
+                    "severity": issue.severity,
+                    "line": issue.line_number,
+                    "message": issue.description,
+                })
             prose_audit = self._audit_prose(file_path, content, llm_service) if audit_prose else []
             reports.append(
                 {
@@ -332,6 +462,14 @@ class ArticleValidator:
         if duplicate_warnings:
             by_file = {report["file_path"]: report for report in reports}
             for warning in duplicate_warnings:
+                for file_path in warning["file_paths"]:
+                    if file_path in by_file:
+                        by_file[file_path]["warnings"].append(warning)
+
+        prose_dup_warnings = self._detect_prose_duplication(list(contents.keys()), contents)
+        if prose_dup_warnings:
+            by_file = {report["file_path"]: report for report in reports}
+            for warning in prose_dup_warnings:
                 for file_path in warning["file_paths"]:
                     if file_path in by_file:
                         by_file[file_path]["warnings"].append(warning)
@@ -509,3 +647,115 @@ class ArticleValidator:
     @staticmethod
     def _normalize_code(code: str) -> str:
         return "\n".join(line.strip() for line in code.splitlines() if line.strip())
+
+    def repair_broken_fences(self, content: str) -> Tuple[str, int]:
+        """Repair unclosed code fences in markdown content.
+
+        Detects code fences opened with ``` that are never closed, and inserts
+        a closing ``` immediately before the next heading or at end of file.
+
+        Args:
+            content: Raw markdown content to repair.
+
+        Returns:
+            Tuple of (repaired_content, count_repairs) where count_repairs is
+            the number of unclosed fences that were closed.
+        """
+        lines = content.splitlines(keepends=True)
+        in_fence = False
+        fence_open_idx: Optional[int] = None
+        repairs = 0
+        output: List[str] = []
+
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                if not in_fence:
+                    in_fence = True
+                    fence_open_idx = idx
+                else:
+                    in_fence = False
+                    fence_open_idx = None
+                output.append(line)
+                continue
+
+            if in_fence and stripped.startswith("#"):
+                # Heading found inside an open fence — insert closing fence before it
+                output.append("```\n")
+                repairs += 1
+                in_fence = False
+                fence_open_idx = None
+
+            output.append(line)
+
+        # Unclosed fence at EOF
+        if in_fence:
+            output.append("```\n")
+            repairs += 1
+
+        return "".join(output), repairs
+
+    def _detect_prose_duplication(
+        self,
+        file_paths: List[str],
+        contents: Dict[str, str],
+    ) -> List[Dict[str, Any]]:
+        """Detect prose duplication across article files.
+
+        Extracts prose lines (lines outside fenced code blocks, not headings,
+        not empty) and checks for high overlap between file pairs.
+
+        Args:
+            file_paths: Ordered list of file paths.
+            contents: Dict mapping file_path -> raw markdown content.
+
+        Returns:
+            List of warning dicts with type "duplicate_prose".
+        """
+        def _prose_hashes(text: str) -> set:
+            lines = text.splitlines()
+            in_fence = False
+            hashes: set = set()
+            for ln in lines:
+                stripped = ln.strip()
+                if stripped.startswith("```"):
+                    in_fence = not in_fence
+                    continue
+                if in_fence or not stripped or stripped.startswith("#"):
+                    continue
+                # Normalize: lowercase, collapse whitespace
+                normalized = " ".join(stripped.lower().split())
+                if len(normalized) < 20:  # skip very short lines (nav, labels)
+                    continue
+                hashes.add(hashlib.sha256(normalized.encode("utf-8")).hexdigest())
+            return hashes
+
+        file_hashes: Dict[str, set] = {
+            fp: _prose_hashes(contents.get(fp, ""))
+            for fp in file_paths
+        }
+
+        warnings: List[Dict[str, Any]] = []
+        fps = sorted(file_hashes.keys())
+        for i, left in enumerate(fps):
+            for right in fps[i + 1:]:
+                left_h = file_hashes[left]
+                right_h = file_hashes[right]
+                if not left_h or not right_h:
+                    continue
+                overlap = left_h & right_h
+                ratio = len(overlap) / max(1, min(len(left_h), len(right_h)))
+                if ratio >= 0.50:
+                    right_name = Path(right).name
+                    left_name = Path(left).name
+                    warnings.append({
+                        "type": "duplicate_prose",
+                        "severity": "warning",
+                        "file_paths": [left, right],
+                        "message": (
+                            f"Prose overlap ratio {ratio:.2f} between this article "
+                            f"and {right_name if left == left else left_name}. "
+                            f"Consider differentiating the content."
+                        ),
+                    })
+        return warnings
