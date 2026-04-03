@@ -11,7 +11,7 @@ import platform
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 # Fix Windows cp1252 encoding issues with Unicode in log messages
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -1091,20 +1091,52 @@ def main() -> int:
         )
 
     elif args.command == 'validate-articles':
+        import os as _os
+        # file_list: explicit files from --files flag (highest priority)
         file_list = getattr(args, 'files', None)
+        # roots_override: content roots to pass to the tool layer (None = use family config)
+        roots_override = getattr(args, 'content_roots', None)
+
         if file_list:
-            import os as _os
-            file_list = [_os.path.abspath(f) for f in file_list]
+            # Resolve to absolute paths and deduplicate; keep as explicit file_list.
+            file_list = list(dict.fromkeys(_os.path.abspath(f) for f in file_list))
             missing = [f for f in file_list if not _os.path.exists(f)]
             if missing:
                 print(f"[--files] WARNING: {len(missing)} file(s) not found: {missing}")
+            roots_override = None  # file_list takes precedence; ignore root override
+        elif roots_override:
+            # --content-roots given but no --files: collect ALL .md files from every
+            # supplied root so the validator sees them together for cross-root duplicate
+            # detection.  Non-existent roots are skipped with a warning.
+            candidate_roots = [_os.path.expandvars(r) for r in roots_override]
+            all_files_found: List[str] = []
+            for root_dir in candidate_roots:
+                if not _os.path.exists(root_dir):
+                    print(f"[validate-articles] WARNING: Content root not found, skipping: {root_dir}")
+                    continue
+                all_files_found.extend(str(p) for p in Path(root_dir).rglob("*.md"))
+            if all_files_found:
+                # Deduplicate (same file reachable via multiple roots) and resolve.
+                file_list = list(dict.fromkeys(str(Path(f).resolve()) for f in all_files_found))
+                print(f"[validate-articles] Collected {len(file_list)} file(s) from {len(candidate_roots)} root(s)")
+                roots_override = None  # already expanded into file_list; tool needs no override
+            else:
+                # All roots missing or empty — pass an empty roots list so the tool
+                # reports 0 files checked rather than falling back to family config roots.
+                print("[validate-articles] WARNING: No files found in any content root — reporting 0 files checked")
+                file_list = None
+                roots_override = []  # empty list signals: skip family config roots too
+        # When neither --files nor --content-roots is given, roots_override stays None
+        # and the tool uses family config content_roots via _find_markdown_files (which
+        # already iterates all roots, skips missing ones, and deduplicates).
+
         if getattr(args, 'format', 'text') == 'json':
             args.json = True
 
         result = tools.validate_articles(
             family=args.family,
             file_list=file_list,
-            content_roots=getattr(args, 'content_roots', None),
+            content_roots=roots_override,
             audit_prose=getattr(args, 'audit_prose', False),
         )
     

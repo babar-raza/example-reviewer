@@ -1285,6 +1285,24 @@ class PipelineOrchestrator:
                 )
             results['phases']['markdown_update'] = update_stats
 
+            # Phase D.5 — Standalone prose pass (fence repair + prose correction)
+            if audit_prose:
+                logger.info("--- Phase D.5: Standalone Prose Pass ---")
+                _prose_target_files = file_list or self._get_run_file_paths(run_id, family)
+                prose_pass_stats = self._run_standalone_prose_pass(
+                    run_id=run_id,
+                    family=family,
+                    target_files=_prose_target_files,
+                    dry_run=dry_run,
+                )
+                logger.info(
+                    "Phase D.5 complete: files_repaired=%d prose_corrected=%d errors=%d",
+                    prose_pass_stats["files_repaired"],
+                    prose_pass_stats["prose_files_corrected"],
+                    len(prose_pass_stats["errors"]),
+                )
+                results['phases']['prose_pass'] = prose_pass_stats
+
             # Phase E: Final Review (using LLM)
             if not skip_llm_fixes and self.llm_service.is_available():
                 logger.info(f"Phase E: Final LLM review for {family}")
@@ -1910,11 +1928,35 @@ class PipelineOrchestrator:
                                         section_heading=example.section_heading or "",
                                     )
                                     if _fix_result.get("changed") and _fix_result.get("fixed_code"):
-                                        example.original_code = _fix_result["fixed_code"]
-                                        logger.info(
-                                            f"[proactive_audit] Applied fix for {example.example_id} "
-                                            f"hint={_issue.hint_id}"
-                                        )
+                                        _proposed = _fix_result["fixed_code"]
+                                        # Filename guard: reject if fix removes original filename literals
+                                        if self._check_filename_rename(
+                                            example.original_code or "", _proposed,
+                                            example.example_id, "proactive_audit"
+                                        ):
+                                            pass  # guard fired — keep original_code unchanged
+                                        else:
+                                            example.original_code = _proposed
+                                            logger.info(
+                                                f"[proactive_audit] Applied fix for {example.example_id} "
+                                                f"hint={_issue.hint_id}"
+                                            )
+                                            try:
+                                                from ..core.telemetry import emit_telemetry_event
+                                                emit_telemetry_event(
+                                                    self.db, run_id, family,
+                                                    event_type='proactive_audit_fix_applied',
+                                                    phase='pre_compile',
+                                                    example_id=example.example_id,
+                                                    success=True,
+                                                    metadata={
+                                                        'hint_id': _issue.hint_id,
+                                                        'issue_type': _issue.issue_type,
+                                                        'severity': _issue.severity,
+                                                    },
+                                                )
+                                            except Exception:
+                                                pass
                     except Exception as _audit_exc:
                         logger.warning(f"[proactive_audit] Failed for {example.example_id}: {_audit_exc}")
 
@@ -2733,6 +2775,10 @@ class PipelineOrchestrator:
                             rejection_reason=f"Path role validation: {'; '.join(reasons)}",
                             drift_score=1.0,
                         )
+                        continue
+
+                    # Filename guard: reject fix if it removes original filename literals
+                    if self._check_filename_rename(current_code, fixed_code, example.example_id, "compile"):
                         continue
 
                     # Track 2: No-change loop detection
@@ -4187,6 +4233,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                             )
                             continue
 
+                        # Filename guard: reject fix if it removes original filename literals
+                        if self._check_filename_rename(current_code, fixed_code, example.example_id, "runtime"):
+                            continue
+
                         # Track 2: No-change loop detection (runtime)
                         if previous_runtime_code is not None and self._is_code_identical(previous_runtime_code, fixed_code):
                             logger.warning(
@@ -4566,6 +4616,22 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         except Exception as exc:
             logger.warning(f"[article_validator] Failed to write validation log: {exc}")
 
+    def _derive_content_type(self, file_path: str, family_config) -> str:
+        """Derive content_type ('blog', 'docs', 'kb', etc.) from file path vs. family content roots."""
+        if not file_path or not family_config:
+            return ""
+        norm_fp = Path(file_path).as_posix().lower()
+        for root in family_config.content_roots:
+            if not root:
+                continue
+            norm_root = Path(root).as_posix().lower().rstrip("/")
+            if norm_fp.startswith(norm_root + "/") or norm_fp == norm_root:
+                # Extract subdomain from the first path component that looks like a hostname
+                for part in reversed(norm_root.split("/")):
+                    if "." in part and not part.startswith("."):
+                        return part.split(".")[0]  # e.g. "blog.aspose.net" -> "blog"
+        return ""
+
     def _run_behavioral_scan_phase(
         self,
         run_id: str,
@@ -4584,6 +4650,11 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         if not examples:
             self._behavioral_findings_by_example = {}
             return stats
+
+        try:
+            _scan_family_config = self.config_manager.load_family_config(family)
+        except Exception:
+            _scan_family_config = None
 
         content_cache: Dict[str, str] = {}
         findings_by_example: Dict[str, List[Dict[str, Any]]] = {}
@@ -4608,6 +4679,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 article_intent=example.article_intent or "",
                 section_heading=example.section_heading or "",
                 markdown_content=markdown_content,
+                content_type=self._derive_content_type(example.file_path, _scan_family_config),
             )
             if not findings:
                 continue
@@ -4644,6 +4716,18 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     logger.info(
                         f"[behavioral_fix] {example.example_id}: {fix_desc}"
                     )
+                    try:
+                        from ..core.telemetry import emit_telemetry_event
+                        emit_telemetry_event(
+                            self.db, run_id, family,
+                            event_type='behavioral_fix_applied',
+                            phase='behavioral_scan',
+                            example_id=example.example_id,
+                            success=True,
+                            metadata={'fix_description': fix_desc[:200]},
+                        )
+                    except Exception:
+                        pass
                     # Re-scan to confirm the fix resolved the blocking issues
                     re_findings = self.behavioral_pattern_scanner.scan_example(
                         family,
@@ -4720,6 +4804,110 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             lines.extend(behavioral_lines[:12])
 
         return "\n".join(lines).strip()
+
+    def _run_standalone_prose_pass(
+        self,
+        run_id: str,
+        family: str,
+        target_files: List[str],
+        dry_run: bool,
+    ) -> Dict[str, Any]:
+        """Phase D.5 — Standalone prose correction pass.
+
+        Runs AFTER Phase D (markdown update) and BEFORE Phase E (final review).
+        Operates on ALL article files for the family, regardless of whether they
+        had verified code examples in the current run.
+
+        Performs:
+        1. Structural fence repair (unclosed fences, issue #11)
+        2. Hint-driven prose correction (issue #1, memory claims etc.)
+        3. Duplicate-prose-aware correction (issue #13)
+
+        Args:
+            run_id: Current pipeline run ID.
+            family: Family name (e.g. "words").
+            target_files: List of markdown file paths to process.
+            dry_run: If True, compute corrections but do not write to disk.
+
+        Returns:
+            Stats dict with files_repaired, prose_files_corrected, errors.
+        """
+        stats: Dict[str, Any] = {
+            "files_repaired": 0,
+            "prose_files_corrected": 0,
+            "errors": [],
+        }
+
+        if not target_files:
+            return stats
+
+        # Only run prose corrections if LLM is available and prose audit is enabled
+        can_run_prose = (
+            self.markdown_service is not None
+            and self.markdown_service.audit_prose
+            and self.llm_service is not None
+            and self.llm_service.is_available()
+        )
+
+        for file_path in target_files:
+            try:
+                # ----------------------------------------------------------------
+                # 1. Structural fence repair (deterministic, no LLM needed)
+                # ----------------------------------------------------------------
+                raw = Path(file_path).read_text(encoding="utf-8")
+                repaired, repair_count = self.article_validator.repair_broken_fences(raw)
+                if repair_count > 0:
+                    if not dry_run:
+                        Path(file_path).write_text(repaired, encoding="utf-8")
+                    stats["files_repaired"] += 1
+                    logger.info(
+                        "standalone_prose_pass: repaired %d fence(s) in %s",
+                        repair_count,
+                        file_path,
+                    )
+
+                # ----------------------------------------------------------------
+                # 2. Hint-driven prose correction (LLM-powered)
+                # ----------------------------------------------------------------
+                if not can_run_prose:
+                    continue
+
+                # Build extra hints for duplicate prose (issue #13)
+                extra_hints = ""
+                article_findings = self._article_validation_results.get(file_path, [])
+                dup_findings = [f for f in article_findings if f.get("type") == "duplicate_prose"]
+                if dup_findings:
+                    other_paths = []
+                    for df in dup_findings:
+                        for other_fp in df.get("file_paths", []):
+                            if other_fp != file_path:
+                                other_paths.append(Path(other_fp).name)
+                    if other_paths:
+                        extra_hints = (
+                            f"IMPORTANT: This article's prose significantly overlaps with "
+                            f"{', '.join(other_paths)}. When correcting prose, also rewrite "
+                            f"duplicated sections to be more specific and distinct from those "
+                            f"articles while preserving accuracy."
+                        )
+
+                changed, prose_changes = self.markdown_service.update_prose_only(
+                    file_path,
+                    extra_hints=extra_hints,
+                    dry_run=dry_run,
+                )
+                if changed:
+                    stats["prose_files_corrected"] += 1
+                    logger.info(
+                        "standalone_prose_pass: corrected %d prose section(s) in %s",
+                        len(prose_changes),
+                        file_path,
+                    )
+
+            except Exception as exc:
+                logger.warning("standalone_prose_pass: error processing %s: %s", file_path, exc)
+                stats["errors"].append({"file": file_path, "error": str(exc)})
+
+        return stats
 
     def _run_markdown_update_phase(
         self,
@@ -4815,6 +5003,28 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         global_config = self.config_manager.load_global_config()
         allow_write = allow_md_write or global_config.markdown_write.allow_markdown_write
 
+        # Resolve audit_prose from merged strategy config (global + per-family overrides)
+        _family_config_for_prose = self.config_manager.load_family_config(family)
+        _strategy_cfg = {**global_config.strategy_config, **getattr(_family_config_for_prose, 'strategy_overrides', {})}
+        _audit_prose = audit_prose or _strategy_cfg.get("enable_prose_audit", False)
+
+        # Load family review hints for prose audit
+        _hints_path = Path("config/families") / f"{family}_review_hints.json"
+        _family_hints_str = ""
+        if _hints_path.exists():
+            try:
+                _raw_hints = json.loads(_hints_path.read_text(encoding="utf-8"))
+                _hint_lines = []
+                for _h in _raw_hints:
+                    _issue = _h.get("issue_type", "")
+                    _hint_text = _h.get("hint", "").strip()
+                    if _hint_text:
+                        _hint_lines.append(f"- [{_issue}] {_hint_text}")
+                _family_hints_str = "\n".join(_hint_lines)
+                logger.debug("Loaded %d family hints for prose audit (%s)", len(_raw_hints), family)
+            except Exception:
+                pass
+
         # Initialize gist publisher + readme service if gist upload is configured
         gist_publisher = None
         gist_readme_service = None
@@ -4852,8 +5062,9 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             gist_upload_mode=gist_upload_mode,
             gist_target_account=gist_target_account,
             gist_readme_service=gist_readme_service,
-            llm_service=self.llm_service if audit_prose and self.llm_service.is_available() else None,
-            audit_prose=audit_prose,
+            llm_service=self.llm_service if _audit_prose and self.llm_service.is_available() else None,
+            audit_prose=_audit_prose,
+            family_hints_str=_family_hints_str,
         )
 
         if allow_md_write:
@@ -4890,6 +5101,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         catalog=None,
         article_intent: Optional[str] = None,
         review_context: Optional[str] = None,
+        content_type: str = "",
     ) -> Dict[str, Any]:
         """
         Run multiple review passes and require consensus for approval.
@@ -4916,6 +5128,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 family=family,
                 article_intent=article_intent,
                 review_context=review_context,
+                content_type=content_type,
             )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
@@ -4980,6 +5193,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 family=family,
                 article_intent=article_intent,
                 review_context=review_context,
+                content_type=content_type,
             )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
@@ -5232,6 +5446,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         final_review_config = global_config.final_review
 
         # Apply per-family final_review_overrides (Gap 2 fix)
+        _family_cfg = None
         try:
             _family_cfg = self.config_manager.load_family_config(family)
             _fr_overrides = getattr(_family_cfg, 'final_review_overrides', {}) or {}
@@ -5289,6 +5504,22 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     files[file_key].extend(file_examples)
                     del auto_pass_files[file_key]
 
+            # Also include files with structural findings (e.g. filename_mismatch)
+            # that need Phase E LLM review even if no examples were LLM-fixed.
+            structurally_flagged = {
+                fp
+                for fp, findings in self._article_validation_results.items()
+                if any(f.get("type") == "filename_mismatch" for f in findings)
+                and fp in auto_pass_files
+            }
+            if structurally_flagged:
+                logger.info(
+                    "Phase E: adding %d structurally-flagged file(s) to review set",
+                    len(structurally_flagged - set(files.keys())),
+                )
+                for fp in structurally_flagged:
+                    files[fp] = auto_pass_files.pop(fp)
+
             # Auto-pass files with zero LLM-fixed examples
             for file_key, file_examples in auto_pass_files.items():
                 for e in file_examples:
@@ -5302,6 +5533,16 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     f"Auto-passed {len(auto_pass_files)} files with {sum(len(v) for v in auto_pass_files.values())} "
                     f"examples (no LLM fixes, only_review_llm_fixed=True)"
                 )
+
+        # Budget cap: truncate files list when max_final_review_examples > 0
+        _max_review = getattr(final_review_config, 'max_final_review_examples', 0)
+        if _max_review > 0 and len(files) > _max_review:
+            _all_files = list(files.items())
+            logger.warning(
+                "[final_review] Capping final review at %d/%d files (max_final_review_examples=%d)",
+                _max_review, len(_all_files), _max_review,
+            )
+            files = dict(_all_files[:_max_review])
 
         for file_path, file_examples in files.items():
             stats['files_reviewed'] += 1
@@ -5353,6 +5594,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                         content, snippets, run_id=run_id, family=family, catalog=catalog,
                         article_intent=intent_for_review,
                         review_context=review_context,
+                        content_type=self._derive_content_type(file_path, _family_cfg),
                     )
 
                     # Create ReviewResult model
@@ -5535,6 +5777,11 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         if not getattr(final_review_config, 'intent_review_all_examples', False):
             return stats
 
+        try:
+            _intent_family_cfg = self.config_manager.load_family_config(family)
+        except Exception:
+            _intent_family_cfg = None
+
         # Collect all verified + final_review_passed examples for this run
         verified = self.db.get_examples_by_family(family, ExampleStatus.VERIFIED, run_id=run_id)
         passed = self.db.get_examples_by_family(family, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
@@ -5576,6 +5823,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     family=family,
                     article_intent=article_intent,
                     review_context=self._build_review_context_for_file(file_path, file_examples),
+                    content_type=self._derive_content_type(file_path, _intent_family_cfg),
                 )
 
                 # Build ReviewIssue models for intent-related issues
@@ -6707,6 +6955,46 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         if original_lines - fixed_lines > 3:
             return True
 
+        return False
+
+    @staticmethod
+    def _extract_docx_literals(code: str) -> set:
+        """Extract bare filename literals (*.docx / *.pdf / *.xlsx etc.) from code.
+
+        Used to detect when an LLM fix silently renames source-file references.
+        Only strings that were present in the original code are compared — new
+        output filenames added by the fix are allowed.
+        """
+        import re as _re
+        # Match quoted strings ending with a common document extension
+        return set(_re.findall(
+            r'"([^"]+\.(?:docx|doc|pdf|xlsx|xls|pptx|ppt|odt|rtf|txt))"',
+            code,
+            _re.IGNORECASE,
+        ))
+
+    def _check_filename_rename(
+        self,
+        original_code: str,
+        fixed_code: str,
+        example_id: str,
+        phase: str,
+    ) -> bool:
+        """Return True (reject) if the fix removed any original filename literals.
+
+        An LLM fix is allowed to ADD new filenames (e.g. output paths) but must
+        not REMOVE existing ones, which indicates it renamed a source/template file
+        to match a test fixture — corrupting article intent.
+        """
+        original_names = self._extract_docx_literals(original_code)
+        fixed_names = self._extract_docx_literals(fixed_code)
+        removed = original_names - fixed_names
+        if removed:
+            logger.warning(
+                "[filename_guard] Rejected %s fix for %s: removed filename literal(s) %s",
+                phase, example_id, removed,
+            )
+            return True
         return False
 
     def _is_code_identical(self, code1: str, code2: str) -> bool:

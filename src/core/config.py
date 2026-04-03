@@ -540,6 +540,11 @@ class FinalReviewConfig(BaseModel):
         default=False,
         description="When intent review is enabled, apply it to all verified examples regardless of only_review_llm_fixed setting"
     )
+    max_final_review_examples: int = Field(
+        default=0,
+        ge=0,
+        description="Cap the number of files sent to final LLM review per run. 0 = unlimited (default)."
+    )
 
 
 class DriftConfig(BaseModel):

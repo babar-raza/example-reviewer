@@ -725,7 +725,10 @@ class ExampleReviewerTools:
         """Run deterministic article validation outside the full pipeline."""
         try:
             family_config = self.orchestrator.config_manager.load_family_config(family)
-            if content_roots:
+            # content_roots=None means "use family config"; content_roots=[] means "use
+            # empty root set" (caller has already resolved files into file_list or wants 0
+            # files checked).
+            if content_roots is not None:
                 family_config = family_config.model_copy(update={"content_roots": content_roots})
 
             target_files = [str(Path(path).resolve()) for path in (file_list or [])]
