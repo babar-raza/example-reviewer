@@ -18,6 +18,7 @@ try:
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
+    OpenAI = None  # type: ignore[assignment,misc]  # stub so annotations compile without openai installed
 
 try:
     import instructor
@@ -2033,6 +2034,7 @@ Return the C# code now:"""
         article_intent: Optional[str] = None,
         review_context: Optional[str] = None,
         content_type: str = "",
+        config_dir: str = "config/families",
     ) -> Dict[str, Any]:
         """
         Review markdown with GUARANTEED structured output using Instructor.
@@ -2074,6 +2076,8 @@ Return the C# code now:"""
                 family=family,
                 article_intent=article_intent,
                 review_context=review_context,
+                content_type=content_type,
+                config_dir=config_dir,
             )
         else:
             logger.warning("Instructor not available, falling back to manual JSON parsing")
@@ -2084,6 +2088,8 @@ Return the C# code now:"""
                 family=family,
                 article_intent=article_intent,
                 review_context=review_context,
+                content_type=content_type,
+                config_dir=config_dir,
             )
 
     def _review_with_instructor(
@@ -2094,6 +2100,8 @@ Return the C# code now:"""
         family: str = None,
         article_intent: Optional[str] = None,
         review_context: Optional[str] = None,
+        content_type: str = "",
+        config_dir: str = "config/families",
     ) -> Dict[str, Any]:
         """
         Review using Instructor for guaranteed schema compliance.
@@ -2183,6 +2191,7 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
             article_intent=article_intent or "",
             markdown_content=markdown_content,
             content_type=content_type,
+            config_dir=config_dir,
         )
         if family_review_hints:
             prompt_parts.append("## Family Review Hints:")
@@ -2355,6 +2364,8 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
                 family=family,
                 article_intent=article_intent,
                 review_context=review_context,
+                content_type=content_type,
+                config_dir=config_dir,
             )
 
     def _review_with_manual_parsing(
@@ -2365,6 +2376,8 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
         family: str = None,
         article_intent: Optional[str] = None,
         review_context: Optional[str] = None,
+        content_type: str = "",
+        config_dir: str = "config/families",
     ) -> Dict[str, Any]:
         """
         Fallback review method with manual JSON parsing.
@@ -2432,6 +2445,7 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
             article_intent=article_intent or "",
             markdown_content=markdown_content,
             content_type=content_type,
+            config_dir=config_dir,
         )
         if family_review_hints:
             prompt_parts.append("")
@@ -2558,36 +2572,37 @@ ONLY report actual issues. If the code is fine, return {"approved": true, "issue
         article_intent: str,
         markdown_content: str,
         content_type: str = "",
+        config_dir: str = "config/families",
     ) -> str:
         if not family:
             return ""
 
-        hints_path = Path("config/families") / f"{family}_review_hints.json"
-        if not hints_path.exists():
-            return ""
+        from .kb import KBLoadError, KnowledgeBaseLoader
 
         try:
-            raw_hints = json.loads(hints_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            logger.warning("Failed to load review hints for %s: %s", family, exc)
+            raw_hints = KnowledgeBaseLoader.load_review_hints(family, config_dir)
+        except KBLoadError as exc:
+            logger.error("Failed to load review hints for %s: %s", family, exc)
+            return ""
+
+        if not raw_hints:
             return ""
 
         code_blob = "\n".join(snippet.get("code", "") for snippet in code_snippets)
         context_blob = "\n".join([article_intent, markdown_content[:4000]]).lower()
         selected: List[str] = []
         for hint in raw_hints:
-            pattern = hint.get("pattern")
+            pattern = hint.pattern
             if pattern and pattern not in code_blob:
                 continue
-            context_key = hint.get("context", "").lower()
+            context_key = (hint.context or "").lower()
             if context_key and context_key not in context_blob:
                 continue
-            allowed_types = hint.get("content_types")
+            allowed_types = hint.content_types
             if allowed_types and content_type and content_type not in allowed_types:
                 continue
-            issue_type = hint.get("issue_type")
-            prefix = f"[{issue_type}] " if issue_type else ""
-            selected.append(f"- {prefix}{hint.get('hint', '').strip()}")
+            prefix = f"[{hint.issue_type}] " if hint.issue_type else ""
+            selected.append(f"- {prefix}{hint.hint.strip()}")
 
         if not selected:
             return ""
