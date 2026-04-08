@@ -4659,6 +4659,20 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         content_cache: Dict[str, str] = {}
         findings_by_example: Dict[str, List[Dict[str, Any]]] = {}
 
+        # Pre-flight: ensure KB patterns are loadable before iterating examples.
+        # KBLoadError means the file is present but broken — abort and surface the error.
+        from ..services.kb import KBLoadError
+        try:
+            self.behavioral_pattern_scanner._load_patterns(family)
+        except KBLoadError as _kb_exc:
+            logger.error(
+                "Behavioral pattern scan aborted for family %s: KB file broken — %s",
+                family, _kb_exc,
+            )
+            stats["kb_load_error"] = True
+            self._behavioral_findings_by_example = {}
+            return stats
+
         for example in examples:
             stats["examples_scanned"] += 1
             code = example.verified_code or example.compilable_code or example.original_code or ""
@@ -5009,21 +5023,20 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         _audit_prose = audit_prose or _strategy_cfg.get("enable_prose_audit", False)
 
         # Load family review hints for prose audit
-        _hints_path = Path("config/families") / f"{family}_review_hints.json"
         _family_hints_str = ""
-        if _hints_path.exists():
-            try:
-                _raw_hints = json.loads(_hints_path.read_text(encoding="utf-8"))
-                _hint_lines = []
-                for _h in _raw_hints:
-                    _issue = _h.get("issue_type", "")
-                    _hint_text = _h.get("hint", "").strip()
-                    if _hint_text:
-                        _hint_lines.append(f"- [{_issue}] {_hint_text}")
-                _family_hints_str = "\n".join(_hint_lines)
-                logger.debug("Loaded %d family hints for prose audit (%s)", len(_raw_hints), family)
-            except Exception:
-                pass
+        try:
+            from ..services.kb import KBLoadError, KnowledgeBaseLoader
+            _raw_hints = KnowledgeBaseLoader.load_review_hints(family, str(self.config_manager.config_dir))
+            _hint_lines = []
+            for _h in _raw_hints:
+                _issue = _h.issue_type or ""
+                _hint_text = _h.hint.strip()
+                if _hint_text:
+                    _hint_lines.append(f"- [{_issue}] {_hint_text}")
+            _family_hints_str = "\n".join(_hint_lines)
+            logger.debug("Loaded %d family hints for prose audit (%s)", len(_raw_hints), family)
+        except KBLoadError as _exc:
+            logger.error("prose audit: KB file broken for family %s — hints disabled: %s", family, _exc)
 
         # Initialize gist publisher + readme service if gist upload is configured
         gist_publisher = None
@@ -5129,6 +5142,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 article_intent=article_intent,
                 review_context=review_context,
                 content_type=content_type,
+                config_dir=str(self.config_manager.config_dir),
             )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
@@ -5194,6 +5208,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 article_intent=article_intent,
                 review_context=review_context,
                 content_type=content_type,
+                config_dir=str(self.config_manager.config_dir),
             )
             if run_id and family and self.final_review_llm_service._last_response:
                 self._emit_llm_telemetry(
@@ -5824,6 +5839,7 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     article_intent=article_intent,
                     review_context=self._build_review_context_for_file(file_path, file_examples),
                     content_type=self._derive_content_type(file_path, _intent_family_cfg),
+                    config_dir=str(self.config_manager.config_dir),
                 )
 
                 # Build ReviewIssue models for intent-related issues
