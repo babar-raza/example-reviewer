@@ -19,6 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from src.services.kb.models import ReviewHint
 from src.services.proactive_llm_audit import (
     ProactiveAuditIssue,
     _filter_hints,
@@ -31,10 +32,11 @@ from src.services.proactive_llm_audit import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
-SAMPLE_HINTS: List[Dict[str, Any]] = [
+# SAMPLE_HINTS as valid dicts (must satisfy ReviewHint schema: id + hint required)
+_SAMPLE_HINTS_DICTS: List[Dict[str, Any]] = [
     {
         "id": "words-01",
-        "issue_description": "WriteProtection misuse",
+        "hint": "WriteProtection.SetPassword only restricts editing, it does NOT encrypt.",
         "detection_keywords": ["WriteProtection", "SetPassword"],
         "correction": "Use OoxmlSaveOptions.Password",
         "pattern": "WriteProtection.SetPassword",
@@ -42,13 +44,14 @@ SAMPLE_HINTS: List[Dict[str, Any]] = [
     },
     {
         "id": "words-02",
-        "issue_description": "Missing UseNonMergeFields",
+        "hint": "Mustache placeholders require UseNonMergeFields = true before Execute().",
         "detection_keywords": ["MailMerge.Execute"],
         "correction": "Add UseNonMergeFields = true",
         "pattern": "MailMerge.Execute",
         "context": "",  # no context filter
     },
 ]
+SAMPLE_HINTS: List[ReviewHint] = [ReviewHint.model_validate(h) for h in _SAMPLE_HINTS_DICTS]
 
 CODE_WITH_WRITE_PROTECTION = textwrap.dedent("""\
     var doc = new Document();
@@ -86,12 +89,13 @@ class TestLoadFamilyHints:
 
     def test_valid_file_loaded(self, tmp_path):
         hints_file = tmp_path / "myfamily_review_hints.json"
-        hints_file.write_text(json.dumps(SAMPLE_HINTS), encoding="utf-8")
+        hints_file.write_text(json.dumps(_SAMPLE_HINTS_DICTS), encoding="utf-8")
         result = load_family_hints("myfamily", config_dir=str(tmp_path))
         assert len(result) == 2
-        assert result[0]["id"] == "words-01"
+        assert result[0].id == "words-01"
 
     def test_malformed_json_returns_empty(self, tmp_path):
+        # KBLoadError is caught internally; soft-fail for optional proactive-audit phase
         hints_file = tmp_path / "badfamily_review_hints.json"
         hints_file.write_text("{not valid json", encoding="utf-8")
         result = load_family_hints("badfamily", config_dir=str(tmp_path))
@@ -103,12 +107,12 @@ class TestLoadFamilyHints:
         result = load_family_hints("emptyfamily", config_dir=str(tmp_path))
         assert result == []
 
-    def test_default_config_dir_used_when_not_specified(self, monkeypatch, tmp_path):
-        """Verify config_dir defaults to 'config/families' but can be overridden."""
+    def test_override_config_dir(self, tmp_path):
+        """Verify config_dir can be overridden."""
         hints_file = tmp_path / "words_review_hints.json"
-        hints_file.write_text(json.dumps([{"id": "w1"}]), encoding="utf-8")
+        hints_file.write_text(json.dumps([{"id": "w1", "hint": "Some hint"}]), encoding="utf-8")
         result = load_family_hints("words", config_dir=str(tmp_path))
-        assert result[0]["id"] == "w1"
+        assert result[0].id == "w1"
 
 
 # ---------------------------------------------------------------------------
@@ -123,14 +127,14 @@ class TestFilterHints:
     def test_pattern_match_without_context(self):
         # words-02 has no context requirement, just pattern
         matched = _filter_hints(SAMPLE_HINTS, CODE_WITH_MAIL_MERGE, "", "")
-        ids = [h["id"] for h in matched]
+        ids = [h.id for h in matched]
         assert "words-02" in ids
         assert "words-01" not in ids
 
     def test_pattern_and_context_both_required(self):
         # words-01 needs "encrypt" in context; without it, excluded
         matched = _filter_hints(SAMPLE_HINTS, CODE_WITH_WRITE_PROTECTION, "", "")
-        ids = [h["id"] for h in matched]
+        ids = [h.id for h in matched]
         assert "words-01" not in ids
 
     def test_pattern_and_context_both_present(self):
@@ -139,13 +143,14 @@ class TestFilterHints:
             article_intent="We want to encrypt the document",
             markdown_snippet="",
         )
-        ids = [h["id"] for h in matched]
+        ids = [h.id for h in matched]
         assert "words-01" in ids
 
     def test_hint_without_pattern_key_always_passes_pattern_check(self):
-        hint_no_pattern = {"id": "x", "context": ""}
+        hint_no_pattern = ReviewHint(id="x", hint="some hint")
         matched = _filter_hints([hint_no_pattern], CODE_CLEAN, "", "")
-        assert matched == [hint_no_pattern]
+        assert len(matched) == 1
+        assert matched[0].id == "x"
 
     def test_context_check_is_case_insensitive(self):
         matched = _filter_hints(
@@ -153,7 +158,7 @@ class TestFilterHints:
             article_intent="ENCRYPT the document",
             markdown_snippet="",
         )
-        ids = [h["id"] for h in matched]
+        ids = [h.id for h in matched]
         assert "words-01" in ids
 
 

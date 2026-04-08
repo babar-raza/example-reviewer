@@ -360,3 +360,63 @@ doc.Save("output.docx");
         result = fix_stop_track_revisions_before_save(code, self.CANNOT_INSERT_ERROR)
 
         assert result is None
+
+
+class TestFixPdfDigitalSignature:
+    """Tests for fix_pdf_digital_signature behavioral fix."""
+
+    def test_rewrites_sign_to_pdf_save_options(self):
+        code = """
+DigitalSignatureUtil.Sign(filePath, signedFilePath, CertificateHolder.Create("certificate.pfx", "aw"));
+var doc = new Document(signedFilePath);
+doc.Save("FinalDocument.pdf", SaveFormat.Pdf);
+""".strip()
+
+        from src.services.family_fixes.words_fixes import fix_pdf_digital_signature
+
+        result = fix_pdf_digital_signature(code)
+        assert result is not None
+        fixed, desc = result
+        assert "DigitalSignatureDetails" in fixed
+        assert "PdfSaveOptions" in fixed
+        assert "CertificateHolder.Create" in fixed
+        assert "DigitalSignatureUtil.Sign" not in fixed
+        assert "PDF signing" in desc
+
+    def test_idempotent_when_already_correct(self):
+        code = """
+var pdfOptions = new PdfSaveOptions
+{
+    DigitalSignatureDetails = new PdfDigitalSignatureDetails(
+        CertificateHolder.Create("certificate.pfx", "aw"), "Reason", "Location", DateTime.Now)
+};
+doc.Save("SignedDocument.pdf", pdfOptions);
+""".strip()
+
+        from src.services.family_fixes.words_fixes import fix_pdf_digital_signature
+
+        result = fix_pdf_digital_signature(code)
+        assert result is None
+
+    def test_no_match_without_sign_call(self):
+        code = """
+var doc = new Document("input.docx");
+doc.Save("output.pdf", SaveFormat.Pdf);
+""".strip()
+
+        from src.services.family_fixes.words_fixes import fix_pdf_digital_signature
+
+        result = fix_pdf_digital_signature(code)
+        assert result is None
+
+    def test_no_match_without_pdf_context(self):
+        code = """
+DigitalSignatureUtil.Sign(filePath, signedFilePath, CertificateHolder.Create("cert.pfx", "pw"));
+var doc = new Document(signedFilePath);
+doc.Save("output.docx");
+""".strip()
+
+        from src.services.family_fixes.words_fixes import fix_pdf_digital_signature
+
+        result = fix_pdf_digital_signature(code)
+        assert result is None

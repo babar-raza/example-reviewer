@@ -2,54 +2,53 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
 from unittest.mock import patch
 
 import pytest
 
 from src.services.behavioral_pattern_scanner import BehavioralFinding, BehavioralPatternScanner
+from src.services.kb.models import BehavioralPattern
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_kb_only_pattern() -> Dict[str, Any]:
+def _make_kb_only_pattern() -> BehavioralPattern:
     """A minimal pattern that is restricted to the 'kb' content type."""
-    return {
-        "id": "test_kb_only_pattern",
-        "issue_type": "documentation_gap",
-        "severity": "warning",
-        "code_regex": r"SetPassword\s*\(",
-        "description": "KB-only: password call detected.",
-        "suggestion": "Review password handling for KB articles.",
-        "content_types": ["kb"],
-    }
+    return BehavioralPattern(
+        id="test_kb_only_pattern",
+        issue_type="documentation_gap",
+        severity="warning",
+        code_regex=r"SetPassword\s*\(",
+        description="KB-only: password call detected.",
+        suggestion="Review password handling for KB articles.",
+        content_types=["kb"],
+    )
 
 
-def _make_blog_and_docs_pattern() -> Dict[str, Any]:
+def _make_blog_and_docs_pattern() -> BehavioralPattern:
     """A pattern restricted to blog and docs content types."""
-    return {
-        "id": "test_blog_docs_pattern",
-        "issue_type": "api_mismatch",
-        "severity": "error",
-        "code_regex": r"SetPassword\s*\(",
-        "description": "Blog/docs: password call detected.",
-        "suggestion": "Consider alternative approach for blog/docs.",
-        "content_types": ["blog", "docs"],
-    }
+    return BehavioralPattern(
+        id="test_blog_docs_pattern",
+        issue_type="api_mismatch",
+        severity="error",
+        code_regex=r"SetPassword\s*\(",
+        description="Blog/docs: password call detected.",
+        suggestion="Consider alternative approach for blog/docs.",
+        content_types=["blog", "docs"],
+    )
 
 
-def _make_unrestricted_pattern() -> Dict[str, Any]:
+def _make_unrestricted_pattern() -> BehavioralPattern:
     """A pattern with no content_types restriction — fires everywhere."""
-    return {
-        "id": "test_unrestricted_pattern",
-        "issue_type": "other",
-        "severity": "warning",
-        "code_regex": r"SetPassword\s*\(",
-        "description": "Unrestricted: password call detected.",
-        "suggestion": None,
-    }
+    return BehavioralPattern(
+        id="test_unrestricted_pattern",
+        issue_type="other",
+        severity="warning",
+        code_regex=r"SetPassword\s*\(",
+        description="Unrestricted: password call detected.",
+    )
 
 
 CODE_WITH_SETPASSWORD = 'doc.WriteProtection.SetPassword("secret");'
