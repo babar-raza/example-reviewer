@@ -1,0 +1,20 @@
+# CODEOWNERS — GitLab Code Owners
+#
+# Paths listed here require approval from the listed owners before merge.
+# Replace the email/username placeholder with the actual GitLab username(s).
+#
+# Syntax:  <path-pattern>  @username  OR  email@domain.com
+#
+# See: https://docs.gitlab.com/ee/user/project/codeowners/
+
+# Family KB extension files
+# Behavioral patterns with severity "error"/"critical" directly gate pipeline output.
+# Review hints influence LLM prompt construction.
+# Both require explicit sign-off before merge.
+# See docs/family-kb.md for the governance process.
+
+config/families/*_behavioral_patterns.json  babar.raza@aspose.com
+config/families/*_review_hints.json         babar.raza@aspose.com
+
+# KB subsystem source code
+src/services/kb/                            babar.raza@aspose.com
