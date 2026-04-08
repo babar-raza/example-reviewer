@@ -54,5 +54,44 @@
     "context_keywords": ["memory", "large", "optimize", "performance", "large document"],
     "description": "Article context is about memory optimization for large documents, but LoadOptions.MemoryOptimization is not set. The explanation will be incorrect.",
     "suggestion": "Add loadOptions.MemoryOptimization = true; before passing LoadOptions to the Document constructor. Also consider demonstrating LoadOptions.TempFolder and SaveOptions.TempFolder for documents that are too large to process in RAM."
+  },
+  {
+    "id": "words_pdf_form_flattening",
+    "issue_type": "documentation_gap",
+    "severity": "warning",
+    "code_regex": "SaveFormat\\.Pdf",
+    "context_keywords": ["form", "fillable", "interactive"],
+    "description": "Interactive form fields (text inputs, checkboxes, dropdowns) are flattened when converting DOCX to PDF via SaveFormat.Pdf. The resulting PDF will not be fillable.",
+    "suggestion": "Add a disclaimer that form fields lose interactivity in the PDF output, or use Aspose.PDF to create native PDF forms with AcroFields."
+  },
+  {
+    "id": "words_comment_text_removed",
+    "issue_type": "outdated_api",
+    "severity": "error",
+    "code_regex": "\\.Text\\s*=",
+    "context_keywords": ["comment", "Comment"],
+    "missing_regex": "AppendChild\\(new Paragraph",
+    "description": "Comment.Text setter was removed in Aspose.Words v26.1.0. Code using comment.Text = \"...\" will not compile.",
+    "suggestion": "Use comment.AppendChild(new Paragraph(doc)); comment.FirstParagraph.AppendChild(new Run(doc, text));"
+  },
+  {
+    "id": "words_blank_pages_missing_builtin",
+    "issue_type": "outdated_api",
+    "severity": "error",
+    "required_regex": "RemoveBlankPages\\s*\\(\\s*\\)",
+    "intent_keywords": ["blank page", "remove blank", "empty page", "delete blank", "remove page"],
+    "content_types": ["kb"],
+    "description": "Article is about removing blank pages but does not use the built-in Document.RemoveBlankPages() method.",
+    "suggestion": "Use doc.RemoveBlankPages() — the dedicated single-call API for removing blank pages."
+  },
+  {
+    "id": "words_pdf_digital_signature_missing",
+    "issue_type": "intent_mismatch",
+    "severity": "error",
+    "required_regex": "DigitalSignatureDetails",
+    "intent_keywords": ["sign pdf", "digital signature", "signed pdf", "digitally signed"],
+    "content_types": ["kb"],
+    "description": "Article claims to produce a digitally signed PDF but does not use PdfSaveOptions.DigitalSignatureDetails. Signing the DOCX and then saving as PDF does not embed a signature in the PDF.",
+    "suggestion": "Use PdfSaveOptions { DigitalSignatureDetails = new PdfDigitalSignatureDetails(CertificateHolder.Create(...), reason, location, DateTime.Now) } and pass it to doc.Save()."
   }
 ]

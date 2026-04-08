@@ -772,4 +772,81 @@ def fix_mailmerge_use_non_merge_fields(code: str) -> Optional[Tuple[str, str]]:
 
 register_behavioral_fix('words', fix_mailmerge_use_non_merge_fields)
 
-logger.debug("words_fixes: registered 6 runtime fixes + 1 synthesis harness + 1 behavioral fix")
+
+def fix_pdf_digital_signature(code: str) -> Optional[Tuple[str, str]]:
+    """
+    Behavioral fix: replace DigitalSignatureUtil.Sign() + PDF save with
+    PdfSaveOptions.DigitalSignatureDetails for correctly signed PDF output.
+
+    DigitalSignatureUtil.Sign() creates a PKCS#7 signature on the DOCX package
+    but does NOT carry into a subsequent PDF save. The correct approach is to
+    use PdfSaveOptions.DigitalSignatureDetails when saving directly to PDF.
+
+    Catalog dependency: PdfSaveOptions, PdfDigitalSignatureDetails, CertificateHolder
+    """
+    # Gate: must contain DigitalSignatureUtil.Sign
+    sign_pattern = re.compile(
+        r'(?P<indent>^[ \t]*)'
+        r'DigitalSignatureUtil\.Sign\s*\(\s*'
+        r'(?P<args>[^)]+)\)',
+        re.MULTILINE,
+    )
+    sign_match = sign_pattern.search(code)
+    if not sign_match:
+        return None
+
+    # Must also reference PDF somewhere (save or context)
+    if 'pdf' not in code.lower() and 'Pdf' not in code:
+        return None
+
+    # Idempotency: already uses the correct approach
+    if 'DigitalSignatureDetails' in code:
+        return None
+
+    # Extract certificate info from the Sign() call arguments
+    args = sign_match.group('args')
+    indent = sign_match.group('indent')
+
+    # Try to find CertificateHolder.Create call in args or nearby
+    cert_match = re.search(
+        r'CertificateHolder\.Create\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)',
+        code,
+    )
+    cert_file = cert_match.group(1) if cert_match else "certificate.pfx"
+    cert_pass = cert_match.group(2) if cert_match else "password"
+
+    # Build the replacement: remove DigitalSignatureUtil.Sign and add
+    # PdfSaveOptions with DigitalSignatureDetails
+    replacement = (
+        f'{indent}var certHolder = CertificateHolder.Create("{cert_file}", "{cert_pass}");\n'
+        f'{indent}var pdfOptions = new PdfSaveOptions\n'
+        f'{indent}{{\n'
+        f'{indent}    DigitalSignatureDetails = new PdfDigitalSignatureDetails(\n'
+        f'{indent}        certHolder, "Signing Reason", "Location", DateTime.Now)\n'
+        f'{indent}}};\n'
+        f'{indent}doc.Save("SignedDocument.pdf", pdfOptions);'
+    )
+
+    # Replace the Sign() call with the correct approach
+    fixed = sign_pattern.sub(replacement, code, count=1)
+
+    # Remove the now-redundant plain PDF save if present in the same block
+    redundant_save = re.compile(
+        r'^[ \t]*doc\.Save\s*\(\s*"[^"]*\.pdf"\s*,\s*SaveFormat\.Pdf\s*\)\s*;[ \t]*\n?',
+        re.MULTILINE,
+    )
+    fixed = redundant_save.sub('', fixed, count=1)
+
+    if fixed == code:
+        return None
+
+    return (
+        fixed,
+        "PDF signing: replaced DigitalSignatureUtil.Sign() with "
+        "PdfSaveOptions.DigitalSignatureDetails for correctly signed PDF output",
+    )
+
+
+register_behavioral_fix('words', fix_pdf_digital_signature)
+
+logger.debug("words_fixes: registered 6 runtime fixes + 1 synthesis harness + 2 behavioral fixes")
