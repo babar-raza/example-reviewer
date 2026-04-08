@@ -15,8 +15,10 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List
+
+from .kb import KBLoadError, KnowledgeBaseLoader
+from .kb.models import ReviewHint
 
 logger = logging.getLogger(__name__)
 
@@ -32,36 +34,34 @@ class ProactiveAuditIssue:
     severity: str = "error"  # "error" | "warning"
 
 
-def load_family_hints(family: str, config_dir: str = "config/families") -> List[Dict[str, Any]]:
+def load_family_hints(family: str, config_dir: str = "config/families") -> List[ReviewHint]:
     """Load review hints for *family* from ``{config_dir}/{family}_review_hints.json``.
 
-    Returns an empty list if the file does not exist or cannot be parsed.
+    Returns an empty list if the file does not exist (valid: family has no KB yet).
+    Logs at ERROR and returns an empty list if the file is present but broken —
+    the proactive audit is an optional phase and should not hard-fail the pipeline.
     """
-    path = Path(config_dir) / f"{family}_review_hints.json"
-    if not path.exists():
-        return []
     try:
-        raw = path.read_text(encoding="utf-8")
-        return json.loads(raw)
-    except Exception as exc:
-        logger.warning("proactive_audit: failed to load hints for '%s': %s", family, exc)
+        return KnowledgeBaseLoader.load_review_hints(family, config_dir)
+    except KBLoadError as exc:
+        logger.error("proactive_audit: KB file broken for family '%s': %s", family, exc)
         return []
 
 
 def _filter_hints(
-    hints: List[Dict[str, Any]],
+    hints: List[ReviewHint],
     code: str,
     article_intent: str,
     markdown_snippet: str,
-) -> List[Dict[str, Any]]:
+) -> List[ReviewHint]:
     """Return only the hints whose ``pattern`` / ``context`` filters match."""
     context_blob = "\n".join([article_intent, markdown_snippet[:2000]]).lower()
-    matched: List[Dict[str, Any]] = []
+    matched: List[ReviewHint] = []
     for hint in hints:
-        pattern = hint.get("pattern")
+        pattern = hint.pattern
         if pattern and pattern not in code:
             continue
-        ctx_key = hint.get("context", "").lower()
+        ctx_key = (hint.context or "").lower()
         if ctx_key and ctx_key not in context_blob:
             continue
         matched.append(hint)
@@ -72,7 +72,7 @@ def run_proactive_audit(
     code: str,
     article_intent: str,
     section_heading: str,
-    family_hints: List[Dict[str, Any]],
+    family_hints: List[ReviewHint],
     llm_service,
 ) -> List[ProactiveAuditIssue]:
     """Run the top-slice LLM audit and return a list of detected issues.
@@ -84,8 +84,8 @@ def run_proactive_audit(
         code:           Current C# source code of the example.
         article_intent: Compact intent string (title + description + steps).
         section_heading: Markdown heading immediately above the code block.
-        family_hints:   Pre-filtered list of hint dicts from
-                        ``{family}_review_hints.json``.
+        family_hints:   Pre-filtered list of :class:`~src.services.kb.models.ReviewHint`
+                        objects from ``{family}_review_hints.json``.
         llm_service:    Initialised ``LLMService`` instance used for the LLM
                         call.  Must expose a ``complete()`` method that returns
                         an object with a ``.content`` attribute.
@@ -101,10 +101,10 @@ def run_proactive_audit(
         "- [{id}] {desc} "
         "(detect if code contains: {kw}) "
         "-> Correction: {corr}".format(
-            id=h.get("id", "?"),
-            desc=h.get("issue_description", h.get("hint", "")),
-            kw=", ".join(h.get("detection_keywords", [])),
-            corr=h.get("correction", ""),
+            id=h.id,
+            desc=h.hint,
+            kw=", ".join(h.detection_keywords),
+            corr=h.correction or "",
         )
         for h in family_hints
     )
