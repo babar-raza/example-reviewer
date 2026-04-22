@@ -18,3 +18,17 @@ config/families/*_review_hints.json         babar.raza@aspose.com
 
 # KB subsystem source code
 src/services/kb/                            babar.raza@aspose.com
+
+# Eval evidence — changes here affect grounded accuracy claims.
+# Require explicit sign-off to prevent baseline data from silently drifting.
+# See evals/methodology.md and CONTRIBUTING.md for the baseline update policy.
+evals/                                      babar.raza@aspose.com
+.benchmarks/                                babar.raza@aspose.com
+scripts/evals/                              babar.raza@aspose.com
+
+# Safety-critical pipeline paths
+# These files gate what gets committed back to the documentation repository.
+# Changes require explicit review.
+src/core/path_guard.py                      babar.raza@aspose.com
+src/core/provenance_guard.py                babar.raza@aspose.com
+src/pipeline/orchestrator.py                babar.raza@aspose.com
