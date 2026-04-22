@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "tolerance_pct": 1.0,
+  "total_checked": 16,
+  "passed": 16,
+  "failed": 0,
+  "results": [
+    {
+      "family": "barcode",
+      "readme_rate": 80.1,
+      "report_rate": 80.1,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "cad",
+      "readme_rate": 80.0,
+      "report_rate": 80.0,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "cells",
+      "readme_rate": 61.7,
+      "report_rate": 61.7,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "email",
+      "readme_rate": 85.0,
+      "report_rate": 85.0,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "html",
+      "readme_rate": 87.5,
+      "report_rate": 87.5,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "imaging",
+      "readme_rate": 63.6,
+      "report_rate": 63.6,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "medical",
+      "readme_rate": 6.8,
+      "report_rate": 6.8,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "ocr",
+      "readme_rate": 35.7,
+      "report_rate": 35.7,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "page",
+      "readme_rate": 0.0,
+      "report_rate": 0.0,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "pdf",
+      "readme_rate": 82.9,
+      "report_rate": 82.9,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "psd",
+      "readme_rate": 88.7,
+      "report_rate": 88.7,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "slides",
+      "readme_rate": 40.5,
+      "report_rate": 40.5,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "tasks",
+      "readme_rate": 0.0,
+      "report_rate": 0.0,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "tex",
+      "readme_rate": 82.2,
+      "report_rate": 82.2,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "words",
+      "readme_rate": 83.7,
+      "report_rate": 83.7,
+      "delta": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "zip",
+      "readme_rate": 92.4,
+      "report_rate": 92.4,
+      "delta": 0.0,
+      "status": "PASS"
+    }
+  ]
+}

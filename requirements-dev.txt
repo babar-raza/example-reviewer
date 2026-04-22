@@ -18,5 +18,8 @@ types-requests==2.32.0.20241016
 # Parallel testing
 pytest-xdist==3.6.1
 
+# Coverage reporting (publishes Cobertura XML for GitLab MR inline coverage)
+pytest-cov==5.0.0
+
 # Additional dev tools
 numpy==2.2.1
