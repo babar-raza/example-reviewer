@@ -1,0 +1,114 @@
+{
+  "schema_version": "1.0",
+  "last_verified": "2026-04-20",
+  "notes": "Machine-readable index of grounded claims in README and docs. Each entry maps a human-readable claim to an evidence file path that substantiates it.",
+  "claims": [
+    {
+      "claim_id": "CR-001",
+      "doc_file": "README.md",
+      "section": "9. Supported Families",
+      "claim_text": "ZIP — 66 discovered, 61 verified, 92.4% verified",
+      "evidence_file": "evals/family_accuracy_report.json",
+      "evidence_field": "families[family=zip].verification_rate_pct",
+      "baseline_file": ".benchmarks/baselines/zip_baseline.json",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-002",
+      "doc_file": "README.md",
+      "section": "9. Supported Families",
+      "claim_text": "Words — 147 discovered, 123 verified, 83.7% verified",
+      "evidence_file": "evals/family_accuracy_report.json",
+      "evidence_field": "families[family=words].verification_rate_pct",
+      "baseline_file": ".benchmarks/baselines/words_baseline.json",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-003",
+      "doc_file": "README.md",
+      "section": "9. Supported Families",
+      "claim_text": "PDF — 825 discovered, 684 verified, 82.9% verified",
+      "evidence_file": "evals/family_accuracy_report.json",
+      "evidence_field": "families[family=pdf].verification_rate_pct",
+      "baseline_file": ".benchmarks/baselines/pdf_baseline.json",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-004",
+      "doc_file": "README.md",
+      "section": "8.5 Self-Healing Test Data",
+      "claim_text": "5-tier fixture resolution chain",
+      "evidence_file": "src/services/fixture_resolver_service.py",
+      "evidence_field": "code_pattern:tier_1_through_5_methods",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-005",
+      "doc_file": "README.md",
+      "section": "6.4 Circuit Breaker",
+      "claim_text": "3-state circuit breaker (CLOSED/OPEN/HALF_OPEN) with recovery probe",
+      "evidence_file": "src/services/circuit_breaker.py",
+      "evidence_field": "class CircuitState enum + CircuitBreaker class",
+      "test_file": "tests/test_circuit_breaker_scenarios.py",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-006",
+      "doc_file": "README.md",
+      "section": "6.4 Circuit Breaker",
+      "claim_text": "Fallback to Ollama when primary LLM endpoint is flaky",
+      "evidence_file": "src/services/llm_service.py",
+      "evidence_field": "_call_with_fallback() method",
+      "test_file": "tests/test_degraded_mode.py",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-007",
+      "doc_file": "README.md",
+      "section": "6.6 Knowledge Base",
+      "claim_text": "KB subsystem: behavioral patterns + review hints per family",
+      "evidence_file": "src/services/kb/",
+      "evidence_field": "KnowledgeBaseLoader class",
+      "test_file": "tests/test_kb_structure.py",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-008",
+      "doc_file": "README.md",
+      "section": "Accuracy figures",
+      "claim_text": "All family accuracy figures sourced from committed baselines",
+      "evidence_file": "evals/family_accuracy_report.json",
+      "evidence_field": "root.families array",
+      "methodology_file": "evals/methodology.md",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-009",
+      "doc_file": "README.md",
+      "section": "6-phase pipeline (A-F)",
+      "claim_text": "6-phase pipeline: Discovery, Compilation, Runtime, Markdown Update, Final Review, Commit",
+      "evidence_file": "src/pipeline/orchestrator.py",
+      "evidence_field": "orchestrator class phases A-F",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-010",
+      "doc_file": "docs/architecture.md",
+      "section": "CI Validation",
+      "claim_text": "KB files validated by CI on every push",
+      "evidence_file": ".github/workflows/cli_tests.yml",
+      "evidence_field": "validate-kb job: python scripts/validate_kb.py --all",
+      "last_verified": "2026-04-20",
+      "status": "grounded"
+    }
+  ]
+}

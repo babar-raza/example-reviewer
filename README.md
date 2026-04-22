@@ -690,6 +690,13 @@ Linux/WSL: moves to `~/.cache/example_reviewer/workspaces/<timestamp>`
 To add a new family: copy any existing family JSON, update `content_roots` and `nuget_config`,
 generate the API catalog, and run `backfill`.
 
+> Accuracy figures are sourced from committed baseline measurements.
+> See [evals/family_accuracy_report.json](evals/family_accuracy_report.json) for the current
+> machine-readable data, [evals/methodology.md](evals/methodology.md) for measurement
+> methodology, and [docs/accuracy-audit.md](docs/accuracy-audit.md) for the unverified
+> fraction analysis.
+> Refresh with: `python scripts/evals/generate_baseline.py --all`
+
 ---
 
 ## 10. Documentation Map

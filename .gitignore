@@ -25,7 +25,9 @@ __pycache__/
 /validation-results/
 /local-telemetry/
 /.cache/
-/.benchmarks/
+/.benchmarks/*
+!/.benchmarks/README.md
+!/.benchmarks/baselines/
 /node_modules/
 /.claude/
 /backups/
