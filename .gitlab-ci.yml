@@ -38,6 +38,25 @@ validate-kb:
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_BRANCH == "develop"'
 
+security-scan:
+  stage: validate
+  image: python:3.10-slim
+  script:
+    - pip install --upgrade pip --quiet
+    - pip install bandit pip-audit --quiet
+    - bandit -r src/ -ll -f json -o bandit_report.json || true
+    - pip-audit -r requirements.txt --desc --output pip_audit_report.json --format json || true
+    - echo "Security scan complete — review bandit_report.json and pip_audit_report.json"
+  artifacts:
+    paths:
+      - bandit_report.json
+      - pip_audit_report.json
+    expire_in: 30 days
+  allow_failure: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
 static-analysis:
   stage: validate
   image: python:3.10-slim
@@ -79,6 +98,7 @@ unit-tests:
       --cov-report=term-missing
       --cov-report=xml:coverage.xml
       --cov-report=html:coverage_html/
+      --cov-fail-under=50
       -m "not integration and not runtime"
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:

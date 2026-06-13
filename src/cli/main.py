@@ -23,13 +23,20 @@ from ..mcp_tools.tools import ExampleReviewerTools, ToolResult
 
 
 def setup_logging(verbose: bool = False) -> None:
-    """Configure logging for CLI."""
+    """Configure logging for CLI.
+
+    Uses JSON-structured logging when available, falls back to plain text.
+    """
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
+    try:
+        from ..core.logging_config import setup_structured_logging
+        setup_structured_logging(level=level)
+    except Exception:
+        logging.basicConfig(
+            level=level,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[logging.StreamHandler(sys.stdout)]
+        )
 
 
 def is_risky_path(path: Path) -> Tuple[bool, str]:
