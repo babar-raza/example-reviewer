@@ -82,6 +82,8 @@ Thumbs.db
 /pipeline_full.log
 
 !/requirements.txt
+!/aprv_self_assessment.json
+!/repo_signals.json
 !/requirements-dev.txt
 
 # Root temporary project management files

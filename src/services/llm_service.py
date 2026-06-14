@@ -2227,10 +2227,8 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
             # multiple tool_calls (Instructor asserts exactly 1).
             # Mode.JSON uses response_format={"type":"json_object"} instead.
             _instructor_mode = instructor.Mode.JSON
-            client = instructor.from_openai(self._client, mode=_instructor_mode)
-
-            # Make the request with automatic schema enforcement
             _instructor_start = time.time()
+            client = instructor.from_openai(self._client, mode=_instructor_mode)
 
             # Build request parameters
             request_params = {

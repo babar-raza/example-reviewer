@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0",
+  "assessed_at": "2026-06-14T09:16:36.982587+00:00",
+  "agentic": {
+    "level": "A5",
+    "evidence": [
+      "six_phase_pipeline",
+      "circuit_breaker",
+      "sqlite_state_machine",
+      "run_evidence_emission",
+      "post_run_supervisor",
+      "learned_patterns_service",
+      "mcp_tool_surface",
+      "post_run_auto_learn",
+      "schedule_based_enqueue",
+      "stuck_run_detection"
+    ]
+  },
+  "practices": {
+    "level": "P5",
+    "evidence": [
+      "ci_pipeline",
+      "test_suite",
+      "security_tests",
+      "smoke_tests",
+      "local_quality_gate",
+      "contributing_guidelines",
+      "codeowners",
+      "real_integration_tests",
+      "trend_analysis"
+    ]
+  },
+  "readiness": {
+    "level": "R4",
+    "evidence": [
+      "dockerfile",
+      "docker_compose",
+      "agents_md",
+      "changelog",
+      "security_policy",
+      "architecture_decision_records",
+      "structured_logging"
+    ]
+  },
+  "verification": {
+    "level": "V4",
+    "evidence": [
+      "claim_registry",
+      "eval_methodology",
+      "accuracy_baselines",
+      "consistency_checker",
+      "state_drift_detector",
+      "repo_signal_generator"
+    ]
+  }
+}

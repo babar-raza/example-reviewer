@@ -33,7 +33,7 @@ setup(
             "example-reviewer=src.cli.main:main",
         ],
     },
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     description="Automated code example validation and review pipeline",
     author="Aspose",
     license="MIT",

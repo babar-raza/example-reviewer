@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "last_verified": "2026-04-20",
-  "notes": "Machine-readable index of grounded claims in README and docs. Each entry maps a human-readable claim to an evidence file path that substantiates it.",
+  "last_verified": "2026-06-13",
+  "notes": "Machine-readable index of claims in README and docs. Each entry maps a human-readable claim to an evidence file path. Status reflects evidence integrity: 'grounded' means independently verified, 'self-reported' means evidence chain is circular (README figures fed into report, then cited back), 'partial' means some evidence exists but is incomplete.",
   "claims": [
     {
       "claim_id": "CR-001",
@@ -11,8 +11,9 @@
       "evidence_file": "evals/family_accuracy_report.json",
       "evidence_field": "families[family=zip].verification_rate_pct",
       "baseline_file": ".benchmarks/baselines/zip_baseline.json",
-      "last_verified": "2026-04-20",
-      "status": "grounded"
+      "last_verified": "2026-06-13",
+      "status": "self-reported",
+      "grounding_gap": "Evidence chain is circular: family_accuracy_report.json was generated from README-documented figures (see evals/methodology.md). Independent grounding requires re-running generate_baseline.py against the production database."
     },
     {
       "claim_id": "CR-002",
@@ -22,8 +23,9 @@
       "evidence_file": "evals/family_accuracy_report.json",
       "evidence_field": "families[family=words].verification_rate_pct",
       "baseline_file": ".benchmarks/baselines/words_baseline.json",
-      "last_verified": "2026-04-20",
-      "status": "grounded"
+      "last_verified": "2026-06-13",
+      "status": "self-reported",
+      "grounding_gap": "Evidence chain is circular: family_accuracy_report.json was generated from README-documented figures (see evals/methodology.md). Independent grounding requires re-running generate_baseline.py against the production database."
     },
     {
       "claim_id": "CR-003",
@@ -33,8 +35,9 @@
       "evidence_file": "evals/family_accuracy_report.json",
       "evidence_field": "families[family=pdf].verification_rate_pct",
       "baseline_file": ".benchmarks/baselines/pdf_baseline.json",
-      "last_verified": "2026-04-20",
-      "status": "grounded"
+      "last_verified": "2026-06-13",
+      "status": "self-reported",
+      "grounding_gap": "Evidence chain is circular: family_accuracy_report.json was generated from README-documented figures (see evals/methodology.md). Independent grounding requires re-running generate_baseline.py against the production database."
     },
     {
       "claim_id": "CR-004",
@@ -43,7 +46,7 @@
       "claim_text": "5-tier fixture resolution chain",
       "evidence_file": "src/services/fixture_resolver_service.py",
       "evidence_field": "code_pattern:tier_1_through_5_methods",
-      "last_verified": "2026-04-20",
+      "last_verified": "2026-06-13",
       "status": "grounded"
     },
     {
@@ -54,7 +57,7 @@
       "evidence_file": "src/services/circuit_breaker.py",
       "evidence_field": "class CircuitState enum + CircuitBreaker class",
       "test_file": "tests/test_circuit_breaker_scenarios.py",
-      "last_verified": "2026-04-20",
+      "last_verified": "2026-06-13",
       "status": "grounded"
     },
     {
@@ -65,7 +68,7 @@
       "evidence_file": "src/services/llm_service.py",
       "evidence_field": "_call_with_fallback() method",
       "test_file": "tests/test_degraded_mode.py",
-      "last_verified": "2026-04-20",
+      "last_verified": "2026-06-13",
       "status": "grounded"
     },
     {
@@ -76,7 +79,7 @@
       "evidence_file": "src/services/kb/",
       "evidence_field": "KnowledgeBaseLoader class",
       "test_file": "tests/test_kb_structure.py",
-      "last_verified": "2026-04-20",
+      "last_verified": "2026-06-13",
       "status": "grounded"
     },
     {
@@ -87,8 +90,9 @@
       "evidence_file": "evals/family_accuracy_report.json",
       "evidence_field": "root.families array",
       "methodology_file": "evals/methodology.md",
-      "last_verified": "2026-04-20",
-      "status": "grounded"
+      "last_verified": "2026-06-13",
+      "status": "partial",
+      "grounding_gap": "3 families (psd, barcode, ocr) lack config files and committed baselines. Only 13/16 production families have verifiable baseline data."
     },
     {
       "claim_id": "CR-009",
@@ -97,7 +101,7 @@
       "claim_text": "6-phase pipeline: Discovery, Compilation, Runtime, Markdown Update, Final Review, Commit",
       "evidence_file": "src/pipeline/orchestrator.py",
       "evidence_field": "orchestrator class phases A-F",
-      "last_verified": "2026-04-20",
+      "last_verified": "2026-06-13",
       "status": "grounded"
     },
     {
@@ -105,9 +109,9 @@
       "doc_file": "docs/architecture.md",
       "section": "CI Validation",
       "claim_text": "KB files validated by CI on every push",
-      "evidence_file": ".github/workflows/cli_tests.yml",
+      "evidence_file": ".gitlab-ci.yml",
       "evidence_field": "validate-kb job: python scripts/validate_kb.py --all",
-      "last_verified": "2026-04-20",
+      "last_verified": "2026-06-13",
       "status": "grounded"
     }
   ]

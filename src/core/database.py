@@ -444,6 +444,27 @@ class Database:
     CREATE INDEX IF NOT EXISTS idx_rejection_example ON drift_rejections(example_id);
     CREATE INDEX IF NOT EXISTS idx_rejection_run ON drift_rejections(run_id);
     CREATE INDEX IF NOT EXISTS idx_rejection_phase ON drift_rejections(phase);
+
+    -- Work queue table (TC-06: autonomous task selection)
+    CREATE TABLE IF NOT EXISTS work_queue (
+        queue_id TEXT PRIMARY KEY,
+        family TEXT NOT NULL,
+        trigger_source TEXT NOT NULL DEFAULT 'manual',
+        priority INTEGER NOT NULL DEFAULT 5,
+        status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'claimed', 'completed', 'failed', 'cancelled')),
+        max_examples INTEGER,
+        skip_llm INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        claimed_at TEXT,
+        completed_at TEXT,
+        run_id TEXT,
+        error TEXT,
+        FOREIGN KEY (run_id) REFERENCES run_records(run_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_work_queue_status ON work_queue(status, priority DESC);
+    CREATE INDEX IF NOT EXISTS idx_work_queue_family ON work_queue(family);
     """
     
     def __init__(
@@ -718,6 +739,7 @@ class Database:
                 'run_fingerprints',
                 'semantic_signatures',
                 'drift_rejections',
+                'work_queue',  # Added: in SCHEMA but was missing from this set
             }
 
             # Check if we have the base schema tables (or subset)
@@ -3960,3 +3982,88 @@ class Database:
                 "by_phase": by_phase,
                 "by_reason": by_reason,
             }
+
+    # ── TC-06: Work Queue Methods ──────────────────────────────────
+
+    def enqueue_work(
+        self,
+        family: str,
+        trigger_source: str = "manual",
+        priority: int = 5,
+        max_examples: Optional[int] = None,
+        skip_llm: bool = False,
+    ) -> str:
+        """Enqueue a work item for autonomous processing."""
+        import uuid
+        queue_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO work_queue
+                    (queue_id, family, trigger_source, priority, status,
+                     max_examples, skip_llm, created_at)
+                VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+            """, (queue_id, family, trigger_source, priority,
+                  max_examples, 1 if skip_llm else 0, now))
+            conn.commit()
+
+        logger.info(f"Enqueued work: {queue_id} family={family} priority={priority}")
+        return queue_id
+
+    def poll_next_work(self) -> Optional[Dict[str, Any]]:
+        """
+        Atomically claim the highest-priority pending work item.
+        Returns the work item dict or None if queue is empty.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self._write_lock:
+            with self.get_connection() as conn:
+                row = conn.execute("""
+                    SELECT queue_id, family, trigger_source, priority,
+                           max_examples, skip_llm, created_at
+                    FROM work_queue
+                    WHERE status = 'pending'
+                    ORDER BY priority DESC, created_at ASC
+                    LIMIT 1
+                """).fetchone()
+
+                if not row:
+                    return None
+
+                queue_id = row["queue_id"]
+                conn.execute("""
+                    UPDATE work_queue
+                    SET status = 'claimed', claimed_at = ?
+                    WHERE queue_id = ? AND status = 'pending'
+                """, (now, queue_id))
+                conn.commit()
+
+                return {
+                    "queue_id": queue_id,
+                    "family": row["family"],
+                    "trigger_source": row["trigger_source"],
+                    "priority": row["priority"],
+                    "max_examples": row["max_examples"],
+                    "skip_llm": bool(row["skip_llm"]),
+                }
+
+    def complete_work(
+        self,
+        queue_id: str,
+        run_id: Optional[str] = None,
+        success: bool = True,
+        error: Optional[str] = None,
+    ) -> None:
+        """Mark a work queue item as completed or failed."""
+        now = datetime.now(timezone.utc).isoformat()
+        status = "completed" if success else "failed"
+
+        with self.get_connection() as conn:
+            conn.execute("""
+                UPDATE work_queue
+                SET status = ?, completed_at = ?, run_id = ?, error = ?
+                WHERE queue_id = ?
+            """, (status, now, run_id, error, queue_id))
+            conn.commit()

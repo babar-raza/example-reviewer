@@ -1,5 +1,7 @@
 ---
-# Example Reviewer — GitLab CI Pipeline
+# Example Reviewer — GitLab CI Pipeline (AUTHORITATIVE)
+# GitHub Actions (.github/workflows/cli_tests.yml) is a legacy subset
+# retained for mirror compatibility. All new CI jobs go here.
 #
 # Stages:
 #   validate  — KB validation + static analysis + risky-diff check (MRs only)
@@ -44,7 +46,9 @@ security-scan:
   script:
     - pip install --upgrade pip --quiet
     - pip install bandit pip-audit --quiet
-    - bandit -r src/ -ll -f json -o bandit_report.json || true
+    # TC-03-UPDATE: bandit must be able to fail the job (no blanket || true)
+    - bandit -r src/ -ll -f json -o bandit_report.json
+    # pip-audit: allow soft failure for transient PyPI issues, but report is still generated
     - pip-audit -r requirements.txt --desc --output pip_audit_report.json --format json || true
     - echo "Security scan complete — review bandit_report.json and pip_audit_report.json"
   artifacts:
@@ -52,7 +56,16 @@ security-scan:
       - bandit_report.json
       - pip_audit_report.json
     expire_in: 30 days
-  allow_failure: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+consistency-check:
+  <<: *python-setup
+  stage: validate
+  script:
+    - python scripts/validation/check_doc_code_consistency.py
+    - python scripts/validation/generate_repo_signals.py
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -76,12 +89,10 @@ risky-diff-check:
     - apt-get update -qq && apt-get install -y -qq git
   script:
     # Warn when risky files are changed without accompanying test changes.
-    # --warn-only exits 0 so the pipeline is not blocked; change to --strict
-    # once the team has adopted the policy (see CONTRIBUTING.md).
-    - python scripts/validation/check_risky_diff.py --warn-only
+    # --strict exits non-zero when risky files change without test updates.
+    - python scripts/validation/check_risky_diff.py --strict
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-  allow_failure: true
 
 # ===========================================================================
 # Stage: test
@@ -136,6 +147,25 @@ fallback-tests:
     - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_BRANCH == "develop"'
 
+integration-tests:
+  <<: *python-setup
+  stage: test
+  script:
+    - pip install -r requirements-dev.txt --quiet
+    - >
+      pytest tests/test_integration_real.py
+      -v --timeout=120
+      -m "integration"
+      --tb=short
+      --junit-xml=integration_test_results.xml
+  artifacts:
+    reports:
+      junit: integration_test_results.xml
+    expire_in: 30 days
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
 # ===========================================================================
 # Stage: eval
 # ===========================================================================
@@ -150,9 +180,6 @@ eval-baseline-check:
     paths:
       - evals/ci_eval_report.json
     expire_in: 30 days
-  # allow_failure: true so an outdated eval never blocks a merge.
-  # Tighten to allow_failure: false once the team refreshes baselines regularly.
-  allow_failure: true
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'

@@ -232,7 +232,56 @@ class PipelineOrchestrator:
             'failures': 0,
             'models_used': set(),
         }
-    
+    # -- TC-10: Transient error categories for phase-level retry --
+    _TRANSIENT_ERRORS = (
+        subprocess.TimeoutExpired,
+        PermissionError,
+        ConnectionError,
+        TimeoutError,
+    )
+
+    @staticmethod
+    def _is_transient(exc: Exception) -> bool:
+        """Return True if the exception is transient and the phase should be retried."""
+        import sqlite3
+        if isinstance(exc, PipelineOrchestrator._TRANSIENT_ERRORS):
+            return True
+        if isinstance(exc, sqlite3.OperationalError) and "database is locked" in str(exc):
+            return True
+        if isinstance(exc, OSError) and exc.errno in (28, 5):  # ENOSPC, EIO
+            return False  # disk full / IO error — not transient
+        if isinstance(exc, subprocess.CalledProcessError):
+            # Timeout-like exit codes (137=SIGKILL, 124=timeout utility)
+            return exc.returncode in (124, 137)
+        return False
+
+    def _run_phase_with_retry(self, phase_name: str, phase_fn, *args,
+                              max_retries: int = 2, **kwargs):
+        """Run a pipeline phase with retry on transient errors.
+
+        Non-transient errors (config missing, schema error) propagate immediately.
+        Transient errors (subprocess timeout, database locked) are retried up to
+        *max_retries* times with exponential backoff (1s, 2s).
+        """
+        import time
+        last_exc = None
+        for attempt in range(1 + max_retries):
+            try:
+                return phase_fn(*args, **kwargs)
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_retries and self._is_transient(exc):
+                    wait = 2 ** attempt  # 1s, 2s
+                    logger.warning(
+                        f"Phase {phase_name} attempt {attempt + 1} failed with "
+                        f"transient error ({type(exc).__name__}: {exc}), "
+                        f"retrying in {wait}s..."
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
+        raise last_exc  # unreachable, but satisfies type checkers
+
     @property
     def llm_service(self) -> LLMService:
         """Get or initialize LLM service."""
@@ -1255,19 +1304,21 @@ class PipelineOrchestrator:
                     'promoted': cs_file_promoted,
                 }
 
-            # Phase B: Compilation
+            # Phase B: Compilation (with transient-error retry — TC-10)
             logger.info(f"Phase B: Compilation verification for {family}")
             with track_phase_timing(self.db, run_id, family, "compilation"):
-                compile_stats = self._run_compilation_phase(
+                compile_stats = self._run_phase_with_retry(
+                    "B:Compilation", self._run_compilation_phase,
                     run_id, family, family_config, max_examples, skip_llm_fixes, strategy_config
                 )
             results['phases']['compilation'] = compile_stats
 
-            # Phase C: Runtime (optional)
+            # Phase C: Runtime (optional, with transient-error retry — TC-10)
             if not skip_runtime:
                 logger.info(f"Phase C: Runtime verification for {family}")
                 with track_phase_timing(self.db, run_id, family, "runtime"):
-                    runtime_stats = self._run_runtime_phase(
+                    runtime_stats = self._run_phase_with_retry(
+                        "C:Runtime", self._run_runtime_phase,
                         run_id, family, family_config, max_examples, skip_llm_fixes, skip_llm_runtime_fixes
                     )
                 results['phases']['runtime'] = runtime_stats
@@ -1517,8 +1568,22 @@ class PipelineOrchestrator:
                     except Exception:
                         pass
 
+            # TC-01: Emit run evidence manifest (always, regardless of success/failure)
+            try:
+                from .evidence import emit_run_evidence
+                emit_run_evidence(run_id=run_id, family=family, results=results, db=self.db)
+            except Exception as ev_err:
+                logger.debug(f"Evidence manifest emission skipped: {ev_err}")
+
+            # TC-08: Run supervisor analysis (post-run)
+            try:
+                from .supervisor import analyze_run
+                analyze_run(run_id=run_id, family=family, results=results, db=self.db)
+            except Exception as sup_err:
+                logger.debug(f"Supervisor analysis skipped: {sup_err}")
+
         return results
-    
+
     def _run_discovery_phase(
         self,
         run_id: str,

@@ -1,3 +1,6 @@
+# DEPRECATED: Primary CI is .gitlab-ci.yml (GitLab CI).
+# This file is retained for GitHub mirror compatibility only.
+# All new CI jobs should be added to .gitlab-ci.yml.
 name: CLI Tests
 
 on:

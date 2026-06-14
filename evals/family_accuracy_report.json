@@ -4,7 +4,9 @@
   "methodology_ref": "evals/methodology.md",
   "generated_by": "scripts/evals/generate_baseline.py",
   "pipeline_version": "7f29b20",
-  "notes": "Figures sourced from README Section 9 production-run data. Run `python scripts/evals/generate_baseline.py --all --db-path <prod.db>` to refresh from the production database.",
+  "data_source": "readme_documented_production_run",
+  "data_source_note": "WARNING: These figures were sourced from README Section 9, not from an independent production DB query. Run `python scripts/evals/generate_baseline.py --all --db-path <prod.db>` to refresh from the production database and change data_source to 'production_db_query'.",
+  "circular_evidence_risk": true,
   "families": [
     {
       "family": "zip",
@@ -21,7 +23,7 @@
     {
       "family": "psd",
       "display_name": "Aspose.PSD",
-      "config_file": null,
+      "config_file": "config/families/psd.json",
       "baseline_file": null,
       "discovered": 391,
       "verified": 347,
@@ -29,7 +31,7 @@
       "status": "production",
       "last_measured": "2026-04-20",
       "kb_coverage": "none",
-      "notes": "Config file not present in config/families/; baseline pending config addition."
+      "notes": "Config scaffolded; content_roots empty. Baseline pending production DB run."
     },
     {
       "family": "html",
@@ -94,7 +96,7 @@
     {
       "family": "barcode",
       "display_name": "Aspose.Barcode",
-      "config_file": null,
+      "config_file": "config/families/barcode.json",
       "baseline_file": null,
       "discovered": 201,
       "verified": 161,
@@ -102,7 +104,7 @@
       "status": "production",
       "last_measured": "2026-04-20",
       "kb_coverage": "none",
-      "notes": "Config file not present in config/families/; baseline pending config addition."
+      "notes": "Config scaffolded; content_roots empty. Baseline pending production DB run."
     },
     {
       "family": "cad",
@@ -155,7 +157,7 @@
     {
       "family": "ocr",
       "display_name": "Aspose.OCR",
-      "config_file": null,
+      "config_file": "config/families/ocr.json",
       "baseline_file": null,
       "discovered": 115,
       "verified": 41,
@@ -163,7 +165,7 @@
       "status": "production",
       "last_measured": "2026-04-20",
       "kb_coverage": "none",
-      "notes": "Config file not present in config/families/; baseline pending config addition."
+      "notes": "Config scaffolded; content_roots empty. Baseline pending production DB run."
     },
     {
       "family": "medical",

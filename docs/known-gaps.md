@@ -1,6 +1,8 @@
 ﻿# Known Gaps and Repo Health Checklist
 
-This documentation is derived from the current archive contents. There are several structural gaps that may prevent the project from running end-to-end as-is.
+> Last verified: 2026-06-13
+
+This document tracks structural gaps that may affect the project. Resolved items are marked accordingly.
 
 ## Missing Source Files Referenced by Imports or Bytecode
 
@@ -12,19 +14,15 @@ Some folders contain only `__pycache__` entries for modules that are not present
 
 If any runtime path imports these modules, you will get `ModuleNotFoundError`.
 
-## No Root README, Packaging, or Dependency Manifest
+## ~~No Root README, Packaging, or Dependency Manifest~~ (RESOLVED)
 
-This archive has no:
+All of the following now exist:
 
-- `README.md`
-- `pyproject.toml` / `requirements.txt`
-- `setup.py`
+- `README.md` (740+ lines)
+- `requirements.txt` (pinned dependencies, Python >= 3.10)
+- `setup.py` (version 1.0.0, `python_requires=">=3.10"`)
 
-Without these, it is unclear:
-
-- Which Python version is targeted
-- Which dependencies are required (OpenAI SDK, GitPython, ChromaDB, etc.)
-- How to install or run the CLI consistently
+Install: `pip install -r requirements.txt` or `pip install -e .`
 
 ## Config Schema Mismatch
 
@@ -37,20 +35,19 @@ If those features are desired, they must be added to `FamilyConfig` and `_parse_
 - Some family configs contain absolute Windows paths (`D:/...`).
 - The code writes temporary projects and executes `dotnet`, which requires a .NET SDK.
 
-## Minimal Test Coverage in This Archive
+## ~~Minimal Test Coverage in This Archive~~ (RESOLVED)
 
-No `tests/` directory is included. Recommended next steps:
+The `tests/` directory contains 70+ test files covering unit tests, fallback scenarios, security baselines, and package smoke tests. Coverage threshold is enforced at 50% in CI.
 
-- Add unit tests for discovery filtering, code wrapping, write guards, and drift checks.
-- Add an integration test that runs a small family through `extract -> compile-verify -> runtime-verify` using `test-content/` and `test-data/`.
+**Remaining gap:** All tests use mocks; no integration tests exercise real external services (LLM, .NET SDK). See `tests/test_integration_real.py` for narrow integration tests that exercise real config loading and database creation without external deps.
 
 ## Checklist for Hardening
 
-- [ ] Add `README.md` with quickstart and prerequisites
-- [ ] Add dependency manifest (`requirements.txt` or `pyproject.toml`)
-- [ ] Restore missing source modules or remove dead imports
-- [ ] Add tests and CI wiring
-- [ ] Normalize config paths (no absolute machine-specific paths)
+- [x] Add `README.md` with quickstart and prerequisites — see README.md (740+ lines)
+- [x] Add dependency manifest (`requirements.txt` or `pyproject.toml`) — requirements.txt and setup.py present
+- [x] Add tests and CI wiring — 70+ test files; CI in .gitlab-ci.yml
+- [ ] Restore missing source modules or remove dead imports — `src/patching/`, `src/validation/analysis/`, `src/discovery/` still have only `__pycache__` with no `.py` sources
+- [ ] Normalize config paths (no absolute machine-specific paths) — some `config/families/*.json` still use absolute Windows paths (`D:/...`)
 - [ ] Document how artifacts and DB are stored and cleaned between runs
 
 ## How to Validate Safely
@@ -109,7 +106,7 @@ PYTHONPATH=. python -m src.cli.main backfill --family zip --force
 ### Why
 Migration reliability hardening was implemented in `src/core/database.py` to:
 1. Skip duplicate-prone `ALTER TABLE ... ADD COLUMN run_id` statements in migration 008 when columns already exist.
-2. Correct fresh DB baseline detection by aligning `_is_fresh_database()` base table inventory with current schema tables.
+2. Correct fresh DB baseline detection by aligning `_is_fresh_database()` base table inventory with current schema tables. **Note (2026-06-13):** The 2026-02-12 fix covered migration 008 but `work_queue` was still missing from `base_tables`, causing migration 009 to fail on fresh DBs. Fixed in this sprint by adding `work_queue` to `base_tables`.
 
 ### Evidence
 - `reports/agents/agent_c/MIG-008-TEST/run_20260212_175551/artifacts/pytest_full.log`
