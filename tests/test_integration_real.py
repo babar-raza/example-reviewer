@@ -326,6 +326,333 @@ class TestConsistencyChecker:
         assert not real_issues, f"Claim validation issues:\n" + "\n".join(real_issues)
 
 
+# PipelineOrchestrator import may fail due to pydantic_settings issue.
+try:
+    from src.pipeline.orchestrator import PipelineOrchestrator
+    ORCHESTRATOR_AVAILABLE = True
+except ImportError:
+    ORCHESTRATOR_AVAILABLE = False
+
+
+@pytest.mark.integration
+class TestPhaseRetry:
+    """Test phase-level retry and transient error classification (TC-10)."""
+
+    @pytest.mark.skipif(not ORCHESTRATOR_AVAILABLE, reason="pydantic_settings import error")
+    def test_is_transient_timeout(self):
+        """TimeoutExpired is classified as transient."""
+        import subprocess
+        exc = subprocess.TimeoutExpired(cmd="dotnet build", timeout=60)
+        assert PipelineOrchestrator._is_transient(exc) is True
+
+    @pytest.mark.skipif(not ORCHESTRATOR_AVAILABLE, reason="pydantic_settings import error")
+    def test_is_transient_permission_error(self):
+        """PermissionError is classified as transient."""
+        assert PipelineOrchestrator._is_transient(PermissionError("access denied")) is True
+
+    @pytest.mark.skipif(not ORCHESTRATOR_AVAILABLE, reason="pydantic_settings import error")
+    def test_is_transient_connection_error(self):
+        """ConnectionError is classified as transient."""
+        assert PipelineOrchestrator._is_transient(ConnectionError("refused")) is True
+
+    @pytest.mark.skipif(not ORCHESTRATOR_AVAILABLE, reason="pydantic_settings import error")
+    def test_is_transient_database_locked(self):
+        """sqlite3.OperationalError with 'database is locked' is transient."""
+        exc = sqlite3.OperationalError("database is locked")
+        assert PipelineOrchestrator._is_transient(exc) is True
+
+    @pytest.mark.skipif(not ORCHESTRATOR_AVAILABLE, reason="pydantic_settings import error")
+    def test_is_not_transient_value_error(self):
+        """ValueError is NOT transient."""
+        assert PipelineOrchestrator._is_transient(ValueError("bad value")) is False
+
+    @pytest.mark.skipif(not ORCHESTRATOR_AVAILABLE, reason="pydantic_settings import error")
+    def test_is_transient_called_process_error_137(self):
+        """CalledProcessError with returncode 137 (OOM kill) is transient."""
+        import subprocess
+        exc = subprocess.CalledProcessError(returncode=137, cmd="dotnet run")
+        assert PipelineOrchestrator._is_transient(exc) is True
+
+    @pytest.mark.skipif(not ORCHESTRATOR_AVAILABLE, reason="pydantic_settings import error")
+    def test_is_not_transient_called_process_error_1(self):
+        """CalledProcessError with returncode 1 (normal failure) is NOT transient."""
+        import subprocess
+        exc = subprocess.CalledProcessError(returncode=1, cmd="dotnet build")
+        assert PipelineOrchestrator._is_transient(exc) is False
+
+    @pytest.mark.skipif(not ORCHESTRATOR_AVAILABLE, reason="pydantic_settings import error")
+    def test_is_not_transient_operational_error_other(self):
+        """sqlite3.OperationalError without 'database is locked' is NOT transient."""
+        exc = sqlite3.OperationalError("no such table: foo")
+        assert PipelineOrchestrator._is_transient(exc) is False
+
+
+@pytest.mark.integration
+class TestStuckRunDetector:
+    """Test stuck-run detection (TC-11)."""
+
+    def test_detect_stuck_runs(self):
+        """Detects runs stuck in non-terminal status past threshold."""
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.ops.detect_stuck_runs import detect_stuck_runs
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""CREATE TABLE run_records (
+                run_id TEXT, family TEXT, started_at TEXT,
+                status TEXT, current_phase TEXT, completed_at TEXT, error TEXT
+            )""")
+            # Insert a run started 5 hours ago still "running"
+            from datetime import datetime, timezone, timedelta
+            old_time = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+            conn.execute(
+                "INSERT INTO run_records VALUES (?,?,?,?,?,?,?)",
+                ("run-old", "zip", old_time, "running", "B", None, None),
+            )
+            # Insert a recent run (should NOT be detected)
+            recent_time = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "INSERT INTO run_records VALUES (?,?,?,?,?,?,?)",
+                ("run-recent", "words", recent_time, "running", "A", None, None),
+            )
+            conn.commit()
+            conn.close()
+
+            stuck = detect_stuck_runs(db_path, threshold_hours=2)
+            assert len(stuck) == 1
+            assert stuck[0]["run_id"] == "run-old"
+            assert stuck[0]["family"] == "zip"
+
+    def test_detect_no_stuck_runs(self):
+        """Returns empty list when no runs are stuck."""
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.ops.detect_stuck_runs import detect_stuck_runs
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""CREATE TABLE run_records (
+                run_id TEXT, family TEXT, started_at TEXT,
+                status TEXT, current_phase TEXT, completed_at TEXT, error TEXT
+            )""")
+            conn.commit()
+            conn.close()
+
+            stuck = detect_stuck_runs(db_path, threshold_hours=2)
+            assert stuck == []
+
+
+@pytest.mark.integration
+class TestScheduleEnqueue:
+    """Test schedule-based work enqueue (TC-07)."""
+
+    def test_find_stale_families(self):
+        """Finds families whose last success is older than threshold."""
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.ops.enqueue_scheduled import find_stale_families
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""CREATE TABLE run_records (
+                run_id TEXT, family TEXT, started_at TEXT, completed_at TEXT,
+                status TEXT, examples_processed INT, examples_successful INT, examples_failed INT
+            )""")
+            from datetime import datetime, timezone, timedelta
+            # Family with old successful run (10 days ago)
+            old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+            conn.execute(
+                "INSERT INTO run_records VALUES (?,?,?,?,?,?,?,?)",
+                ("run-1", "zip", old_time, old_time, "completed", 10, 8, 2),
+            )
+            # Family with recent successful run (1 day ago) — should NOT be stale
+            recent_time = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+            conn.execute(
+                "INSERT INTO run_records VALUES (?,?,?,?,?,?,?,?)",
+                ("run-2", "words", recent_time, recent_time, "completed", 5, 5, 0),
+            )
+            conn.commit()
+            conn.close()
+
+            stale = find_stale_families(db_path, stale_days=7)
+            stale_names = [s["family"] for s in stale]
+            assert "zip" in stale_names
+            assert "words" not in stale_names
+
+
+@pytest.mark.integration
+class TestTrendAnalysis:
+    """Test cross-run trend analysis (TC-13)."""
+
+    def test_analyze_trends(self):
+        """Trend analysis produces correct structure with multiple runs."""
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.ops.run_trend_analysis import analyze_trends
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""CREATE TABLE run_records (
+                run_id TEXT, family TEXT, started_at TEXT, completed_at TEXT,
+                status TEXT, examples_processed INT, examples_successful INT, examples_failed INT
+            )""")
+            conn.execute("""CREATE TABLE example_run_state (
+                example_id TEXT, run_id TEXT, status TEXT,
+                failure_reason TEXT, escalation_reason TEXT
+            )""")
+            conn.execute("""CREATE TABLE failure_details (
+                example_id TEXT, run_id TEXT, failure_category TEXT,
+                error_category TEXT, resolution TEXT
+            )""")
+
+            from datetime import datetime, timezone, timedelta
+            # 3 runs for family "zip"
+            for i, (run_id, days_ago, verified, failed) in enumerate([
+                ("run-3", 1, 8, 2),
+                ("run-2", 4, 6, 4),
+                ("run-1", 7, 5, 5),
+            ]):
+                ts = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+                conn.execute(
+                    "INSERT INTO run_records VALUES (?,?,?,?,?,?,?,?)",
+                    (run_id, "zip", ts, ts, "completed", verified + failed, verified, failed),
+                )
+                for j in range(verified):
+                    conn.execute(
+                        "INSERT INTO example_run_state VALUES (?,?,?,?,?)",
+                        (f"ex-{i}-v{j}", run_id, "VERIFIED", None, None),
+                    )
+                for j in range(failed):
+                    conn.execute(
+                        "INSERT INTO example_run_state VALUES (?,?,?,?,?)",
+                        (f"ex-{i}-f{j}", run_id, "COMPILE_FAILED", "error CS0246", None),
+                    )
+                    conn.execute(
+                        "INSERT INTO failure_details VALUES (?,?,?,?,?)",
+                        (f"ex-{i}-f{j}", run_id, "compilation", "CS0246", "pending"),
+                    )
+
+            conn.commit()
+            conn.close()
+
+            result = analyze_trends(db_path, "zip", last_n=5)
+            assert result["family"] == "zip"
+            assert result["runs_found"] == 3
+            assert "verification_rate_trend" in result
+            assert result["verification_rate_trend"]["direction"] in ("improving", "stable", "declining")
+            assert len(result["runs"]) == 3
+            # Most recent run (run-3) has 80% rate
+            assert result["runs"][0]["verification_rate"] == 80.0
+
+    def test_analyze_trends_no_runs(self):
+        """Trend analysis handles no-data gracefully."""
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.ops.run_trend_analysis import analyze_trends
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""CREATE TABLE run_records (
+                run_id TEXT, family TEXT, started_at TEXT, completed_at TEXT,
+                status TEXT, examples_processed INT, examples_successful INT, examples_failed INT
+            )""")
+            conn.commit()
+            conn.close()
+
+            result = analyze_trends(db_path, "nonexistent", last_n=5)
+            assert result["runs_found"] == 0
+            assert result["trends"] == []
+
+
+@pytest.mark.integration
+class TestStateDriftDetector:
+    """Test state-code drift detection (TC-15)."""
+
+    def test_detect_drift_missing_file(self):
+        """Drift detector catches verified examples with missing markdown files."""
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.validation.check_state_drift import check_state_drift
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""CREATE TABLE example_records (
+                example_id TEXT, file_path TEXT, family TEXT
+            )""")
+            conn.execute("""CREATE TABLE example_run_state (
+                example_id TEXT, run_id TEXT, status TEXT,
+                failure_reason TEXT, escalation_reason TEXT
+            )""")
+            # A verified example pointing to a non-existent file
+            conn.execute(
+                "INSERT INTO example_records VALUES (?,?,?)",
+                ("ex1", "/nonexistent/path/example.md", "zip"),
+            )
+            conn.execute(
+                "INSERT INTO example_run_state VALUES (?,?,?,?,?)",
+                ("ex1", "run-1", "VERIFIED", None, None),
+            )
+            # A verified example pointing to an existing file
+            real_file = Path(tmpdir) / "real_example.md"
+            real_file.write_text("# Real example")
+            conn.execute(
+                "INSERT INTO example_records VALUES (?,?,?)",
+                ("ex2", str(real_file), "zip"),
+            )
+            conn.execute(
+                "INSERT INTO example_run_state VALUES (?,?,?,?,?)",
+                ("ex2", "run-1", "VERIFIED", None, None),
+            )
+            conn.commit()
+            conn.close()
+
+            result = check_state_drift(db_path)
+            assert result["checked"] == 2
+            assert result["issues_found"] == 1
+            assert result["issues"][0]["example_id"] == "ex1"
+            assert result["issues"][0]["issue"] == "markdown_file_missing"
+
+    def test_no_drift(self):
+        """No drift when all verified files exist."""
+        import sys
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from scripts.validation.check_state_drift import check_state_drift
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""CREATE TABLE example_records (
+                example_id TEXT, file_path TEXT, family TEXT
+            )""")
+            conn.execute("""CREATE TABLE example_run_state (
+                example_id TEXT, run_id TEXT, status TEXT,
+                failure_reason TEXT, escalation_reason TEXT
+            )""")
+            real_file = Path(tmpdir) / "example.md"
+            real_file.write_text("# Test")
+            conn.execute(
+                "INSERT INTO example_records VALUES (?,?,?)",
+                ("ex1", str(real_file), "zip"),
+            )
+            conn.execute(
+                "INSERT INTO example_run_state VALUES (?,?,?,?,?)",
+                ("ex1", "run-1", "VERIFIED", None, None),
+            )
+            conn.commit()
+            conn.close()
+
+            result = check_state_drift(db_path)
+            assert result["checked"] == 1
+            assert result["issues_found"] == 0
+
+
 @pytest.mark.integration
 class TestAutoLearnIntegration:
     """Test post-run auto-learn pattern extraction (TC-12)."""
