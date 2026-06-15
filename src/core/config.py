@@ -850,6 +850,35 @@ class PipelineOverrides(BaseModel):
     )
 
 
+class NamespacePolicyConfig(BaseModel):
+    """Namespace whitelist/blacklist policy for code generation."""
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str = Field(default="whitelist", description="Policy mode (whitelist or blacklist)")
+    allowed_namespaces: List[str] = Field(default_factory=list)
+    blacklist: List[str] = Field(default_factory=list)
+
+
+class PersistentFixConfig(BaseModel):
+    """Configuration for persistent (multi-iteration) LLM fix attempts."""
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    max_iterations: int = Field(default=10, ge=1)
+    iterations_per_model: int = Field(default=3, ge=1)
+    max_time_seconds: int = Field(default=300, ge=1)
+    enable_immediate_patching: bool = False
+    enable_context_inference: bool = False
+
+
+class DependencyResolutionConfig(BaseModel):
+    """Configuration for automatic dependency resolution."""
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+
+
 class FamilyConfig(BaseModel):
     """Per-family configuration settings."""
     model_config = ConfigDict(extra="forbid")
@@ -918,6 +947,21 @@ class FamilyConfig(BaseModel):
         default_factory=dict,
         description="Per-family overrides for FinalReviewConfig fields (e.g. only_review_llm_fixed, enable_intent_review)."
     )
+
+    # Context enforcement (prevents LLM from changing app_context type during fixes)
+    context_enforcement: Optional[ContextEnforcementConfig] = None
+
+    # Persistent fix (multi-iteration LLM fix with time/iteration budgets)
+    persistent_fix: Optional[PersistentFixConfig] = None
+
+    # Namespace policy (whitelist/blacklist for code generation)
+    namespace_policy: Optional[NamespacePolicyConfig] = None
+
+    # Dependency resolution (automatic NuGet dependency inference)
+    dependency_resolution: Optional[DependencyResolutionConfig] = None
+
+    # Status note (informational annotation for scaffolded/incomplete configs)
+    status_note: str = ""
 
     def get_nuget_package_name(self) -> str:
         """Get primary NuGet package name."""

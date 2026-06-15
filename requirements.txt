@@ -4,7 +4,7 @@
 
 # Core data validation
 pydantic==2.10.3
-pydantic-settings==2.5.0
+pydantic-settings==2.14.1
 
 # LLM integrations
 anthropic==0.40.0
