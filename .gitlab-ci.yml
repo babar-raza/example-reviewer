@@ -22,6 +22,8 @@ stages:
 # ---------------------------------------------------------------------------
 .python-setup: &python-setup
   image: python:3.10-slim
+  variables:
+    PIP_CACHE_DIR: "/cache/pip"
   before_script:
     - pip install --upgrade pip --quiet
     - pip install -r requirements.txt --quiet
