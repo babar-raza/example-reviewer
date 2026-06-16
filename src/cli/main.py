@@ -763,8 +763,10 @@ def main() -> int:
     
     # Run pipeline command
     run_parser = subparsers.add_parser('run', help='Run full pipeline')
-    run_parser.add_argument('--family', '-f', type=str, required=True,
-                            help='Family identifier')
+    run_parser.add_argument('--family', '-f', type=str, required=False,
+                            help='Family identifier (required unless --from-queue is set)')
+    run_parser.add_argument('--from-queue', action='store_true',
+                            help='Poll next work item from work_queue table instead of requiring --family')
     run_parser.add_argument('--max-examples', type=int,
                             help='Maximum examples to process')
     run_parser.add_argument('--skip-runtime', action='store_true',
@@ -1023,6 +1025,27 @@ def main() -> int:
         result = tools.status(family=args.family)
     
     elif args.command == 'run':
+        # Resolve family: from --from-queue or from --family
+        _queue_id: Optional[str] = None
+        if getattr(args, 'from_queue', False):
+            from ..core.database import Database as _Database  # type: ignore[import]
+            _db = _Database(db_path)
+            _work = _db.poll_next_work()
+            if _work is None:
+                print("Queue is empty. Nothing to run.")
+                sys.exit(0)
+            args.family = _work['family']
+            _queue_id = _work['queue_id']
+            print(f"[--from-queue] Claimed work item {_queue_id}: family={args.family} "
+                  f"priority={_work['priority']} trigger={_work['trigger_source']}")
+            if _work.get('max_examples'):
+                args.max_examples = _work['max_examples']
+            if _work.get('skip_llm'):
+                args.skip_llm = True
+        elif not args.family:
+            print("error: --family / -f is required (or use --from-queue to pull from work_queue)")
+            sys.exit(1)
+
         # Determine strategy configuration
         # Default: all strategies ENABLED (matching orchestrator's intent)
         # Individual flags are opt-in overrides; --enable-all-deterministic is a no-op (already default)
@@ -1096,6 +1119,17 @@ def main() -> int:
             file_list=file_list,
             audit_prose=getattr(args, 'audit_prose', False),
         )
+
+        if _queue_id is not None:
+            _run_id = result.data.get('run_id') if result.data else None
+            _db.complete_work(
+                queue_id=_queue_id,
+                run_id=_run_id,
+                success=result.success,
+                error=result.error if not result.success else None,
+            )
+            status_str = "completed" if result.success else "failed"
+            print(f"[--from-queue] Work item {_queue_id} marked {status_str}")
 
     elif args.command == 'validate-articles':
         import os as _os
