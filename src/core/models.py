@@ -16,7 +16,7 @@ try:
     from .app_context import AppContext
 except ImportError:
     # Fallback for cases where app_context module is not yet available
-    AppContext = None
+    AppContext = None  # type: ignore[assignment,misc]
 
 
 class ExampleStatus(str, Enum):
@@ -123,11 +123,11 @@ class ExampleRecord(BaseModel):
     # Deterministic key for stable ordering (Track 1 requirement)
     example_key: str = Field(default="", description="Deterministic hash for stable ordering")
     
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def current_code(self) -> str:
         """Get the most recent version of the code."""
-        return self.verified_code or self.compilable_code or self.original_code
+        return self.verified_code or self.compilable_code or self.original_code or ""
     
     def generate_id(self) -> str:
         """Generate stable ID from content hash."""
