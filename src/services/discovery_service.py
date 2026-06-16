@@ -1774,7 +1774,7 @@ class GistResolver:
             
             req = urllib.request.Request(url, headers=headers)
             
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
                 data = json.loads(response.read().decode('utf-8'))
             
             files = data.get('files', {})

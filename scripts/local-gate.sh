@@ -32,9 +32,9 @@ else
 fi
 
 # 2. Unit tests with coverage threshold
-step "Unit tests (coverage >= 50%)"
+step "Unit tests (coverage >= 65%)"
 if pytest tests/ -v --timeout=120 \
-    --cov=src --cov-fail-under=50 \
+    --cov=src --cov-fail-under=65 \
     --cov-report=term-missing \
     -m "not integration and not runtime" -q; then
     pass "Unit tests with coverage"
@@ -42,7 +42,19 @@ else
     fail "Unit tests with coverage"
 fi
 
-# 3. Security scan (bandit)
+# 3. Type checking (mypy)
+step "Type checking (mypy — core modules)"
+if command -v mypy &>/dev/null; then
+    if mypy src/core/config.py src/core/models.py src/core/path_guard.py src/core/provenance_guard.py --ignore-missing-imports --no-error-summary 2>/dev/null; then
+        pass "mypy type check"
+    else
+        fail "mypy type check"
+    fi
+else
+    echo "  mypy not installed — skipping (pip install mypy)"
+fi
+
+# 4. Security scan (bandit — inline nosec for false positives)
 step "Security scan (bandit)"
 if command -v bandit &>/dev/null; then
     if bandit -r src/ -ll -q 2>/dev/null; then
@@ -54,7 +66,7 @@ else
     echo "  bandit not installed — skipping (pip install bandit)"
 fi
 
-# 4. Dependency audit
+# 5. Dependency audit
 step "Dependency audit (pip-audit)"
 if command -v pip-audit &>/dev/null; then
     if pip-audit -r requirements.txt --desc 2>/dev/null; then
@@ -66,7 +78,7 @@ else
     echo "  pip-audit not installed — skipping (pip install pip-audit)"
 fi
 
-# 5. KB validation
+# 6. KB validation
 step "Knowledge base validation"
 if python scripts/validate_kb.py --all 2>/dev/null; then
     pass "KB validation"

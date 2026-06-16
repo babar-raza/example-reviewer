@@ -47,8 +47,8 @@ security-scan:
     - pip install --upgrade pip --quiet
     - pip install bandit pip-audit --quiet
     # TC-03-UPDATE: bandit must be able to fail the job (no blanket || true)
-    # -s B608,B310: suppress known false positives (internal SQL column construction, NuGet API urlopen)
-    - bandit -r src/ -ll -s B608,B310 -f json -o bandit_report.json
+    # False positives use inline # nosec B608/B310 comments at the source line
+    - bandit -r src/ -ll -f json -o bandit_report.json
     # pip-audit: allow soft failure for transient PyPI issues, but report is still generated
     - pip-audit -r requirements.txt --desc --output pip_audit_report.json --format json || true
     - echo "Security scan complete — review bandit_report.json and pip_audit_report.json"
@@ -83,6 +83,30 @@ static-analysis:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'
 
+type-check:
+  stage: validate
+  image: python:3.10-slim
+  before_script:
+    - pip install --upgrade pip --quiet
+    - pip install -r requirements-dev.txt --quiet
+  script:
+    - mypy src/core/config.py src/core/models.py src/core/path_guard.py src/core/provenance_guard.py --ignore-missing-imports --no-error-summary
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+evidence-integrity:
+  <<: *python-setup
+  stage: validate
+  script:
+    - python scripts/validation/check_evidence_circularity.py
+    - python scripts/validation/check_baseline_coverage.py
+    - python scripts/validation/check_assessment_freshness.py
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+
 risky-diff-check:
   stage: validate
   image: python:3.10-slim
@@ -110,7 +134,7 @@ unit-tests:
       --cov-report=term-missing
       --cov-report=xml:coverage.xml
       --cov-report=html:coverage_html/
-      --cov-fail-under=50
+      --cov-fail-under=65
       -m "not integration and not runtime"
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:

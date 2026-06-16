@@ -117,3 +117,4 @@ Thumbs.db
 *.markdown_backup
 *.backup_*
 *.backup
+/.local

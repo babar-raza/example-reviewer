@@ -285,7 +285,7 @@ class LearnedPatternsService:
             placeholders = ",".join("?" for _ in pattern_ids)
 
             perf_rows = conn.execute(
-                f"SELECT pattern_id, success_rate, times_applied FROM pattern_performance WHERE pattern_id IN ({placeholders})",
+                f"SELECT pattern_id, success_rate, times_applied FROM pattern_performance WHERE pattern_id IN ({placeholders})",  # nosec B608
                 pattern_ids,
             ).fetchall()
 

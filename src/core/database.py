@@ -1038,7 +1038,7 @@ class Database:
                     WHERE er.family = ? AND ers.run_id = ?
                       AND ers.status IN ({status_placeholders})
                     ORDER BY er.example_key ASC
-                """
+                """  # nosec B608
                 params = [family, run_id] + [s.value for s in status]
                 if max_examples:
                     query += " LIMIT ?"
@@ -1177,7 +1177,7 @@ class Database:
             params.extend([run_id, example_id])
 
             conn.execute(
-                f"UPDATE example_run_state SET {', '.join(updates)} WHERE run_id = ? AND example_id = ?",
+                f"UPDATE example_run_state SET {', '.join(updates)} WHERE run_id = ? AND example_id = ?",  # nosec B608
                 params
             )
             return conn.total_changes > 0
@@ -1410,7 +1410,7 @@ class Database:
             params.extend([run_id, example_id])
 
             conn.execute(
-                f"UPDATE example_run_state SET {', '.join(updates)} WHERE run_id = ? AND example_id = ?",
+                f"UPDATE example_run_state SET {', '.join(updates)} WHERE run_id = ? AND example_id = ?",  # nosec B608
                 params
             )
             return conn.total_changes > 0
@@ -1489,7 +1489,7 @@ class Database:
             params.append(example_id)
 
             conn.execute(
-                f"UPDATE example_run_state SET {', '.join(updates)} WHERE example_id = ?",
+                f"UPDATE example_run_state SET {', '.join(updates)} WHERE example_id = ?",  # nosec B608
                 params
             )
             return conn.total_changes > 0
@@ -2392,7 +2392,7 @@ class Database:
 
         with self.get_connection() as conn:
             conn.execute(
-                f"UPDATE telemetry_runs SET {', '.join(set_clauses)} WHERE event_id = ?",
+                f"UPDATE telemetry_runs SET {', '.join(set_clauses)} WHERE event_id = ?",  # nosec B608
                 params
             )
             return conn.total_changes > 0
@@ -2571,7 +2571,7 @@ class Database:
                 WHERE (fd.phase = 'Phase C (Pre-Runtime)' OR fd.phase LIKE 'Phase C%')
                 {where_clause}
                 GROUP BY fd.failure_category
-            """
+            """  # nosec B608
 
             failure_rows = conn.execute(query, tuple(params)).fetchall()
             failure_counts = {row['failure_category']: row['count'] for row in failure_rows}
@@ -3688,7 +3688,7 @@ class Database:
                     if run:
                         placeholders = ','.join(['?' for _ in run])
                         prod_conn.execute(
-                            f"INSERT OR REPLACE INTO run_records VALUES ({placeholders})",
+                            f"INSERT OR REPLACE INTO run_records VALUES ({placeholders})",  # nosec B608
                             tuple(run)
                         )
 
@@ -3696,7 +3696,7 @@ class Database:
                     for example in examples:
                         placeholders = ','.join(['?' for _ in example])
                         prod_conn.execute(
-                            f"INSERT OR IGNORE INTO example_records VALUES ({placeholders})",
+                            f"INSERT OR IGNORE INTO example_records VALUES ({placeholders})",  # nosec B608
                             tuple(example)
                         )
 
@@ -3704,7 +3704,7 @@ class Database:
                     for state in run_states:
                         placeholders = ','.join(['?' for _ in state])
                         prod_conn.execute(
-                            f"INSERT OR REPLACE INTO example_run_state VALUES ({placeholders})",
+                            f"INSERT OR REPLACE INTO example_run_state VALUES ({placeholders})",  # nosec B608
                             tuple(state)
                         )
 
@@ -3712,7 +3712,7 @@ class Database:
                     for attempt in compile_attempts:
                         placeholders = ','.join(['?' for _ in attempt])
                         prod_conn.execute(
-                            f"INSERT OR IGNORE INTO compile_attempts VALUES ({placeholders})",
+                            f"INSERT OR IGNORE INTO compile_attempts VALUES ({placeholders})",  # nosec B608
                             tuple(attempt)
                         )
 
@@ -3720,7 +3720,7 @@ class Database:
                     for attempt in runtime_attempts:
                         placeholders = ','.join(['?' for _ in attempt])
                         prod_conn.execute(
-                            f"INSERT OR IGNORE INTO runtime_attempts VALUES ({placeholders})",
+                            f"INSERT OR IGNORE INTO runtime_attempts VALUES ({placeholders})",  # nosec B608
                             tuple(attempt)
                         )
 
@@ -3728,14 +3728,14 @@ class Database:
                     for edit in markdown_edits:
                         placeholders = ','.join(['?' for _ in edit])
                         prod_conn.execute(
-                            f"INSERT OR IGNORE INTO markdown_edits VALUES ({placeholders})",
+                            f"INSERT OR IGNORE INTO markdown_edits VALUES ({placeholders})",  # nosec B608
                             tuple(edit)
                         )
 
                     # Insert telemetry_runs
                     placeholders = ','.join(['?' for _ in telemetry])
                     prod_conn.execute(
-                        f"INSERT OR REPLACE INTO telemetry_runs VALUES ({placeholders})",
+                        f"INSERT OR REPLACE INTO telemetry_runs VALUES ({placeholders})",  # nosec B608
                         tuple(telemetry)
                     )
 
@@ -3743,7 +3743,7 @@ class Database:
                     for detail in failure_details:
                         placeholders = ','.join(['?' for _ in detail])
                         prod_conn.execute(
-                            f"INSERT OR IGNORE INTO failure_details VALUES ({placeholders})",
+                            f"INSERT OR IGNORE INTO failure_details VALUES ({placeholders})",  # nosec B608
                             tuple(detail)
                         )
 
@@ -3751,7 +3751,7 @@ class Database:
                     for result in review_results:
                         placeholders = ','.join(['?' for _ in result])
                         prod_conn.execute(
-                            f"INSERT OR IGNORE INTO review_results VALUES ({placeholders})",
+                            f"INSERT OR IGNORE INTO review_results VALUES ({placeholders})",  # nosec B608
                             tuple(result)
                         )
 
@@ -3759,7 +3759,7 @@ class Database:
                     for event in telemetry_events:
                         placeholders = ','.join(['?' for _ in event])
                         prod_conn.execute(
-                            f"INSERT OR IGNORE INTO telemetry_events VALUES ({placeholders})",
+                            f"INSERT OR IGNORE INTO telemetry_events VALUES ({placeholders})",  # nosec B608
                             tuple(event)
                         )
 
