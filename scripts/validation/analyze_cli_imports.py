@@ -312,6 +312,21 @@ class ImportAnalyzer(ast.NodeVisitor):
         """Track generator expression scope."""
         self._visit_comprehension(node)
 
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        """Track lambda parameters so they aren't flagged as undefined names."""
+        if self.current_scope:
+            for arg in node.args.args:
+                self.current_scope.comprehension_vars.add(arg.arg)
+            if node.args.vararg:
+                self.current_scope.comprehension_vars.add(node.args.vararg.arg)
+            if node.args.kwarg:
+                self.current_scope.comprehension_vars.add(node.args.kwarg.arg)
+            for arg in node.args.posonlyargs:
+                self.current_scope.comprehension_vars.add(arg.arg)
+            for arg in node.args.kwonlyargs:
+                self.current_scope.comprehension_vars.add(arg.arg)
+        self.generic_visit(node)
+
     def _visit_comprehension(self, node) -> None:
         """Visit comprehension and track loop variables in nested scope."""
         # Comprehension variables are local to the comprehension
