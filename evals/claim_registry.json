@@ -113,6 +113,39 @@
       "evidence_field": "validate-kb job: python scripts/validate_kb.py --all",
       "last_verified": "2026-06-13",
       "status": "grounded"
+    },
+    {
+      "claim_id": "CR-011",
+      "doc_file": ".gitlab-ci.yml",
+      "section": "evidence-integrity job",
+      "claim_text": "CI detects circular evidence chains in claim_registry.json",
+      "evidence_file": "scripts/validation/check_evidence_circularity.py",
+      "evidence_field": "main() function — checks for unacknowledged circular claims",
+      "test_file": "tests/test_evidence_validators.py",
+      "last_verified": "2026-06-16",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-012",
+      "doc_file": ".gitlab-ci.yml",
+      "section": "evidence-integrity job",
+      "claim_text": "CI checks family baseline coverage completeness",
+      "evidence_file": "scripts/validation/check_baseline_coverage.py",
+      "evidence_field": "main() function — compares families vs baselines",
+      "test_file": "tests/test_evidence_validators.py",
+      "last_verified": "2026-06-16",
+      "status": "grounded"
+    },
+    {
+      "claim_id": "CR-013",
+      "doc_file": ".gitlab-ci.yml",
+      "section": "evidence-integrity job",
+      "claim_text": "CI checks self-assessment freshness (max 30 days)",
+      "evidence_file": "scripts/validation/check_assessment_freshness.py",
+      "evidence_field": "main() function — checks assessed_at timestamp age",
+      "test_file": "tests/test_evidence_validators.py",
+      "last_verified": "2026-06-16",
+      "status": "grounded"
     }
   ]
 }

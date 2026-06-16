@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "assessed_at": "2026-06-14T09:16:36.982587+00:00",
+  "assessed_at": "2026-06-16T12:00:00.000000+00:00",
   "agentic": {
     "level": "A5",
     "evidence": [
@@ -24,6 +24,8 @@
       "security_tests",
       "smoke_tests",
       "local_quality_gate",
+      "mypy_type_checking",
+      "import_smoke_test",
       "contributing_guidelines",
       "codeowners",
       "real_integration_tests",
@@ -50,7 +52,10 @@
       "accuracy_baselines",
       "consistency_checker",
       "state_drift_detector",
-      "repo_signal_generator"
+      "repo_signal_generator",
+      "evidence_circularity_check",
+      "baseline_coverage_check",
+      "assessment_freshness_check"
     ]
   }
 }
