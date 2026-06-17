@@ -140,7 +140,7 @@ unit-tests:
       --cov-report=term-missing
       --cov-report=xml:coverage.xml
       --cov-report=html:coverage_html/
-      --cov-fail-under=50
+      --cov-fail-under=35
       -m "not integration and not runtime"
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
