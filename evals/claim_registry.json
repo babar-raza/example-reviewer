@@ -106,7 +106,7 @@
     },
     {
       "claim_id": "CR-010",
-      "doc_file": "docs/architecture.md",
+      "doc_file": "docs/architecture/architecture.md",
       "section": "CI Validation",
       "claim_text": "KB files validated by CI on every push",
       "evidence_file": ".gitlab-ci.yml",
