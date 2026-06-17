@@ -6,6 +6,8 @@ Addition B: CONCERNS_OPEN annotation in orchestrator source
 Addition C: Deletion-fix detection (_is_deletion_fix method)
 Addition D: intent_review_ignores_fix_type config flag
 """
+from pathlib import Path
+
 import pytest
 from unittest.mock import MagicMock
 from src.services.discovery_service import DiscoveryService
@@ -201,10 +203,7 @@ class TestConcernsOpenAnnotation:
 
     def test_concerns_open_escalation_reason_in_source(self):
         """orchestrator.py contains the CONCERNS_OPEN escalation_reason pattern."""
-        src_path = (
-            "c:/Users/prora/OneDrive/Documents/GitHub/example-reviewer"
-            "/src/pipeline/orchestrator.py"
-        )
+        src_path = Path(__file__).resolve().parent.parent / "src" / "pipeline" / "orchestrator.py"
         with open(src_path, encoding="utf-8") as f:
             src = f.read()
         assert "CONCERNS_OPEN:" in src, (
@@ -213,10 +212,7 @@ class TestConcernsOpenAnnotation:
 
     def test_concerns_open_checks_warning_or_error_severity(self):
         """orchestrator.py checks WARNING and ERROR severity levels for CONCERNS_OPEN."""
-        src_path = (
-            "c:/Users/prora/OneDrive/Documents/GitHub/example-reviewer"
-            "/src/pipeline/orchestrator.py"
-        )
+        src_path = Path(__file__).resolve().parent.parent / "src" / "pipeline" / "orchestrator.py"
         with open(src_path, encoding="utf-8") as f:
             src = f.read()
         # Both severity checks must co-exist with the CONCERNS_OPEN logic
@@ -230,10 +226,7 @@ class TestConcernsOpenAnnotation:
         ExampleStatus.FINAL_REVIEW_PASSED — find the occurrence of the f-string
         that contains 'CONCERNS_OPEN:' as its value to confirm both are co-located.
         """
-        src_path = (
-            "c:/Users/prora/OneDrive/Documents/GitHub/example-reviewer"
-            "/src/pipeline/orchestrator.py"
-        )
+        src_path = Path(__file__).resolve().parent.parent / "src" / "pipeline" / "orchestrator.py"
         with open(src_path, encoding="utf-8") as f:
             src = f.read()
         # The escalation_reason f-string with CONCERNS_OPEN: lives inside the same
@@ -383,10 +376,7 @@ class TestIntentReviewIgnoresFixType:
 
     def test_orchestrator_override_logic_present_in_source(self):
         """orchestrator.py contains logic to override only_review_llm_fixed when flag is set."""
-        src_path = (
-            "c:/Users/prora/OneDrive/Documents/GitHub/example-reviewer"
-            "/src/pipeline/orchestrator.py"
-        )
+        src_path = Path(__file__).resolve().parent.parent / "src" / "pipeline" / "orchestrator.py"
         with open(src_path, encoding="utf-8") as f:
             src = f.read()
         assert "intent_review_ignores_fix_type" in src, (
