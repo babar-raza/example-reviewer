@@ -1,43 +1,43 @@
 {
   "schema_version": "1.0",
-  "last_verified": "2026-06-13",
-  "notes": "Machine-readable index of claims in README and docs. Each entry maps a human-readable claim to an evidence file path. Status reflects evidence integrity: 'grounded' means independently verified, 'self-reported' means evidence chain is circular (README figures fed into report, then cited back), 'partial' means some evidence exists but is incomplete.",
+  "last_verified": "2026-06-17",
+  "notes": "Machine-readable index of claims in README and docs. Each entry maps a human-readable claim to an evidence file path. Status reflects evidence integrity: 'grounded' means independently verified from production DB, 'self-reported' means evidence chain is circular (README figures fed into report, then cited back), 'partial' means some evidence exists but is incomplete. Baselines regenerated from production DB on 2026-06-17.",
   "claims": [
     {
       "claim_id": "CR-001",
       "doc_file": "README.md",
       "section": "9. Supported Families",
-      "claim_text": "ZIP — 66 discovered, 61 verified, 92.4% verified",
+      "claim_text": "ZIP — 56 discovered, 49 verified, 87.5% verified",
       "evidence_file": "evals/family_accuracy_report.json",
       "evidence_field": "families[family=zip].verification_rate_pct",
       "baseline_file": ".benchmarks/baselines/zip_baseline.json",
-      "last_verified": "2026-06-13",
-      "status": "self-reported",
-      "grounding_gap": "Evidence chain is circular: family_accuracy_report.json was generated from README-documented figures (see evals/methodology.md). Independent grounding requires re-running generate_baseline.py against the production database."
+      "last_verified": "2026-06-17",
+      "status": "grounded",
+      "grounding_note": "Baseline regenerated from production DB run 0e8f0a658e190a9e on 2026-06-17. Evidence chain: production_db → baseline → report → claim."
     },
     {
       "claim_id": "CR-002",
       "doc_file": "README.md",
       "section": "9. Supported Families",
-      "claim_text": "Words — 147 discovered, 123 verified, 83.7% verified",
+      "claim_text": "Words — 94 discovered, 84 verified, 89.4% verified",
       "evidence_file": "evals/family_accuracy_report.json",
       "evidence_field": "families[family=words].verification_rate_pct",
       "baseline_file": ".benchmarks/baselines/words_baseline.json",
-      "last_verified": "2026-06-13",
-      "status": "self-reported",
-      "grounding_gap": "Evidence chain is circular: family_accuracy_report.json was generated from README-documented figures (see evals/methodology.md). Independent grounding requires re-running generate_baseline.py against the production database."
+      "last_verified": "2026-06-17",
+      "status": "grounded",
+      "grounding_note": "Baseline regenerated from production DB run 9e066d2c3a103c7b on 2026-06-17. Evidence chain: production_db → baseline → report → claim."
     },
     {
       "claim_id": "CR-003",
       "doc_file": "README.md",
       "section": "9. Supported Families",
-      "claim_text": "PDF — 825 discovered, 684 verified, 82.9% verified",
+      "claim_text": "PDF — 825 discovered, 621 verified, 75.3% verified",
       "evidence_file": "evals/family_accuracy_report.json",
       "evidence_field": "families[family=pdf].verification_rate_pct",
       "baseline_file": ".benchmarks/baselines/pdf_baseline.json",
-      "last_verified": "2026-06-13",
-      "status": "self-reported",
-      "grounding_gap": "Evidence chain is circular: family_accuracy_report.json was generated from README-documented figures (see evals/methodology.md). Independent grounding requires re-running generate_baseline.py against the production database."
+      "last_verified": "2026-06-17",
+      "status": "grounded",
+      "grounding_note": "Baseline regenerated from production DB run 329578277d495d5b on 2026-06-17. Evidence chain: production_db → baseline → report → claim."
     },
     {
       "claim_id": "CR-004",
@@ -91,8 +91,8 @@
       "evidence_field": "root.families array",
       "methodology_file": "evals/methodology.md",
       "last_verified": "2026-06-13",
-      "status": "partial",
-      "grounding_gap": "3 families (psd, barcode, ocr) lack config files and committed baselines. Only 13/16 production families have verifiable baseline data."
+      "status": "grounded",
+      "grounding_note": "15/17 families have baselines from production DB. Only smoke (no production runs) and tasks (no production runs) use documented figures. All production families have committed baseline files."
     },
     {
       "claim_id": "CR-009",

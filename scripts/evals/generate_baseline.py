@@ -74,26 +74,45 @@ def _generate_baseline_from_db(
     db_path: str,
     pipeline_version: str,
 ) -> dict:
-    """Generate baseline by querying the production database."""
-    from src.core.database import Database
-    from src.core.results_summary import ResultsSummary
+    """Generate baseline by querying the production database directly."""
+    import sqlite3
 
-    db = Database(db_path)
-    # Get the most recent run for this family
-    runs = db.get_runs_by_family(family) if hasattr(db, "get_runs_by_family") else []
-    if not runs:
-        raise ValueError(f"No runs found for family '{family}' in {db_path}")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
 
-    # Use the most recent run
-    latest_run = runs[-1] if isinstance(runs, list) else runs
-    run_id = getattr(latest_run, "run_id", str(latest_run))
+    # Find the most representative completed run (largest example count)
+    run_row = conn.execute(
+        """SELECT run_id, examples_processed
+           FROM run_records
+           WHERE family = ? AND status = 'completed'
+           ORDER BY examples_processed DESC, completed_at DESC LIMIT 1""",
+        (family,),
+    ).fetchone()
+    if not run_row:
+        conn.close()
+        raise ValueError(f"No completed runs for family '{family}' in {db_path}")
 
-    summary = ResultsSummary.from_run(db, run_id)
-    stats = db.get_run_stats_from_db(family, run_id)
+    run_id = run_row["run_id"]
 
-    discovered = stats.get("total_processed", summary.examples_processed)
-    verified = stats.get("verified", summary.examples_verified)
-    failed = stats.get("failed", summary.examples_failed)
+    # Count verified/failed from example_run_state joined with example_records
+    stats = conn.execute(
+        """SELECT
+               COUNT(*) AS total,
+               SUM(CASE WHEN ers.status IN ('VERIFIED','MD_UPDATED',
+                    'FINAL_REVIEW_PASSED','COMMITTED') THEN 1 ELSE 0 END) AS verified,
+               SUM(CASE WHEN ers.status LIKE '%FAILED%' THEN 1 ELSE 0 END) AS failed,
+               SUM(CASE WHEN ers.status = 'COMPILE_FAILED' THEN 1 ELSE 0 END) AS compile_failed,
+               SUM(CASE WHEN ers.status = 'RUNTIME_FAILED' THEN 1 ELSE 0 END) AS runtime_failed
+           FROM example_records er
+           JOIN example_run_state ers ON er.example_id = ers.example_id
+           WHERE er.family = ? AND ers.run_id = ?""",
+        (family, run_id),
+    ).fetchone()
+    conn.close()
+
+    discovered = stats["total"] or 0
+    verified = stats["verified"] or 0
+    failed = stats["failed"] or 0
     rate = round(verified / discovered * 100, 1) if discovered > 0 else 0.0
 
     return {
@@ -106,8 +125,8 @@ def _generate_baseline_from_db(
             "discovered": discovered,
             "verified": verified,
             "failed": failed,
-            "compile_failed": stats.get("compile_failed", None),
-            "runtime_failed": stats.get("runtime_failed", None),
+            "compile_failed": stats["compile_failed"] or 0,
+            "runtime_failed": stats["runtime_failed"] or 0,
             "verification_rate_pct": rate,
         },
         "run_id": run_id,
@@ -152,24 +171,24 @@ def _generate_baseline_documented(
     }
 
 
-# README Section 9 documented production-run figures
-# Source: README.md#9-supported-families (as of 2026-04-20)
+# README Section 9 documented production-run figures (fallback when DB unavailable)
+# Source: README.md#9-supported-families (refreshed 2026-06-17 from production DB)
 _README_TOTALS: dict[str, dict] = {
-    "zip":      {"discovered": 66,  "verified": 61},
-    "psd":      {"discovered": 391, "verified": 347},
-    "html":     {"discovered": 16,  "verified": 14},
-    "email":    {"discovered": 20,  "verified": 17},
-    "words":    {"discovered": 147, "verified": 123},
-    "pdf":      {"discovered": 825, "verified": 684},
-    "tex":      {"discovered": 45,  "verified": 37},
-    "barcode":  {"discovered": 201, "verified": 161},
-    "cad":      {"discovered": 10,  "verified": 8},
-    "imaging":  {"discovered": 217, "verified": 138},
-    "cells":    {"discovered": 196, "verified": 121},
-    "slides":   {"discovered": 551, "verified": 223},
-    "ocr":      {"discovered": 115, "verified": 41},
-    "medical":  {"discovered": 88,  "verified": 6},
-    "page":     {"discovered": 8,   "verified": 0},
+    "words":    {"discovered": 94,  "verified": 84},
+    "html":     {"discovered": 17,  "verified": 15},
+    "zip":      {"discovered": 56,  "verified": 49},
+    "psd":      {"discovered": 391, "verified": 336},
+    "email":    {"discovered": 19,  "verified": 16},
+    "barcode":  {"discovered": 128, "verified": 105},
+    "cad":      {"discovered": 9,   "verified": 7},
+    "tex":      {"discovered": 45,  "verified": 34},
+    "pdf":      {"discovered": 825, "verified": 621},
+    "imaging":  {"discovered": 221, "verified": 138},
+    "cells":    {"discovered": 192, "verified": 112},
+    "page":     {"discovered": 8,   "verified": 1},
+    "slides":   {"discovered": 551, "verified": 60},
+    "ocr":      {"discovered": 115, "verified": 12},
+    "medical":  {"discovered": 88,  "verified": 3},
     "tasks":    {"discovered": 6,   "verified": 0},
     "smoke":    {"discovered": 0,   "verified": 0},
 }

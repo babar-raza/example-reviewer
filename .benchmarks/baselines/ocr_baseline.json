@@ -1,0 +1,17 @@
+{
+  "family": "ocr",
+  "generated_at": "2026-06-17T09:25:01.939746+00:00",
+  "notes": "Generated from production DB run fbd06a1af34edbc0",
+  "pipeline_version": "1fa2fb3",
+  "run_id": "fbd06a1af34edbc0",
+  "schema_version": "1.0",
+  "source": "production_db",
+  "totals": {
+    "compile_failed": 64,
+    "discovered": 115,
+    "failed": 103,
+    "runtime_failed": 19,
+    "verification_rate_pct": 10.4,
+    "verified": 12
+  }
+}

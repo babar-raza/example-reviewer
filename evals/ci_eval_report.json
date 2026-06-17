@@ -7,85 +7,85 @@
   "results": [
     {
       "family": "barcode",
-      "readme_rate": 80.1,
-      "report_rate": 80.1,
+      "readme_rate": 82.0,
+      "report_rate": 82.0,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "cad",
-      "readme_rate": 80.0,
-      "report_rate": 80.0,
+      "readme_rate": 77.8,
+      "report_rate": 77.8,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "cells",
-      "readme_rate": 61.7,
-      "report_rate": 61.7,
+      "readme_rate": 58.3,
+      "report_rate": 58.3,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "email",
-      "readme_rate": 85.0,
-      "report_rate": 85.0,
+      "readme_rate": 84.2,
+      "report_rate": 84.2,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "html",
-      "readme_rate": 87.5,
-      "report_rate": 87.5,
+      "readme_rate": 88.2,
+      "report_rate": 88.2,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "imaging",
-      "readme_rate": 63.6,
-      "report_rate": 63.6,
+      "readme_rate": 62.4,
+      "report_rate": 62.4,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "medical",
-      "readme_rate": 6.8,
-      "report_rate": 6.8,
+      "readme_rate": 3.4,
+      "report_rate": 3.4,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "ocr",
-      "readme_rate": 35.7,
-      "report_rate": 35.7,
+      "readme_rate": 10.4,
+      "report_rate": 10.4,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "page",
-      "readme_rate": 0.0,
-      "report_rate": 0.0,
+      "readme_rate": 12.5,
+      "report_rate": 12.5,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "pdf",
-      "readme_rate": 82.9,
-      "report_rate": 82.9,
+      "readme_rate": 75.3,
+      "report_rate": 75.3,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "psd",
-      "readme_rate": 88.7,
-      "report_rate": 88.7,
+      "readme_rate": 85.9,
+      "report_rate": 85.9,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "slides",
-      "readme_rate": 40.5,
-      "report_rate": 40.5,
+      "readme_rate": 10.9,
+      "report_rate": 10.9,
       "delta": 0.0,
       "status": "PASS"
     },
@@ -98,22 +98,22 @@
     },
     {
       "family": "tex",
-      "readme_rate": 82.2,
-      "report_rate": 82.2,
+      "readme_rate": 75.6,
+      "report_rate": 75.6,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "words",
-      "readme_rate": 83.7,
-      "report_rate": 83.7,
+      "readme_rate": 89.4,
+      "report_rate": 89.4,
       "delta": 0.0,
       "status": "PASS"
     },
     {
       "family": "zip",
-      "readme_rate": 92.4,
-      "report_rate": 92.4,
+      "readme_rate": 87.5,
+      "report_rate": 87.5,
       "delta": 0.0,
       "status": "PASS"
     }

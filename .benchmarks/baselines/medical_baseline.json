@@ -1,17 +1,17 @@
 {
   "family": "medical",
-  "generated_at": "2026-04-20T16:04:31.182100+00:00",
-  "notes": "Figures sourced from README Section 9 production-run data. Re-run with --db-path to refresh from the production database.",
-  "pipeline_version": "7f29b20",
-  "run_id": null,
+  "generated_at": "2026-06-17T09:25:01.926508+00:00",
+  "notes": "Generated from production DB run 1b1b400af8c968e6",
+  "pipeline_version": "1fa2fb3",
+  "run_id": "1b1b400af8c968e6",
   "schema_version": "1.0",
-  "source": "readme_documented_production_run",
+  "source": "production_db",
   "totals": {
-    "compile_failed": null,
+    "compile_failed": 52,
     "discovered": 88,
-    "failed": 82,
-    "runtime_failed": null,
-    "verification_rate_pct": 6.8,
-    "verified": 6
+    "failed": 85,
+    "runtime_failed": 33,
+    "verification_rate_pct": 3.4,
+    "verified": 3
   }
 }

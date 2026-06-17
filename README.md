@@ -499,7 +499,7 @@ PYTHONPATH=. venv/Scripts/python.exe -m src.mcp_tools.server \
 | `backfill` | `backfill` |
 | `status` | `status` |
 
-See [docs/mcp.md](docs/mcp.md) for the full JSON-RPC protocol reference.
+See [docs/architecture/mcp.md](docs/architecture/mcp.md) for the full JSON-RPC protocol reference.
 
 ---
 
@@ -670,21 +670,21 @@ Linux/WSL: moves to `~/.cache/example_reviewer/workspaces/<timestamp>`
 
 | Family | Config file | Discovered | Verified | Status |
 |--------|------------|------------|----------|--------|
-| ZIP | `config/families/zip.json` | 66 | 61 | Production — 92.4% verified |
-| PSD | `config/families/psd.json` | 391 | 347 | Production — 88.7% verified |
-| HTML | `config/families/html.json` | 16 | 14 | Production — 87.5% verified |
-| Email | `config/families/email.json` | 20 | 17 | Production — 85.0% verified |
-| Words | `config/families/words.json` | 147 | 123 | Production — 83.7% verified |
-| PDF | `config/families/pdf.json` | 825 | 684 | Production — 82.9% verified |
-| TeX | `config/families/tex.json` | 45 | 37 | Production — 82.2% verified |
-| Barcode | `config/families/barcode.json` | 201 | 161 | Production — 80.1% verified |
-| CAD | `config/families/cad.json` | 10 | 8 | Production — 80.0% verified |
-| Imaging | `config/families/imaging.json` | 217 | 138 | Production — 63.6% verified |
-| Cells | `config/families/cells.json` | 196 | 121 | Production — 61.7% verified |
-| Slides | `config/families/slides.json` | 551 | 223 | Production — 40.5% verified |
-| OCR | `config/families/ocr.json` | 115 | 41 | Production — 35.7% verified |
-| Medical | `config/families/medical.json` | 88 | 6 | Early — 6.8% verified |
-| Page | `config/families/page.json` | 8 | 0 | Early — 0% verified |
+| Words | `config/families/words.json` | 94 | 84 | Production — 89.4% verified |
+| HTML | `config/families/html.json` | 17 | 15 | Production — 88.2% verified |
+| ZIP | `config/families/zip.json` | 56 | 49 | Production — 87.5% verified |
+| PSD | `config/families/psd.json` | 391 | 336 | Production — 85.9% verified |
+| Email | `config/families/email.json` | 19 | 16 | Production — 84.2% verified |
+| Barcode | `config/families/barcode.json` | 128 | 105 | Production — 82.0% verified |
+| CAD | `config/families/cad.json` | 9 | 7 | Production — 77.8% verified |
+| TeX | `config/families/tex.json` | 45 | 34 | Production — 75.6% verified |
+| PDF | `config/families/pdf.json` | 825 | 621 | Production — 75.3% verified |
+| Imaging | `config/families/imaging.json` | 221 | 138 | Production — 62.4% verified |
+| Cells | `config/families/cells.json` | 192 | 112 | Production — 58.3% verified |
+| Page | `config/families/page.json` | 8 | 1 | Early — 12.5% verified |
+| Slides | `config/families/slides.json` | 551 | 60 | Early — 10.9% verified |
+| OCR | `config/families/ocr.json` | 115 | 12 | Early — 10.4% verified |
+| Medical | `config/families/medical.json` | 88 | 3 | Early — 3.4% verified |
 | Tasks | `config/families/tasks.json` | 6 | 0 | Early — 0% verified |
 
 To add a new family: copy any existing family JSON, update `content_roots` and `nuget_config`,
@@ -693,7 +693,7 @@ generate the API catalog, and run `backfill`.
 > Accuracy figures are sourced from committed baseline measurements.
 > See [evals/family_accuracy_report.json](evals/family_accuracy_report.json) for the current
 > machine-readable data, [evals/methodology.md](evals/methodology.md) for measurement
-> methodology, and [docs/accuracy-audit.md](docs/accuracy-audit.md) for the unverified
+> methodology, and [docs/assessments/accuracy-audit.md](docs/assessments/accuracy-audit.md) for the unverified
 > fraction analysis.
 > Refresh with: `python scripts/evals/generate_baseline.py --all`
 
@@ -703,21 +703,20 @@ generate the API catalog, and run `backfill`.
 
 | Document | Purpose |
 |----------|---------|
-| [docs/architecture.md](docs/architecture.md) | Detailed system design, phase controllers, DB schema |
-| [docs/configuration.md](docs/configuration.md) | Full reference for global.json and family configs |
-| [docs/pipeline.md](docs/pipeline.md) | Deep dive into phases A–F |
-| [docs/mcp.md](docs/mcp.md) | MCP server protocol, tool schemas, Claude Desktop setup |
-| [docs/entrypoints.md](docs/entrypoints.md) | CLI and MCP entry points reference |
-| [docs/operations.md](docs/operations.md) | Day-to-day operations runbook |
-| [docs/ops-runbook.md](docs/ops-runbook.md) | Incident response and recovery procedures |
-| [docs/testing-guide.md](docs/testing-guide.md) | Unit test patterns and fixture conventions |
-| [docs/development-guide.md](docs/development-guide.md) | Contributing guide, code conventions |
-| [docs/local-telemetry-api.md](docs/local-telemetry-api.md) | Telemetry event schema (v3.0.0) |
-| [docs/llm-code-fixing-flow.md](docs/llm-code-fixing-flow.md) | LLM fix loop internals |
-| [docs/QUICKSTART.md](docs/QUICKSTART.md) | 5-minute getting-started guide |
-| [docs/SQLITE_LOCKING.md](docs/SQLITE_LOCKING.md) | SQLite + OneDrive / WSL concurrency guide |
-| [docs/HARDENING_NOTES.md](docs/HARDENING_NOTES.md) | Security hardening decisions |
-| [docs/CHANGELOG.md](docs/CHANGELOG.md) | Version history and breaking changes |
+| [docs/architecture/architecture.md](docs/architecture/architecture.md) | Detailed system design, phase controllers, DB schema |
+| [docs/architecture/overview.md](docs/architecture/overview.md) | Pipeline phases A–F, entities, data flow |
+| [docs/architecture/mcp.md](docs/architecture/mcp.md) | MCP server protocol, tool schemas, Claude Desktop setup |
+| [docs/architecture/entrypoints.md](docs/architecture/entrypoints.md) | CLI and MCP entry points reference |
+| [docs/architecture/llm-code-fixing-flow.md](docs/architecture/llm-code-fixing-flow.md) | LLM fix loop internals |
+| [docs/reference/configuration.md](docs/reference/configuration.md) | Full reference for global.json and family configs |
+| [docs/reference/local-telemetry-api.md](docs/reference/local-telemetry-api.md) | Telemetry event schema (v3.0.0) |
+| [docs/operations/runbook.md](docs/operations/runbook.md) | Operations runbook (pipeline ops, system ops, troubleshooting) |
+| [docs/development/testing-guide.md](docs/development/testing-guide.md) | Unit test patterns and fixture conventions |
+| [docs/development/development-guide.md](docs/development/development-guide.md) | Contributing guide, code conventions |
+| [docs/safety/safety.md](docs/safety/safety.md) | Write guards, path protection, drift controls |
+| [docs/assessments/known-gaps.md](docs/assessments/known-gaps.md) | Known issues, limitations, missing coverage |
+| [docs/assessments/accuracy-audit.md](docs/assessments/accuracy-audit.md) | Family accuracy baselines and audit methodology |
+| [docs/development/family-kb.md](docs/development/family-kb.md) | Knowledge-base subsystem governance |
 
 Each directory in the repo also contains its own `README.md` with folder-level details.
 

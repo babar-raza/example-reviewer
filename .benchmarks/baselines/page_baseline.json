@@ -1,17 +1,17 @@
 {
   "family": "page",
-  "generated_at": "2026-04-20T16:04:31.191707+00:00",
-  "notes": "Figures sourced from README Section 9 production-run data. Re-run with --db-path to refresh from the production database.",
-  "pipeline_version": "7f29b20",
-  "run_id": null,
+  "generated_at": "2026-06-17T09:25:01.953758+00:00",
+  "notes": "Generated from production DB run 5d9b5991c5bb4982",
+  "pipeline_version": "1fa2fb3",
+  "run_id": "5d9b5991c5bb4982",
   "schema_version": "1.0",
-  "source": "readme_documented_production_run",
+  "source": "production_db",
   "totals": {
-    "compile_failed": null,
+    "compile_failed": 6,
     "discovered": 8,
-    "failed": 8,
-    "runtime_failed": null,
-    "verification_rate_pct": 0.0,
-    "verified": 0
+    "failed": 7,
+    "runtime_failed": 1,
+    "verification_rate_pct": 12.5,
+    "verified": 1
   }
 }
