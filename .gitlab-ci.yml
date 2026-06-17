@@ -33,8 +33,11 @@ stages:
 # ===========================================================================
 
 validate-kb:
-  <<: *python-setup
   stage: validate
+  image: python:3.10-slim
+  before_script:
+    - pip install --upgrade pip --quiet
+    - pip install pydantic --quiet
   script:
     - python scripts/validate_kb.py --all
   rules:
@@ -64,8 +67,8 @@ security-scan:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 consistency-check:
-  <<: *python-setup
   stage: validate
+  image: python:3.10-slim
   script:
     - python scripts/validation/check_doc_code_consistency.py
     - python scripts/validation/generate_repo_signals.py
@@ -90,7 +93,7 @@ type-check:
   image: python:3.10-slim
   before_script:
     - pip install --upgrade pip --quiet
-    - pip install -r requirements-dev.txt --quiet
+    - pip install mypy types-requests --quiet
   script:
     - mypy src/core/path_guard.py src/core/provenance_guard.py --ignore-missing-imports --no-error-summary
   rules:
@@ -98,8 +101,8 @@ type-check:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 evidence-integrity:
-  <<: *python-setup
   stage: validate
+  image: python:3.10-slim
   script:
     - python scripts/validation/check_evidence_circularity.py
     - python scripts/validation/check_baseline_coverage.py
