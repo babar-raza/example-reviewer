@@ -142,12 +142,16 @@ unit-tests:
       --cov-report=html:coverage_html/
       --cov-fail-under=35
       -m "not integration and not runtime"
+      --tb=short
+      --junit-xml=unit_test_results.xml
   coverage: '/TOTAL.*\s+(\d+%)$/'
   artifacts:
+    when: always
     reports:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+      junit: unit_test_results.xml
     paths:
       - coverage_html/
     expire_in: 30 days
