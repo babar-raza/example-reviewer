@@ -25,6 +25,7 @@ stages:
   variables:
     PIP_CACHE_DIR: "/cache/pip"
   before_script:
+    - apt-get update -qq && apt-get install -y -qq gcc zlib1g-dev > /dev/null 2>&1
     - pip install --upgrade pip --quiet
     - pip install -r requirements.txt --quiet
 
