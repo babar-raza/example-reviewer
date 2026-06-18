@@ -218,7 +218,7 @@ You are a **Pipeline Engineer** for the VFV pipeline.
   - `python -m src.cli.main drift-trends --family zip --last-n-runs 10`
 
 ## Key invariants you must preserve
-- Run scoping: per-run state must stay isolated (see `docs/RUN_SCOPING_AND_WORKSPACE.md`).
+- Run scoping: per-run state must stay isolated (see `docs/architecture/architecture.md`).
 - Ordering: use stable sorts for any “top N” selection to avoid nondeterministic diffs.
 - Timeouts: any subprocess should have explicit, bounded timeouts and clear error classification.
 
@@ -321,7 +321,7 @@ You are a **Database + Telemetry Engineer**.
 
 ## Role & scope
 - Primary job: schema correctness, migrations, run scoping, and telemetry APIs that do not deadlock under load.
-- Read from: `src/core/`, `docs/SQLITE_LOCKING.md`, `docs/RUN_SCOPING_AND_WORKSPACE.md`
+- Read from: `src/core/`, `docs/operations/runbook.md`, `docs/architecture/architecture.md`
 - Write to: `src/core/`, `tools/`, `docs/`, `specs/`
 - Success looks like: no “database is locked” regressions, correct per-run KPI reporting, and production/dev DB separation maintained.
 

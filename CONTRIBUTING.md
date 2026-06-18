@@ -47,10 +47,10 @@ older than 90 days. This will surface staleness without gate-blocking work.
 
 1. Add `config/families/<family>.json` with the family configuration
 2. Run `python scripts/validate_kb.py --all` to confirm schema validity
-3. If adding KB files: follow [docs/family-kb.md](docs/family-kb.md) governance
+3. If adding KB files: follow [docs/development/family-kb.md](docs/development/family-kb.md) governance
 4. Add the family to `evals/family_accuracy_report.json` (even if rate is 0%)
 5. Generate a baseline: `python scripts/evals/generate_baseline.py --family <name>`
-6. Add a row to [docs/accuracy-audit.md](docs/accuracy-audit.md)
+6. Add a row to [docs/assessments/accuracy-audit.md](docs/assessments/accuracy-audit.md)
 
 ## Adding KB Patterns or Hints
 
@@ -61,7 +61,7 @@ KB files (`*_behavioral_patterns.json`, `*_review_hints.json`) require:
   create `tests/test_<family>_fixes.py`
 - For patterns with `"severity": "error"` or `"critical"`: second reviewer
   required (see CODEOWNERS)
-- See [docs/family-kb.md](docs/family-kb.md) for the full governance process
+- See [docs/development/family-kb.md](docs/development/family-kb.md) for the full governance process
 
 ## Running Tests
 

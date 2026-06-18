@@ -11,7 +11,7 @@
 # Behavioral patterns with severity "error"/"critical" directly gate pipeline output.
 # Review hints influence LLM prompt construction.
 # Both require explicit sign-off before merge.
-# See docs/family-kb.md for the governance process.
+# See docs/development/family-kb.md for the governance process.
 
 config/families/*_behavioral_patterns.json  babar.raza@aspose.com
 config/families/*_review_hints.json         babar.raza@aspose.com
@@ -32,3 +32,6 @@ scripts/evals/                              babar.raza@aspose.com
 src/core/path_guard.py                      babar.raza@aspose.com
 src/core/provenance_guard.py                babar.raza@aspose.com
 src/pipeline/orchestrator.py                babar.raza@aspose.com
+
+# Documentation — structural changes require review
+docs/                                       babar.raza@aspose.com

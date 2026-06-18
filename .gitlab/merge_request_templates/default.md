@@ -7,7 +7,7 @@
 - [ ] `python scripts/validate_kb.py --all` runs clean locally
 - [ ] New/changed patterns tested against real code samples (positive AND negative cases)
 - [ ] Patterns with `severity: "error"` or `"critical"` have a second reviewer assigned
-- [ ] `docs/family-kb.md` updated if a new family KB was added
+- [ ] `docs/development/family-kb.md` updated if a new family KB was added
 - [ ] Structural test added or existing tests still pass
 
 
@@ -36,6 +36,13 @@
 ## Test Plan
 <!-- How was this tested? -->
 
+
+## Documentation Impact
+
+- [ ] No documentation changes needed
+- [ ] Docs updated — `python scripts/validation/check_doc_links.py` passes locally
+- [ ] New doc file added to `docs/index.md` navigation
+- [ ] Cross-references to moved/renamed files updated
 
 ## Checklist
 

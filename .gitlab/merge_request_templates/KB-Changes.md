@@ -9,7 +9,7 @@
 - [ ] New/changed patterns have been tested against clean samples that should NOT trigger them
 - [ ] Patterns with `severity: "error"` or `"critical"` have a second reviewer assigned (see CODEOWNERS)
 - [ ] If a pattern references a specific API version (e.g., "removed in v26.1.0"), the version is noted in `description`
-- [ ] `docs/family-kb.md` "Family Coverage" table is updated if a new family KB was added
+- [ ] `docs/development/family-kb.md` "Family Coverage" table is updated if a new family KB was added
 - [ ] Structural tests exist or have been added (see `tests/test_kb_structure.py`)
 
 
