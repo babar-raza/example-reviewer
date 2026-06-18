@@ -4,21 +4,21 @@
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.10+
 - .NET SDK 8.0+
 - Git
-- Ollama (for AI-powered fixing)
 - SQLite3
 
 ### Setup Development Environment
 
 ```bash
 # Clone repository
-cd d:/onedrive/Documents/GitHub/aspose.net/scripts/example-reviewer
+git clone <repo-url> example-reviewer-gitlab
+cd example-reviewer-gitlab
 
 # Create virtual environment
 python -m venv .venv
-source .venv/Scripts/activate  # Windows
+.venv\Scripts\activate  # Windows
 # source .venv/bin/activate    # Linux/Mac
 
 # Install dependencies
@@ -28,7 +28,7 @@ pip install -r requirements.txt
 pip install pytest pytest-cov black mypy pylint
 
 # Initialize database
-python src/cli.py discover --family zip
+python -m src.cli.main run --family zip --dry-run
 
 # Verify installation
 python -m pytest tests/
@@ -37,31 +37,27 @@ python -m pytest tests/
 ### Directory Structure
 
 ```
-example-reviewer/
+example-reviewer-gitlab/
 ├── .venv/                  # Python virtual environment
 ├── config/                 # Configuration files
-├── data/                   # SQLite database
-│   └── snippets.db
+│   ├── global.json
+│   └── families/           # Per-family configs
+├── data/                   # SQLite database (gitignored)
+│   └── example_reviewer.db
 ├── docs/                   # Documentation
-│   ├── development-guide.md
-│   ├── troubleshooting.md
-│   └── ...
-├── logs/                   # Application logs
-├── specs/                  # Technical specifications
-│   ├── architecture.md
-│   ├── database-schema.md
+│   ├── architecture/       # System design docs
+│   ├── operations/         # Operations and troubleshooting
 │   └── ...
 ├── src/                    # Source code
-│   ├── cli.py             # Entry point
-│   ├── database.py        # ORM models
-│   ├── discovery_service.py
-│   ├── validation_orchestrator.py
-│   ├── patching_service.py
-│   └── ...
-├── test-examples/          # Test .NET project
-│   ├── Program.cs
-│   └── Validator.csproj
-├── tests/                  # Unit and integration tests
+│   ├── cli/               # CLI entry point
+│   │   └── main.py
+│   ├── core/              # Models, database, telemetry
+│   ├── services/          # Pipeline service implementations
+│   ├── pipeline/          # Orchestrator
+│   ├── mcp_tools/         # MCP server
+│   └── http_server.py     # FastAPI wrapper
+├── scripts/               # Validation and utility scripts
+├── tests/                 # Unit and integration tests
 ├── workspaces/            # Temporary compilation directories
 ├── requirements.txt       # Python dependencies
 ├── .gitignore
@@ -253,9 +249,9 @@ with open(file_path, 'r', encoding='utf-8') as f:
 
 # Graceful degradation
 try:
-    fixed_code = ollama.fix_code(original, errors, patterns)
-except OllamaError:
-    logger.warning("Ollama unavailable, skipping AI fix")
+    fixed_code = llm_service.fix_code(original, errors, patterns)
+except LLMError:
+    logger.warning("LLM service unavailable, skipping AI fix")
     fixed_code = None
 ```
 
@@ -356,24 +352,18 @@ def sample_snippet(db):
 ### Mocking External Dependencies
 
 ```python
-# tests/test_ollama_integration.py
+# tests/test_llm_service.py
 from unittest.mock import Mock, patch
 import pytest
-from src.ollama_integration import OllamaClient
 
-@patch('requests.post')
-def test_ollama_fix_code(mock_post):
-    # Mock Ollama API response
-    mock_post.return_value.status_code = 200
-    mock_post.return_value.json.return_value = {
-        'response': 'var x = new Archive();'
-    }
+@patch('src.services.llm_service.LLMService')
+def test_llm_fix_code(mock_llm):
+    # Mock LLM response
+    mock_llm.return_value.fix_code.return_value = 'var x = new Archive();'
 
-    client = OllamaClient()
-    fixed = client.fix_code("var x = Archive();", "CS0246", [])
+    result = mock_llm.return_value.fix_code("var x = Archive();", "CS0246", [])
 
-    assert "new Archive()" in fixed
-    mock_post.assert_called_once()
+    assert "new Archive()" in result
 ```
 
 ---
@@ -384,7 +374,7 @@ def test_ollama_fix_code(mock_post):
 
 ```bash
 export LOG_LEVEL="DEBUG"
-python src/cli.py validate --family zip
+python -m src.cli.main validate --family zip
 ```
 
 ### Interactive Debugging
@@ -409,7 +399,7 @@ breakpoint()
       "name": "CLI: Discover",
       "type": "python",
       "request": "launch",
-      "program": "${workspaceFolder}/src/cli.py",
+      "module": "src.cli.main",
       "args": ["discover", "--family", "zip"],
       "console": "integratedTerminal",
       "env": {
@@ -420,7 +410,7 @@ breakpoint()
       "name": "CLI: Validate",
       "type": "python",
       "request": "launch",
-      "program": "${workspaceFolder}/src/cli.py",
+      "module": "src.cli.main",
       "args": ["validate", "--family", "zip"],
       "console": "integratedTerminal"
     },
@@ -440,7 +430,7 @@ breakpoint()
 
 ```bash
 # Open database in sqlite3
-sqlite3 data/snippets.db
+sqlite3 data/example_reviewer.db
 
 # Useful queries
 .schema snippets
@@ -573,9 +563,9 @@ def test_pdf_pattern_fixes():
 #### 4. Test End-to-End
 
 ```bash
-python src/cli.py discover --family pdf
-python src/cli.py validate --family pdf
-python src/cli.py patch --family pdf --dry-run
+python -m src.cli.main discover --family pdf
+python -m src.cli.main validate --family pdf
+python -m src.cli.main patch --family pdf --dry-run
 ```
 
 ---
@@ -595,7 +585,7 @@ class Snippet(Base):
 import sqlite3
 
 def migrate():
-    conn = sqlite3.connect("data/snippets.db")
+    conn = sqlite3.connect("data/example_reviewer.db")
     cursor = conn.cursor()
 
     # Add column
@@ -740,8 +730,8 @@ Describe testing performed
 
 ```bash
 # Reset database
-rm data/snippets.db
-python src/cli.py discover --family zip
+rm data/example_reviewer.db
+python -m src.cli.main discover --family zip
 
 # Clean workspaces
 rm -rf workspaces/*
@@ -756,7 +746,7 @@ find src -name '*.py' | xargs wc -l
 grep -r "TODO" src/
 
 # Check database size
-ls -lh data/snippets.db
+ls -lh data/example_reviewer.db
 ```
 
 ---
@@ -766,4 +756,4 @@ ls -lh data/snippets.db
 - [Python Style Guide (PEP 8)](https://pep8.org/)
 - [SQLAlchemy Documentation](https://docs.sqlalchemy.org/)
 - [pytest Documentation](https://docs.pytest.org/)
-- [Ollama API Reference](https://github.com/ollama/ollama/blob/main/docs/api.md)
+- [LiteLLM Documentation](https://docs.litellm.ai/)

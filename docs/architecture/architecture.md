@@ -71,9 +71,9 @@ The Example Reviewer is an automated pipeline for validating, fixing, and updati
 
 ### Core Components
 
-- **PipelineOrchestrator**: Main controller ([orchestrator.py:31-1349](../src/pipeline/orchestrator.py#L31))
-- **ConfigurationManager**: Hierarchical config loader ([config.py:236-445](../src/core/config.py#L236))
-- **Database**: SQLite with comprehensive schema ([database.py:24-1511](../src/core/database.py#L24))
+- **PipelineOrchestrator**: Main controller ([orchestrator.py:31-1349](../../src/pipeline/orchestrator.py#L31))
+- **ConfigurationManager**: Hierarchical config loader ([config.py:236-445](../../src/core/config.py#L236))
+- **Database**: SQLite with comprehensive schema ([database.py:24-1511](../../src/core/database.py#L24))
 - **Service Layer**: Modular services for each phase
 - **Quality Gates**: Multi-layered validation system
 
@@ -118,7 +118,7 @@ flowchart TD
 **Purpose**: Scan markdown files and extract C# code examples
 **Input**: Content roots from family config
 **Output**: `example_records` with status `DISCOVERED`
-**Service**: [DiscoveryService](../src/services/discovery_service.py)
+**Service**: [DiscoveryService](../../src/services/discovery_service.py)
 
 #### Flow
 
@@ -143,8 +143,8 @@ flowchart TD
 
 #### Source Reference
 
-- Implementation: [discovery_service.py](../src/services/discovery_service.py)
-- Orchestrator call: [orchestrator.py:426-449](../src/pipeline/orchestrator.py#L426)
+- Implementation: [discovery_service.py](../../src/services/discovery_service.py)
+- Orchestrator call: [orchestrator.py:426-449](../../src/pipeline/orchestrator.py#L426)
 
 ---
 
@@ -153,7 +153,7 @@ flowchart TD
 **Purpose**: Compile C# code against Aspose NuGet packages
 **Input**: Examples with status `DISCOVERED`
 **Output**: `COMPILABLE` or `COMPILE_FAILED`
-**Service**: [CompilationService](../src/services/compilation_service.py)
+**Service**: [CompilationService](../../src/services/compilation_service.py)
 
 #### Flow
 
@@ -196,9 +196,9 @@ The compilation phase enriches LLM fix requests with:
 
 #### Source Reference
 
-- Implementation: [compilation_service.py](../src/services/compilation_service.py)
-- Orchestrator call: [orchestrator.py:451-635](../src/pipeline/orchestrator.py#L451)
-- LLM fix logic: [orchestrator.py:549-621](../src/pipeline/orchestrator.py#L549)
+- Implementation: [compilation_service.py](../../src/services/compilation_service.py)
+- Orchestrator call: [orchestrator.py:451-635](../../src/pipeline/orchestrator.py#L451)
+- LLM fix logic: [orchestrator.py:549-621](../../src/pipeline/orchestrator.py#L549)
 
 ---
 
@@ -207,7 +207,7 @@ The compilation phase enriches LLM fix requests with:
 **Purpose**: Execute compiled code with test data
 **Input**: Examples with status `COMPILABLE`
 **Output**: `VERIFIED` or `RUNTIME_FAILED`
-**Service**: [RuntimeService](../src/services/runtime_service.py)
+**Service**: [RuntimeService](../../src/services/runtime_service.py)
 
 #### Flow
 
@@ -239,7 +239,7 @@ Distinguishes between:
 - **Build Failures**: Compilation errors during runtime (use compilation prompts)
 - **Runtime Failures**: Actual execution errors (use runtime prompts)
 
-Detection logic: [orchestrator.py:170-194](../src/pipeline/orchestrator.py#L170)
+Detection logic: [orchestrator.py:170-194](../../src/pipeline/orchestrator.py#L170)
 
 #### Cascading Degradation Prevention
 
@@ -251,7 +251,7 @@ if new_is_build_error and not prev_was_build_error:
     continue  # Don't cascade the degradation
 ```
 
-Source: [orchestrator.py:915-922](../src/pipeline/orchestrator.py#L915)
+Source: [orchestrator.py:915-922](../../src/pipeline/orchestrator.py#L915)
 
 #### Test Data Auto-Backfill
 
@@ -262,13 +262,13 @@ if global_config.backfill.auto_enabled:
     result = backfill_service.backfill_test_data(family=family)
 ```
 
-Source: [orchestrator.py:655-685](../src/pipeline/orchestrator.py#L655)
+Source: [orchestrator.py:655-685](../../src/pipeline/orchestrator.py#L655)
 
 #### Source Reference
 
-- Implementation: [runtime_service.py](../src/services/runtime_service.py)
-- Orchestrator call: [orchestrator.py:637-951](../src/pipeline/orchestrator.py#L637)
-- Backfill service: [backfill_service.py](../src/services/backfill_service.py)
+- Implementation: [runtime_service.py](../../src/services/runtime_service.py)
+- Orchestrator call: [orchestrator.py:637-951](../../src/pipeline/orchestrator.py#L637)
+- Backfill service: [backfill_service.py](../../src/services/backfill_service.py)
 
 ---
 
@@ -277,7 +277,7 @@ Source: [orchestrator.py:655-685](../src/pipeline/orchestrator.py#L655)
 **Purpose**: Patch verified code back into markdown files
 **Input**: Examples with status `VERIFIED`
 **Output**: `MD_UPDATED` and modified markdown files
-**Service**: [MarkdownUpdateService](../src/services/markdown_service.py)
+**Service**: [MarkdownUpdateService](../../src/services/markdown_service.py)
 
 #### Flow
 
@@ -305,12 +305,12 @@ Source: [orchestrator.py:655-685](../src/pipeline/orchestrator.py#L655)
 - **`upload-on-change`**: Upload changed gists, inline unchanged
 - **`upload-always`**: Always upload to new gists
 
-Configuration: [config/global.json:36](../config/global.json#L36)
+Configuration: [config/global.json:36](../../config/global.json#L36)
 
 #### Source Reference
 
-- Implementation: [markdown_service.py](../src/services/markdown_service.py)
-- Orchestrator call: [orchestrator.py:953-959](../src/pipeline/orchestrator.py#L953)
+- Implementation: [markdown_service.py](../../src/services/markdown_service.py)
+- Orchestrator call: [orchestrator.py:953-959](../../src/pipeline/orchestrator.py#L953)
 
 ---
 
@@ -319,7 +319,7 @@ Configuration: [config/global.json:36](../config/global.json#L36)
 **Purpose**: Human-like review of updated markdown for quality/accuracy
 **Input**: Examples with status `MD_UPDATED`
 **Output**: `FINAL_REVIEW_PASSED` or `FINAL_REVIEW_FAILED`
-**Service**: [LLMService](../src/services/llm_service.py)
+**Service**: [LLMService](../../src/services/llm_service.py)
 
 #### Flow
 
@@ -364,7 +364,7 @@ def _consensus_review(content, snippets, num_passes=2):
         return {'approved': tiebreaker['approved'], 'confidence': 'medium'}
 ```
 
-Source: [orchestrator.py:961-1034](../src/pipeline/orchestrator.py#L961)
+Source: [orchestrator.py:961-1034](../../src/pipeline/orchestrator.py#L961)
 
 #### Issue Tracking
 
@@ -381,13 +381,13 @@ ReviewIssue(
 )
 ```
 
-Source: [database.py:215-231](../src/core/database.py#L215)
+Source: [database.py:215-231](../../src/core/database.py#L215)
 
 #### Source Reference
 
-- Implementation: [llm_service.py](../src/services/llm_service.py)
-- Orchestrator call: [orchestrator.py:1036-1209](../src/pipeline/orchestrator.py#L1036)
-- Review models: [models.py](../src/core/models.py)
+- Implementation: [llm_service.py](../../src/services/llm_service.py)
+- Orchestrator call: [orchestrator.py:1036-1209](../../src/pipeline/orchestrator.py#L1036)
+- Review models: [models.py](../../src/core/models.py)
 
 ---
 
@@ -396,7 +396,7 @@ Source: [database.py:215-231](../src/core/database.py#L215)
 **Purpose**: Export telemetry, commit changes to git
 **Input**: Examples with status `FINAL_REVIEW_PASSED`
 **Output**: Git commit, telemetry exports
-**Services**: [TelemetryService](../src/services/telemetry_service.py), Git
+**Services**: [TelemetryService](../../src/services/telemetry_service.py), Git
 
 #### Flow
 
@@ -437,7 +437,7 @@ Family: zip
 Co-Authored-By: Example Reviewer <example-reviewer@aspose.net>
 ```
 
-Configuration: [config/global.json:23-27](../config/global.json#L23)
+Configuration: [config/global.json:23-27](../../config/global.json#L23)
 
 #### Telemetry Export
 
@@ -452,9 +452,9 @@ Export path: `./local-telemetry/run_{run_id}/`
 
 #### Source Reference
 
-- Implementation: [orchestrator.py:1211-1342](../src/pipeline/orchestrator.py#L1211)
-- Telemetry service: [telemetry_service.py](../src/services/telemetry_service.py)
-- Telemetry core: [telemetry.py](../src/core/telemetry.py)
+- Implementation: [orchestrator.py:1211-1342](../../src/pipeline/orchestrator.py#L1211)
+- Telemetry service: [telemetry_service.py](../../src/services/telemetry_service.py)
+- Telemetry core: [telemetry.py](../../src/core/telemetry.py)
 
 ---
 
@@ -467,7 +467,7 @@ The Example Reviewer uses a modular service architecture. Each service is respon
 #### DiscoveryService
 
 **Responsibility**: Scan content and extract code examples
-**File**: [src/services/discovery_service.py](../src/services/discovery_service.py)
+**File**: [src/services/discovery_service.py](../../src/services/discovery_service.py)
 
 **Key Methods**:
 - `discover_family(family, config, max_files)`: Main entry point
@@ -487,7 +487,7 @@ The Example Reviewer uses a modular service architecture. Each service is respon
 #### CompilationService
 
 **Responsibility**: Compile C# code with .NET SDK
-**File**: [src/services/compilation_service.py](../src/services/compilation_service.py)
+**File**: [src/services/compilation_service.py](../../src/services/compilation_service.py)
 
 **Key Methods**:
 - `compile_example(example, config)`: Main compilation
@@ -519,7 +519,7 @@ workspace/compile/{example_id}/
 #### RuntimeService
 
 **Responsibility**: Execute compiled code with test data
-**File**: [src/services/runtime_service.py](../src/services/runtime_service.py)
+**File**: [src/services/runtime_service.py](../../src/services/runtime_service.py)
 
 **Key Methods**:
 - `execute_example(example, config, test_data_path)`: Main execution
@@ -554,7 +554,7 @@ workspace/runtime/{example_id}/
 #### MarkdownUpdateService
 
 **Responsibility**: Patch verified code into markdown files
-**File**: [src/services/markdown_service.py](../src/services/markdown_service.py)
+**File**: [src/services/markdown_service.py](../../src/services/markdown_service.py)
 
 **Key Methods**:
 - `update_all_files(family, dry_run)`: Main entry point
@@ -576,7 +576,7 @@ workspace/runtime/{example_id}/
 #### LLMService
 
 **Responsibility**: OpenAI/Ollama integration for code fixing and review
-**File**: [src/services/llm_service.py](../src/services/llm_service.py)
+**File**: [src/services/llm_service.py](../../src/services/llm_service.py)
 
 **Key Methods**:
 - `fix_code(code, errors, context_type, ...)`: Fix compilation/runtime errors
@@ -594,9 +594,9 @@ workspace/runtime/{example_id}/
 - Temperature control (default: 0.2 for determinism)
 
 **Prompt Templates**:
-- Compilation: [llm_service.py](../src/services/llm_service.py) - `_create_compilation_prompt()`
-- Runtime: [llm_service.py](../src/services/llm_service.py) - `_create_runtime_prompt()`
-- Review: [llm_service.py](../src/services/llm_service.py) - `_create_review_prompt()`
+- Compilation: [llm_service.py](../../src/services/llm_service.py) - `_create_compilation_prompt()`
+- Runtime: [llm_service.py](../../src/services/llm_service.py) - `_create_runtime_prompt()`
+- Review: [llm_service.py](../../src/services/llm_service.py) - `_create_review_prompt()`
 
 ---
 
@@ -605,7 +605,7 @@ workspace/runtime/{example_id}/
 #### TelemetryService
 
 **Responsibility**: Track pipeline metrics and post to HTTP API
-**File**: [src/services/telemetry_service.py](../src/services/telemetry_service.py)
+**File**: [src/services/telemetry_service.py](../../src/services/telemetry_service.py)
 
 **Key Methods**:
 - `create_run_event(run_id, job_type, config, status)`: Initialize run
@@ -642,7 +642,7 @@ TelemetryRun(
 #### VectorDBService
 
 **Responsibility**: Similarity search for LLM context enrichment
-**File**: [src/services/vector_db_service.py](../src/services/vector_db_service.py)
+**File**: [src/services/vector_db_service.py](../../src/services/vector_db_service.py)
 
 **Key Methods**:
 - `add_example(example_id, code, metadata)`: Store verified example
@@ -672,14 +672,14 @@ llm_response = llm_service.fix_code(
 )
 ```
 
-Source: [orchestrator.py:536-548](../src/pipeline/orchestrator.py#L536)
+Source: [orchestrator.py:536-548](../../src/pipeline/orchestrator.py#L536)
 
 ---
 
 #### ResourceDetectionService
 
 **Responsibility**: Detect GPU/CPU and allocate resources
-**File**: [src/services/resource_detection_service.py](../src/services/resource_detection_service.py)
+**File**: [src/services/resource_detection_service.py](../../src/services/resource_detection_service.py)
 
 **Key Methods**:
 - `detect_vram()`: Query GPU memory (pynvml)
@@ -708,7 +708,7 @@ ResourceDecision(
 #### BackfillService
 
 **Responsibility**: Auto-download missing test data and API references
-**File**: [src/services/backfill_service.py](../src/services/backfill_service.py)
+**File**: [src/services/backfill_service.py](../../src/services/backfill_service.py)
 
 **Key Methods**:
 - `backfill_test_data(family, force)`: Download test data from GitHub
@@ -732,14 +732,14 @@ ResourceDecision(
    d. Record backfill in telemetry
 ```
 
-Configuration: [config/global.json:57-62](../config/global.json#L57)
+Configuration: [config/global.json:57-62](../../config/global.json#L57)
 
 ---
 
 #### GistPublisher
 
 **Responsibility**: Upload verified code to GitHub Gists
-**File**: [src/services/gist_publisher.py](../src/services/gist_publisher.py)
+**File**: [src/services/gist_publisher.py](../../src/services/gist_publisher.py)
 
 **Key Methods**:
 - `publish_example(example, family, description)`: Upload to GitHub
@@ -865,7 +865,7 @@ The Example Reviewer uses SQLite with WAL mode for concurrent access. The schema
 
 Primary table storing all discovered code examples.
 
-**Schema**: [database.py:39-63](../src/core/database.py#L39)
+**Schema**: [database.py:39-63](../../src/core/database.py#L39)
 
 **Key Fields**:
 - `example_id` (PK): UUID
@@ -894,7 +894,7 @@ Primary table storing all discovered code examples.
 
 Records all compilation attempts (including LLM fixes).
 
-**Schema**: [database.py:69-88](../src/core/database.py#L69)
+**Schema**: [database.py:69-88](../../src/core/database.py#L69)
 
 **Key Fields**:
 - `attempt_id` (PK): UUID
@@ -918,7 +918,7 @@ Records all compilation attempts (including LLM fixes).
 
 Records all runtime execution attempts.
 
-**Schema**: [database.py:90-111](../src/core/database.py#L90)
+**Schema**: [database.py:90-111](../../src/core/database.py#L90)
 
 **Key Fields**:
 - `attempt_id` (PK): UUID
@@ -945,7 +945,7 @@ Records all runtime execution attempts.
 
 Records all markdown file modifications.
 
-**Schema**: [database.py:117-128](../src/core/database.py#L117)
+**Schema**: [database.py:117-128](../../src/core/database.py#L117)
 
 **Key Fields**:
 - `edit_id` (PK): UUID
@@ -964,7 +964,7 @@ Records all markdown file modifications.
 
 Records final LLM review results.
 
-**Schema**: [database.py:197-212](../src/core/database.py#L197)
+**Schema**: [database.py:197-212](../../src/core/database.py#L197)
 
 **Key Fields**:
 - `review_id` (PK): UUID
@@ -983,7 +983,7 @@ Records final LLM review results.
 
 Records specific issues found during final review.
 
-**Schema**: [database.py:214-231](../src/core/database.py#L214)
+**Schema**: [database.py:214-231](../../src/core/database.py#L214)
 
 **Key Fields**:
 - `issue_id` (PK): UUID
@@ -1003,7 +1003,7 @@ Records specific issues found during final review.
 
 Records full telemetry run data for HTTP API.
 
-**Schema**: [database.py:250-300](../src/core/database.py#L250)
+**Schema**: [database.py:250-300](../../src/core/database.py#L250)
 
 **Key Fields** (40+ total):
 - `event_id` (PK): UUID
@@ -1050,7 +1050,7 @@ stateDiagram-v2
     COMMITTED --> [*]: End (success)
 ```
 
-**Status Enum**: [models.py](../src/core/models.py) - `ExampleStatus`
+**Status Enum**: [models.py](../../src/core/models.py) - `ExampleStatus`
 
 ---
 
@@ -1074,8 +1074,8 @@ Pydantic Defaults (lowest priority)
 
 ### Global Configuration
 
-**File**: [config/global.json](../config/global.json)
-**Model**: [config.py:130-145](../src/core/config.py#L130) - `GlobalConfig`
+**File**: [config/global.json](../../config/global.json)
+**Model**: [config.py:130-145](../../src/core/config.py#L130) - `GlobalConfig`
 
 **Sections**:
 
@@ -1140,8 +1140,8 @@ Pydantic Defaults (lowest priority)
 
 ### Family Configuration
 
-**Directory**: [config/families/](../config/families/)
-**Model**: [config.py:197-234](../src/core/config.py#L197) - `FamilyConfig`
+**Directory**: [config/families/](../../config/families/)
+**Model**: [config.py:197-234](../../src/core/config.py#L197) - `FamilyConfig`
 
 **Example** (zip.json):
 
@@ -1229,7 +1229,7 @@ The following environment variables override config values:
 | `OPENAI_API_KEY` | (Used if `llm.api_key_env_var` = `OPENAI_API_KEY`) | `sk-...` |
 | `GIST_PAT` | (Used if `gist.pat_env_var` = `GIST_PAT`) | `ghp_...` |
 
-**Implementation**: [config.py:320-340](../src/core/config.py#L320) - `_apply_env_overrides()`
+**Implementation**: [config.py:320-340](../../src/core/config.py#L320) - `_apply_env_overrides()`
 
 ---
 
@@ -1246,7 +1246,7 @@ python -m cli run \
   --dry-run
 ```
 
-**Implementation**: [cli/main.py](../src/cli/main.py) - `run` command
+**Implementation**: [cli/main.py](../../src/cli/main.py) - `run` command
 
 ---
 
@@ -1263,7 +1263,7 @@ flowchart TD
     G --> H[Return merged config]
 ```
 
-**Implementation**: [config.py:236-274](../src/core/config.py#L236) - `ConfigurationManager`
+**Implementation**: [config.py:236-274](../../src/core/config.py#L236) - `ConfigurationManager`
 
 ---
 
@@ -1336,7 +1336,7 @@ def check_patterns(code, config):
 
 **Purpose**: Prevent LLM fixes from making code worse
 **Phase**: Runtime (Phase C)
-**Implementation**: [orchestrator.py:910-922](../src/pipeline/orchestrator.py#L910)
+**Implementation**: [orchestrator.py:910-922](../../src/pipeline/orchestrator.py#L910)
 
 **Logic**:
 
@@ -1394,7 +1394,7 @@ for attempt in range(max_retries):
 
 **Purpose**: Human-like quality review before commit
 **Phase**: Final Review (Phase E)
-**Implementation**: [orchestrator.py:961-1034](../src/pipeline/orchestrator.py#L961)
+**Implementation**: [orchestrator.py:961-1034](../../src/pipeline/orchestrator.py#L961)
 
 **Logic**:
 
@@ -1450,7 +1450,7 @@ def _consensus_review(content, snippets, num_passes=2):
 - `warning`: Minor issue
 - `info`: Informational
 
-**Database Schema**: [database.py:214-231](../src/core/database.py#L214)
+**Database Schema**: [database.py:214-231](../../src/core/database.py#L214)
 
 ---
 
@@ -1522,7 +1522,7 @@ The Example Reviewer is designed for extensibility. Here are the key extension p
    python -m cli discover --family newproduct
    ```
 
-**Example**: [config/families/zip.json](../config/families/zip.json)
+**Example**: [config/families/zip.json](../../config/families/zip.json)
 
 ---
 
@@ -1570,7 +1570,7 @@ The Example Reviewer is designed for extensibility. Here are the key extension p
    }
    ```
 
-**Example Validator**: [resource_detection_service.py](../src/services/resource_detection_service.py)
+**Example Validator**: [resource_detection_service.py](../../src/services/resource_detection_service.py)
 
 ---
 
@@ -1616,7 +1616,7 @@ The Example Reviewer is designed for extensibility. Here are the key extension p
        logger.info(f"Pattern detected: {match.name} - {match.message}")
    ```
 
-**Example Pattern Config**: [config/families/zip.json](../config/families/zip.json) - `non_existent_apis`
+**Example Pattern Config**: [config/families/zip.json](../../config/families/zip.json) - `non_existent_apis`
 
 ---
 
@@ -1672,7 +1672,7 @@ The Example Reviewer is designed for extensibility. Here are the key extension p
    export MY_PROVIDER_API_KEY="your-key"
    ```
 
-**Example Providers**: [llm_service.py](../src/services/llm_service.py) - OpenAI, Ollama implementations
+**Example Providers**: [llm_service.py](../../src/services/llm_service.py) - OpenAI, Ollama implementations
 
 ---
 
@@ -1723,7 +1723,7 @@ The Example Reviewer is designed for extensibility. Here are the key extension p
    }
    ```
 
-**Example Adapter**: [telemetry_service.py](../src/services/telemetry_service.py) - HTTP API adapter
+**Example Adapter**: [telemetry_service.py](../../src/services/telemetry_service.py) - HTTP API adapter
 
 ---
 
@@ -1773,7 +1773,7 @@ The Example Reviewer is designed for extensibility. Here are the key extension p
    }
    ```
 
-**Example Gate**: Drift detection in [orchestrator.py:910-922](../src/pipeline/orchestrator.py#L910)
+**Example Gate**: Drift detection in [orchestrator.py:910-922](../../src/pipeline/orchestrator.py#L910)
 
 ---
 
@@ -1928,9 +1928,9 @@ This document has been comprehensively updated to reflect the current implementa
 ### Source Code References
 
 All major components now include links to source files with line numbers:
-- [orchestrator.py:31-1349](../src/pipeline/orchestrator.py#L31)
-- [database.py:24-1511](../src/core/database.py#L24)
-- [config.py:236-445](../src/core/config.py#L236)
+- [orchestrator.py:31-1349](../../src/pipeline/orchestrator.py#L31)
+- [database.py:24-1511](../../src/core/database.py#L24)
+- [config.py:236-445](../../src/core/config.py#L236)
 - And many more throughout the document
 
 ### Migration Notes
@@ -1949,7 +1949,7 @@ For users of the old documentation:
 - Review this documentation for accuracy
 - Test all code examples
 - Verify all links and references
-- Update related documentation (configuration.md, operations.md)
+- Update related documentation (configuration.md, operations/runbook.md)
 
 ---
 

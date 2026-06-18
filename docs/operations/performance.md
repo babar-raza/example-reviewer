@@ -307,13 +307,13 @@ CREATE INDEX idx_gists_status ON gists(last_status);
 **Pre-warming strategy**:
 ```bash
 # Run discovery first to populate cache
-python src/cli.py discover --family zip
+python -m src.cli.main discover --family zip
 
 # Then validation uses warm cache
-python src/cli.py validate --family zip
+python -m src.cli.main validate --family zip
 ```
 
-**Cache cleanup** (from `docs/operations.md`):
+**Cache cleanup** (from runbook):
 ```bash
 # Remove cache older than 7 days
 find cache/gists/ -name "*.json" -mtime +7 -delete
@@ -327,7 +327,7 @@ rm -rf cache/gists/
 **Vacuum regularly**:
 ```python
 import sqlite3
-conn = sqlite3.connect('data/examples.db')
+conn = sqlite3.connect('data/example_reviewer.db')
 conn.execute('VACUUM')
 conn.close()
 ```
@@ -515,9 +515,8 @@ def create_mock_304_response(self) -> Mock:
 
 ## Related Documentation
 
-- [Operations Guide](operations.md) - Cache and database management
-- [Architecture](architecture.md) - System design and components
-- [Troubleshooting](troubleshooting.md) - Performance issue resolution
+- [Operations Runbook](runbook.md) - Cache and database management
+- [Architecture](../architecture/architecture.md) - System design and components
 
 ---
 

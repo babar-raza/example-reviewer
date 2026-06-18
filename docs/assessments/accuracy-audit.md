@@ -1,14 +1,14 @@
 # Family Accuracy Audit
 
 > Last updated: 2026-04-20
-> Source data: [evals/family_accuracy_report.json](../evals/family_accuracy_report.json)
-> Methodology: [evals/methodology.md](../evals/methodology.md)
+> Source data: [evals/family_accuracy_report.json](../../evals/family_accuracy_report.json)
+> Methodology: [evals/methodology.md](../../evals/methodology.md)
 
 ## Summary
 
 This document provides the human-readable accuracy audit trail for all
 production families in Example Reviewer. It explains what the accuracy figures
-in [README.md Section 9](../README.md#9-supported-families) mean, where they
+in [README.md Section 9](../../README.md#9-supported-families) mean, where they
 come from, and why the unverified fraction exists.
 
 ## Methodology (Short Form)
@@ -18,28 +18,28 @@ An example is **verified** when it:
 2. Runs to completion without exception
 3. Passes the LLM final review gate (semantic fidelity confirmed)
 
-All three must pass. See [evals/methodology.md](../evals/methodology.md) for full definitions.
+All three must pass. See [evals/methodology.md](../../evals/methodology.md) for full definitions.
 
 ## Current Accuracy Table
 
 | Family | Discovered | Verified | Rate | Status | Baseline |
 |--------|-----------|---------|------|--------|---------|
-| ZIP | 66 | 61 | 92.4% | Production | [zip_baseline.json](../.benchmarks/baselines/zip_baseline.json) |
+| ZIP | 66 | 61 | 92.4% | Production | [zip_baseline.json](../../.benchmarks/baselines/zip_baseline.json) |
 | PSD | 391 | 347 | 88.7% | Production | pending config |
-| HTML | 16 | 14 | 87.5% | Production | [html_baseline.json](../.benchmarks/baselines/html_baseline.json) |
-| Email | 20 | 17 | 85.0% | Production | [email_baseline.json](../.benchmarks/baselines/email_baseline.json) |
-| Words | 147 | 123 | 83.7% | Production | [words_baseline.json](../.benchmarks/baselines/words_baseline.json) |
-| PDF | 825 | 684 | 82.9% | Production | [pdf_baseline.json](../.benchmarks/baselines/pdf_baseline.json) |
-| TeX | 45 | 37 | 82.2% | Production | [tex_baseline.json](../.benchmarks/baselines/tex_baseline.json) |
+| HTML | 16 | 14 | 87.5% | Production | [html_baseline.json](../../.benchmarks/baselines/html_baseline.json) |
+| Email | 20 | 17 | 85.0% | Production | [email_baseline.json](../../.benchmarks/baselines/email_baseline.json) |
+| Words | 147 | 123 | 83.7% | Production | [words_baseline.json](../../.benchmarks/baselines/words_baseline.json) |
+| PDF | 825 | 684 | 82.9% | Production | [pdf_baseline.json](../../.benchmarks/baselines/pdf_baseline.json) |
+| TeX | 45 | 37 | 82.2% | Production | [tex_baseline.json](../../.benchmarks/baselines/tex_baseline.json) |
 | Barcode | 201 | 161 | 80.1% | Production | pending config |
-| CAD | 10 | 8 | 80.0% | Production | [cad_baseline.json](../.benchmarks/baselines/cad_baseline.json) |
-| Imaging | 217 | 138 | 63.6% | Production | [imaging_baseline.json](../.benchmarks/baselines/imaging_baseline.json) |
-| Cells | 196 | 121 | 61.7% | Production | [cells_baseline.json](../.benchmarks/baselines/cells_baseline.json) |
-| Slides | 551 | 223 | 40.5% | Production | [slides_baseline.json](../.benchmarks/baselines/slides_baseline.json) |
+| CAD | 10 | 8 | 80.0% | Production | [cad_baseline.json](../../.benchmarks/baselines/cad_baseline.json) |
+| Imaging | 217 | 138 | 63.6% | Production | [imaging_baseline.json](../../.benchmarks/baselines/imaging_baseline.json) |
+| Cells | 196 | 121 | 61.7% | Production | [cells_baseline.json](../../.benchmarks/baselines/cells_baseline.json) |
+| Slides | 551 | 223 | 40.5% | Production | [slides_baseline.json](../../.benchmarks/baselines/slides_baseline.json) |
 | OCR | 115 | 41 | 35.7% | Production | pending config |
-| Medical | 88 | 6 | 6.8% | Early | [medical_baseline.json](../.benchmarks/baselines/medical_baseline.json) |
-| Page | 8 | 0 | 0% | Early | [page_baseline.json](../.benchmarks/baselines/page_baseline.json) |
-| Tasks | 6 | 0 | 0% | Early | [tasks_baseline.json](../.benchmarks/baselines/tasks_baseline.json) |
+| Medical | 88 | 6 | 6.8% | Early | [medical_baseline.json](../../.benchmarks/baselines/medical_baseline.json) |
+| Page | 8 | 0 | 0% | Early | [page_baseline.json](../../.benchmarks/baselines/page_baseline.json) |
+| Tasks | 6 | 0 | 0% | Early | [tasks_baseline.json](../../.benchmarks/baselines/tasks_baseline.json) |
 
 ## Unverified Fraction Analysis
 

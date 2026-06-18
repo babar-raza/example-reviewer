@@ -571,10 +571,10 @@ For 78 snippets with 50% failure rate:
 
 ## Related Documentation
 
-- [Implementation Plan](implementation-plan.md)
-- [Failure Pattern Analysis](failure-pattern-analysis-plan.md)
-- [Ollama Integration Source](../src/ollama_integration.py)
-- [Validation Orchestrator](../src/validation_orchestrator.py)
+- [Architecture](architecture.md)
+- [Patching Strategies](patching-strategies.md)
+- [LLM Service](../../src/services/llm_service.py)
+- [Pipeline Orchestrator](../../src/pipeline/orchestrator.py)
 
 ---
 

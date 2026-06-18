@@ -1430,7 +1430,7 @@ curl http://localhost:8765/api/v1/runs/YOUR-EVENT-ID/commit-url
 ## See Also
 
 - **Interactive API Docs:** http://localhost:8765/docs
-- **Detailed Endpoint Specs:** [specs/features/](../../specs/features/)
-- **System Architecture:** [specs/_index.md](../../specs/_index.md)
-- **Deployment Guide:** [DEPLOYMENT_GUIDE.md](../DEPLOYMENT_GUIDE.md)
+- **System Architecture:** [architecture.md](../architecture/architecture.md)
+- **Configuration:** [configuration.md](configuration.md)
+- **Operations:** [runbook.md](../operations/runbook.md)
 - **Python Client SDK:** Use `TelemetryClient` from `src/telemetry/client.py` for production integrations

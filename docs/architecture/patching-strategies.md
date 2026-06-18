@@ -103,5 +103,5 @@ Where n = number of fences, m = average fence length.
 
 ## See Also
 
-- [pipeline.md](pipeline.md) - Full pipeline phases
-- [safety.md](safety.md) - Safety mechanisms
+- [Pipeline Overview](overview.md) - Full pipeline phases
+- [Safety](../safety/safety.md) - Safety mechanisms

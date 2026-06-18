@@ -81,5 +81,5 @@ All tool schemas include `required` arrays and full parameter coverage matching 
 ## See Also
 
 - [configuration.md](configuration.md) - Configuration reference
-- [patching-strategies.md](patching-strategies.md) - Markdown patching algorithm
-- [entrypoints.md](entrypoints.md) - Entry point details
+- [patching-strategies.md](../architecture/patching-strategies.md) - Markdown patching algorithm
+- [entrypoints.md](../architecture/entrypoints.md) - Entry point details

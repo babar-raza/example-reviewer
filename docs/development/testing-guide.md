@@ -96,7 +96,7 @@ test-data/
 
 The `WorkspaceManager` automatically stages required files before code execution:
 
-**Configuration** ([config/families/zip.json](config/families/zip.json:75-80)):
+**Configuration** (`config/families/zip.json`):
 
 ```json
 {
@@ -148,7 +148,7 @@ Output validation failed: No output files matched expected patterns: ['*.zip']
 
 ### Sample Manifest
 
-[test-data/zip/manifest.json](test-data/zip/manifest.json):
+`test-data/zip/manifest.json` (example):
 
 ```json
 {
@@ -713,43 +713,34 @@ def test_full_pipeline(test_setup):
 
 ## Mocking and Fixtures
 
-### Mocking Ollama
+### Mocking LLM Service
 
 ```python
-# tests/test_ollama_integration.py
+# tests/test_llm_service.py
 import pytest
 from unittest.mock import Mock, patch
-from src.ollama_integration import OllamaClient
 
-@patch('requests.post')
-def test_fix_code_success(mock_post):
-    """Test successful Ollama code fix."""
-    # Mock response
-    mock_post.return_value.status_code = 200
-    mock_post.return_value.json.return_value = {
-        'response': 'var x = new Archive();'
-    }
+@patch('src.services.llm_service.LLMService')
+def test_fix_code_success(mock_llm):
+    """Test successful LLM code fix."""
+    mock_llm.return_value.fix_code.return_value = 'var x = new Archive();'
 
-    client = OllamaClient()
-    fixed = client.fix_code(
+    result = mock_llm.return_value.fix_code(
         original_code="var x = Archive();",
         error_messages="CS0246: Missing 'new' keyword",
         pattern_fixes=[]
     )
 
-    assert "new Archive()" in fixed
-    assert mock_post.called
+    assert "new Archive()" in result
 
-@patch('requests.post')
-def test_fix_code_timeout(mock_post):
-    """Test Ollama timeout handling."""
-    import requests
-    mock_post.side_effect = requests.Timeout()
+@patch('src.services.llm_service.LLMService')
+def test_fix_code_timeout(mock_llm):
+    """Test LLM timeout handling."""
+    from src.services.llm_service import LLMError
+    mock_llm.return_value.fix_code.side_effect = LLMError("timeout")
 
-    client = OllamaClient()
-
-    with pytest.raises(OllamaError):
-        client.fix_code("var x = 1;", "error", [])
+    with pytest.raises(LLMError):
+        mock_llm.return_value.fix_code("var x = 1;", "error", [])
 ```
 
 ### Shared Fixtures
