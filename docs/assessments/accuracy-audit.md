@@ -2,7 +2,7 @@
 
 > Last updated: 2026-04-20
 > Source data: [evals/family_accuracy_report.json](../../evals/family_accuracy_report.json)
-> Methodology: [evals/methodology.md](../../evals/methodology.md)
+> Methodology: [docs/_strays_inbox/evals__methodology.md__methodology.md](../../docs/_strays_inbox/evals__methodology.md__methodology.md)
 
 ## Summary
 
@@ -18,7 +18,7 @@ An example is **verified** when it:
 2. Runs to completion without exception
 3. Passes the LLM final review gate (semantic fidelity confirmed)
 
-All three must pass. See [evals/methodology.md](../../evals/methodology.md) for full definitions.
+All three must pass. See [docs/_strays_inbox/evals__methodology.md__methodology.md](../../docs/_strays_inbox/evals__methodology.md__methodology.md) for full definitions.
 
 ## Current Accuracy Table
 

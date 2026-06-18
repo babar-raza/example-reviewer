@@ -89,7 +89,7 @@
       "claim_text": "All family accuracy figures sourced from committed baselines",
       "evidence_file": "evals/family_accuracy_report.json",
       "evidence_field": "root.families array",
-      "methodology_file": "evals/methodology.md",
+      "methodology_file": "docs/_strays_inbox/evals__methodology.md__methodology.md",
       "last_verified": "2026-06-13",
       "status": "grounded",
       "grounding_note": "15/17 families have baselines from production DB. Only smoke (no production runs) and tasks (no production runs) use documented figures. All production families have committed baseline files."

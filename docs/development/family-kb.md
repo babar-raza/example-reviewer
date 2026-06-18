@@ -27,7 +27,7 @@ The files serve architecturally different purposes and should not be merged:
 
 ## Schema Reference
 
-Full schema for both file types is documented in `config/README.md`.
+Full schema for both file types is documented in `docs/_strays_inbox/config__README.md__README.md`.
 
 ### Quick Reference: `{family}_review_hints.json`
 
