@@ -77,6 +77,26 @@ consistency-check:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'
 
+docs-link-check:
+  stage: validate
+  image: python:3.10-slim
+  script:
+    - python scripts/validation/check_doc_links.py
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+docs-freshness-check:
+  stage: validate
+  image: python:3.10-slim
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1
+  script:
+    - python scripts/validation/check_doc_freshness.py --max-age-days 180
+  allow_failure: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
 static-analysis:
   stage: validate
   image: python:3.10-slim
