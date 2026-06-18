@@ -1,739 +1,525 @@
 # Example Reviewer
 
-Automated pipeline that extracts C# code examples from markdown content, compiles
-and runs them against real NuGet packages and samples, auto-fixes failures, and commits verified
-corrections back to the source files.
+Example Reviewer is a Python, SQLite, and .NET SDK pipeline for validating C# examples embedded in Markdown content. It discovers snippets and gist references, compiles them against Aspose NuGet packages, runs verified examples where possible, applies deterministic and LLM-assisted fixes, and can write corrected snippets back to the source Markdown after the configured safeguards allow it.
 
----
+The project is best understood as a **Verify -> Fix -> Verify (VFV)** system for documentation examples. It is already broad enough to run CLI, MCP, HTTP, CI, telemetry, evidence, and family-specific validation workflows, but it still has operational gaps and several features that depend on local content checkouts, generated catalogs, external tools, and LLM endpoints.
 
-## Table of Contents
+## Current Status
 
-1. [What Problem It Solves](#1-what-problem-it-solves)
-2. [How It Solves the Problem](#2-how-it-solves-the-problem)
-3. [Major Components](#3-major-components)
-4. [How Components Communicate](#4-how-components-communicate)
-5. [End-to-End Workflow](#5-end-to-end-workflow)
-6. [Setup From Scratch](#6-setup-from-scratch)
-7. [CLI Reference](#7-cli-reference)
-8. [Advanced Usage](#8-advanced-usage)
-9. [Supported Families](#9-supported-families)
-10. [Documentation Map](#10-documentation-map)
+| Area | Current state | Evidence |
+|------|---------------|----------|
+| Core CLI pipeline | Implemented. Commands cover scan, extract, compile, runtime, markdown update, final review, commit, backfill, drift, review queue, and telemetry verification. | `src/cli/main.py`, `src/mcp_tools/tools.py` |
+| MCP server | Implemented as JSON-RPC over stdio with 14 documented tools. | `src/mcp_tools/server.py`, `src/mcp_tools/tools.py`, `docs/architecture/mcp.md` |
+| HTTP wrapper | Implemented as a FastAPI wrapper over MCP tools. | `src/http_server.py` |
+| Family configs | Present for barcode, cad, cells, email, html, imaging, medical, ocr, page, pdf, slides, smoke, tasks, tex, words, and zip. | `config/families/*.json` |
+| Accuracy baselines | Present, but the report explicitly marks circular evidence risk for some fallback data. | `evals/family_accuracy_report.json`, `evals/claim_registry.json` |
+| Tests and CI | Unit/integration/fallback/eval jobs exist. GitLab CI is authoritative; GitHub Actions is a mirror subset. | `.gitlab-ci.yml`, `.github/workflows/cli_tests.yml`, `tests/` |
+| Setup | Mostly scripted, but real runs need local Aspose content roots, generated API catalogs, .NET SDK, and configured LLM keys for LLM paths. | `scripts/setup/`, `.env.example`, `config/global.json` |
+| Write safety | Markdown service enforces write authorization, read-only path guards, block matching, and provenance checks. The checked-in `config/global.json` currently sets `markdown_write.allow_markdown_write` to `true`, so operators should review this before non-dry-run commands. | `src/services/markdown_service.py`, `src/core/path_guard.py`, `src/core/provenance_guard.py`, `config/global.json` |
 
----
+## What Problem It Solves
 
-## 1. What Problem It Solves
+Aspose documentation and blog content contains many C# examples. SDK and content changes can silently break those examples:
 
-Aspose ships hundreds of C# code examples embedded in markdown blog posts, knowledge-base
-articles, and product documentation. As the SDK evolves, those examples silently break:
+- API methods, enum members, constructors, or namespaces can change.
+- Required `using` directives and package references can drift.
+- Runtime examples may assume sample files, directories, passwords, or archive contents that are not present.
+- Manual validation does not scale across many product families and content roots.
 
-- API methods are renamed or removed
-- Required `using` directives change
-- Constructor signatures change between versions
-- Runtime dependencies (test files, directories) are assumed but not verified
+Example Reviewer automates the repeatable part of that work: find examples, compile them, run them when possible, apply safe repairs, collect evidence, and prepare verified changes for review.
 
-There is no automated way to catch these regressions at scale. A developer would need to
-manually copy each snippet into a project, compile it, run it, fix errors, and paste the
-corrected version back — for hundreds of files across a dozen product families.
+## Project Goals
 
-**Example Reviewer automates this entire workflow end-to-end.**
+Current goal:
 
----
+- Provide a repeatable local and CI-friendly pipeline for validating Aspose C# documentation examples.
+- Prefer deterministic repair and validation before spending LLM tokens.
+- Keep every run auditable through SQLite state, telemetry, artifacts, run fingerprints, and evidence manifests.
+- Make Markdown write-back explicit, reviewable, and constrained to verified examples.
 
-## 2. How It Solves the Problem
+Expected direction:
 
-The pipeline uses a **Verify → Fix → Verify (VFV)** loop:
+- Grow from a ZIP-primary validation workflow into a multi-family example quality platform.
+- Improve production accuracy baselines without relying on circular or README-derived evidence.
+- Expand real integration coverage for .NET SDK, content roots, LLM providers, gist access, and telemetry.
+- Harden operator workflows for safe batch runs, scheduled queues, and production DB promotion.
 
-```
-Markdown files
-      │
-      ▼
-  [Extract]  ─── find all fenced C# blocks and GitHub gists
-      │
-      ▼
-  [Compile]  ─── wrap in Main(), run dotnet build
-      │
-      ├─ OK ──────────────────────────────────────────────┐
-      │                                                    │
-      └─ FAIL ──► [Deterministic Fix] ──► [LLM Fix] ──►  │
-                   (10+ patterns,          (OpenAI-        │
-                   no LLM cost)            compatible)     │
-                                                           ▼
-                                                       [Runtime]  ─── execute binary
-                                                           │
-                                                           ├─ OK ──────────────────┐
-                                                           │                       │
-                                                           └─ FAIL ──► [LLM Fix] ─┤
-                                                                                   │
-                                                                                   ▼
-                                                                           [Final Review]
-                                                                     (LLM semantic drift check)
-                                                                                   │
-                                                                                   ▼
-                                                                              [Git Commit]
-                                                                      update markdown + commit
-```
+Main users are maintainers, release/quality engineers, documentation operators, and agent clients that need to validate or repair code examples before publishing.
 
-**Key design choices:**
+## What Has Been Accomplished
 
-- Deterministic fixes (stream disposal, missing directives, enum corrections, etc.)
-  are applied **first and for free** — no LLM token cost.
-- The LLM is called only for errors that the deterministic layer cannot resolve.
-- A final LLM review validates that fixes did not change the example's intent (semantic drift).
-- All state is stored in SQLite so runs are resumable and auditable.
+- CLI, MCP, and HTTP entry points exist and share the same tool layer.
+- The main orchestrator runs discovery, article validation, gist and fixture backfill, compile verification/fixing, runtime verification/fixing, behavioral scanning, Markdown update, optional final review, finalization, auto-learn, and evidence export.
+- SQLite state, run scoping, dual-DB promotion, migration files, telemetry, and run artifact exports are implemented.
+- Deterministic layers exist for code wrapping, semantic microfixes, family-specific fixes, fixture generation, app-context classification, behavioral scanning, path guards, and drift/signature checks.
+- LLM paths exist for compile/runtime repair, final review, prose audit, gist README generation, model routing, fallback, and auto-learn pattern extraction.
+- GitLab CI includes validation, security scan, import analysis, tests, fallback tests, integration tests, and eval freshness/claim checks.
+- Family accuracy reports and claim registries exist as machine-readable evidence.
 
----
+## What Remains Unfinished
 
-## 3. Major Components
+- Some docs and comments still reference old paths such as `tools/...` or `scripts/auto_learn.py`; current scripts live under `scripts/ops`, `scripts/validation`, and `scripts/patterns`.
+- `.env.example` and `config/global.json` use different gist token names in places (`GIST_PUBLISH_TOKEN`, `GITHUB_GIST_TOKEN`), which needs cleanup.
+- The checked-in global config enables Markdown writes by default, while safety docs describe the safer blocked-by-default mode.
+- `docs/assessments/known-gaps.md` records missing or stale source-module references and config fields that the current parser ignores.
+- Real external integration coverage remains limited. Most tests are unit-style or mocked, with narrow integration tests.
+- API catalog files are generated locally and are not all committed; commands depending on catalogs may generate or require them during setup.
+- Accuracy reports are strong for production-DB-backed families, but `evals/family_accuracy_report.json` marks `circular_evidence_risk: true` and notes fallback sources for families without production runs.
 
-| Layer | Component | Location | Purpose |
-|-------|-----------|----------|---------|
-| **Entry points** | CLI | `src/cli/main.py` | `argparse`-based interface for all commands |
-| | MCP Server | `src/mcp_tools/server.py` | JSON-RPC 2.0 over stdio for Claude Desktop / agents |
-| | MCP Tools | `src/mcp_tools/tools.py` | 13 pipeline tools surfaced via MCP |
-| **Orchestration** | PipelineOrchestrator | `src/pipeline/orchestrator.py` | Coordinates phases A–F, manages state machine |
-| **Core services** | DiscoveryService | `src/services/discovery_service.py` | Scans markdown, extracts code blocks and gists |
-| | CompilationService | `src/services/compilation_service.py` | Wraps code in `Main()`, calls `dotnet build` |
-| | RuntimeService | `src/services/runtime_service.py` | Executes compiled binary, captures output |
-| | LLMService | `src/services/llm_service.py` | OpenAI-compatible LLM calls with `instructor` |
-| | MarkdownService | `src/services/markdown_service.py` | Rewrites code blocks in source markdown |
-| | SemanticMicrofixes | `src/services/semantic_microfixes.py` | 10+ deterministic C# fix patterns |
-| **Support services** | APICatalogService | `src/services/api_catalog_service.py` | Type/method lookup from assembly reflection |
-| | FixtureResolverService | `src/services/fixture_resolver_service.py` | Self-healing test data generation (5-tier) |
-| | SemanticSignatureService | `src/services/semantic_signature_service.py` | API-level fingerprinting for drift detection |
-| | VectorDBService | `src/services/vector_db_service.py` | ChromaDB semantic similarity for drift scoring |
-| | LearnedPatternsService | `src/services/learned_patterns_service.py` | Auto-extracted patterns from past fix history |
-| | BackfillService | `src/services/backfill_service.py` | Downloads test data, gists, API catalogs |
-| | ContextHarnessService | `src/services/context_harness_service.py` | Smart code wrapping (partial snippets, ASP.NET) |
-| **Config** | Global config | `config/global.json` | LLM, database, drift, telemetry settings |
-| | Family configs | `config/families/<family>.json` | Per-product content roots, NuGet, test data |
-| | API catalogs | `config/families/<family>_api_catalog.json` | 137–2700 types reflected from the DLL |
-| **Infrastructure** | Database | `src/core/database.py` | SQLite with WAL mode; 17 tables |
-| | .NET build host | `test-examples/` | C# project that compiles and runs extracted code |
-| | Telemetry | `src/core/telemetry.py` | Event emission, run metrics, HTTP export |
+## Architecture and Execution Flow
 
----
+The original README described phases A-F. The current orchestrator still follows that shape, with additional preflight and post-processing phases around it.
 
-## 4. How Components Communicate
-
-```
-User / Desktop
-       │
-       ├─── CLI (argparse)             src/cli/main.py
-       │         │
-       └─── MCP Client (JSON-RPC 2.0)  src/mcp_tools/server.py
-                 │  (stdio, one message per line)
-                 │
-                 ▼
-         ExampleReviewerTools           src/mcp_tools/tools.py
-                 │
-                 ▼
-         PipelineOrchestrator           src/pipeline/orchestrator.py
-                 │
-        ┌────────┼────────────────────────────────┐
-        ▼        ▼                                 ▼
-  DiscoverySvc  CompilationSvc              RuntimeSvc
-                LLMService                  MarkdownSvc
-                SemanticMicrofixes          FixtureResolver
-                APICatalogService           SemanticSignature
-                LearnedPatternsSvc          VectorDBService
-                        │
-                        ├── subprocess: dotnet build / dotnet run
-                        ├── subprocess: git (via GitPython)
-                        └── SQLite:     src/core/database.py
+```text
+Markdown content / gist refs / example repos
+        |
+        v
+Phase 0    API catalog check/generation and default using validation
+Phase A    Discovery and extraction
+Phase A.2  Deterministic article validation
+Phase A.5  Gist source backfill and fixture prefetch
+Phase A.7  Reference .cs file promotion where applicable
+Phase B    Compile verification and compile fix loop
+Phase C    Runtime verification and runtime fix loop
+Phase C.5  Behavioral scan
+Phase D    Markdown update or dry-run diff generation
+Phase D.5  Optional standalone prose/fence pass
+Phase E    Optional final LLM review and optional intent review
+Phase F    Telemetry, optional git commit, dual-DB production copy
+Phase F.5  Optional auto-learn pattern extraction
+Evidence   Run artifacts and run_evidence.json
 ```
 
-**Data flow summary:**
+Primary implementation files:
 
-1. CLI / MCP receives command → instantiates `ExampleReviewerTools`
-2. Tools call `PipelineOrchestrator` methods (one per phase)
-3. Orchestrator calls services; each service has a single responsibility
-4. Services write intermediate state to SQLite; orchestrator reads it to decide next action
-5. After a verified commit, the run record is copied to the production DB (if configured)
+| Layer | Files | Role |
+|-------|-------|------|
+| CLI | `src/cli/main.py` | Argparse command surface, deterministic flags, safe workspace handling |
+| MCP | `src/mcp_tools/server.py`, `src/mcp_tools/tools.py` | JSON-RPC server and structured tool methods |
+| HTTP | `src/http_server.py` | FastAPI wrapper over MCP tool calls |
+| Orchestration | `src/pipeline/orchestrator.py` | Run lifecycle, phase sequencing, telemetry, finalization |
+| Models and DB | `src/core/models.py`, `src/core/database.py`, `migrations/` | Run/example state, SQLite schema, migrations, dual DB |
+| Discovery | `src/services/discovery_service.py` | Markdown and gist example discovery |
+| Compile/runtime | `src/services/compilation_service.py`, `src/services/runtime_service.py` | .NET project generation, build/run attempts, timeouts |
+| Markdown update | `src/services/markdown_service.py`, `src/utils/markdown_parser.py` | Block matching, write guards, diff artifacts, provenance checks |
+| Fix strategies | `src/services/semantic_microfixes.py`, `src/services/family_fixes/`, `src/services/learned_patterns_service.py` | Deterministic and learned fix layers |
+| Drift and review | `src/services/semantic_signature_service.py`, `src/services/vector_db_service.py`, `src/services/family_drift_validators/`, `src/services/llm_service.py` | Signature, embedding, family, and LLM review controls |
+| Backfill and fixtures | `src/services/backfill_service.py`, `src/services/fixture_resolver_service.py`, `src/services/test_data_generator.py` | API catalogs, gist source, examples, and runtime fixture resolution |
 
----
+## Deterministic vs LLM-Driven Behavior
 
-## 5. End-to-End Workflow
+The pipeline intentionally tries deterministic behavior before LLM behavior.
 
-### Phase A — Discovery
+### Deterministic paths
 
-- Scan `content_roots` directories in the family config for `.md` files
-- Find every fenced ` ```csharp ``` ` block
-- Detect GitHub gist links and fetch their raw content
-- Store each code block as an `ExampleRecord` in SQLite with status `DISCOVERED`
+These paths do not require an LLM:
 
-### Phase B — Compile
+- Markdown file discovery, fence parsing, language normalization, and content filtering.
+- App-context classification and context harness wrapping.
+- Default `using` injection from family config and API catalogs.
+- Semantic microfixes for allowlisted compiler errors such as missing types, missing variables, placeholder passwords, and safe argument defaults.
+- Family-specific fixes under `src/services/family_fixes/`.
+- Runtime fixture extraction, alias lookup, registry lookup, extension matching, and deterministic fixture generation.
+- Path guards, provenance guards, read-only path enforcement, no-op Markdown replacement, and block-index self-healing.
+- Signature and family drift validators where configured.
+- Run fingerprints, selection hashes, stable sorting, SQLite state transitions, and most validation scripts.
 
-For each discovered example:
+### LLM-dependent paths
 
-1. Classify the code context (console app, library snippet, ASP.NET minimal)
-2. Wrap in a `Main()` harness appropriate for the context type
-3. **Apply deterministic microfixes proactively** (stream disposal, using directives, enum names)
-4. Run `dotnet build`
-5. If build fails → apply LLM fix loop (up to `max_llm_retries`)
-   - LLM receives: original code + error messages + API catalog context for the relevant types
-   - Apply suggested fix, re-compile, repeat
-6. Record status `COMPILED` or `COMPILE_FAILED`
+These paths require a configured OpenAI-compatible endpoint or fallback provider:
 
-### Phase C — Runtime
+- Compile fix loop when deterministic fixes cannot resolve compiler errors.
+- Runtime fix loop when deterministic runtime fixes cannot resolve failures.
+- Final review and optional intent review.
+- Optional prose/code alignment audit and prose correction.
+- LLM-powered auto-learn pattern extraction.
+- Optional gist README generation.
 
-For each compiled example:
+LLM configuration is in `config/global.json` under `llm`, `final_review`, and `model_routing`. The default checked-in config points at `https://llm.professionalize.com/v1` and uses the `litellm_key` environment variable.
 
-1. **Fixture resolver**: scan code for file string literals, resolve via 5-tier chain
-   (existing → fixture registry → extension alias → generate on-the-fly)
-2. Execute compiled binary with a timeout
-3. If runtime failure → LLM fix loop
-4. Record status `VERIFIED` or `RUNTIME_FAILED`
+### Safeguards
 
-### Phase D — Markdown Update
+- Deterministic mode sets temperature to `0.0`, enables deterministic mode, and applies a seed when supported by the provider.
+- Provider capability detection checks seed support and logs warnings if the provider rejects it.
+- LLM output is parsed through contract objects and category-aware validation in `src/services/llm_service.py`.
+- Final review can compare original and fixed examples and reject critical semantic drift.
+- Signature, family drift, vector similarity, behavioral scans, and provenance checks provide non-LLM validation around write-back.
+- Markdown writes are blocked unless `MarkdownUpdateService` receives write authorization, but the checked-in global config currently enables that authorization by default.
 
-For each `VERIFIED` example:
+Missing safeguards:
 
-- Locate the code block in the source markdown file (by line number or content hash)
-- Replace with the verified (possibly fixed) code
-- Write updated markdown to disk (requires `--allow-md-write`)
-- Record the edit in `markdown_edits` table
+- Real end-to-end tests with live LLM and .NET execution are limited.
+- The docs/config mismatch around Markdown write defaults should be resolved.
+- Operators should not treat LLM-reviewed output as publication-ready without reviewing diffs and evidence.
 
-### Phase E — Final Review
+## Feature Status and Evidence
 
-For every example that was touched by the LLM:
+| Feature | Trigger | Implementation | Status |
+|---------|---------|----------------|--------|
+| Family discovery | `scan`, `extract`, `run` | `src/services/discovery_service.py`, `config/families/*.json` | Implemented |
+| Gist extraction/backfill | Discovery/backfill flows | `src/services/discovery_service.py`, `src/services/backfill_service.py` | Implemented, network-dependent |
+| Compile verification | `compile-verify`, `compile-fix`, `run` | `src/services/compilation_service.py`, `src/pipeline/orchestrator.py` | Implemented, requires .NET SDK |
+| Runtime verification | `runtime-verify`, `runtime-fix`, `run` | `src/services/runtime_service.py` | Implemented, fixture-dependent |
+| Deterministic microfixes | Compile/runtime phases | `src/services/semantic_microfixes.py`, `src/services/family_fixes/` | Implemented and tested |
+| Fixture resolver | Runtime phase | `src/services/fixture_resolver_service.py`, `src/services/test_data_generator.py` | Implemented |
+| LLM compile/runtime fixing | `compile-fix`, `runtime-fix`, `run` without `--skip-llm` | `src/services/llm_service.py` | Implemented, endpoint-dependent |
+| Final review | `final-review`, `run` when LLM available | `src/pipeline/orchestrator.py`, `src/services/llm_contracts.py` | Implemented but disabled by default in `config/global.json` |
+| Markdown update | `md-update`, `run` | `src/services/markdown_service.py` | Implemented with write guards |
+| Prose audit | `--audit-prose` | `src/pipeline/orchestrator.py`, `src/services/markdown_service.py` | Optional/experimental |
+| Auto-learn | Post-run F.5, `scripts/patterns/auto_learn.py` | `src/pipeline/auto_learn_integration.py`, `scripts/patterns/auto_learn.py` | Implemented, LLM path optional |
+| Vector DB drift/search | Startup, drift commands, retrieval strategies | `src/services/vector_db_service.py` | Implemented, dependency-heavy |
+| Telemetry | Runs and `telemetry-verify` | `src/core/telemetry.py`, `src/services/telemetry_service.py`, `src/http_server.py` | Implemented |
+| Evidence manifest | End of pipeline run | `src/pipeline/evidence.py` | Implemented |
+| MCP tool surface | MCP server | `src/mcp_tools/server.py`, `src/mcp_tools/tools.py` | Implemented |
+| HTTP API | `uvicorn src.http_server:app ...` | `src/http_server.py` | Implemented |
+| CI validation | GitLab CI | `.gitlab-ci.yml` | Implemented |
 
-- Send original code, final code, and diff to LLM
-- LLM scores semantic fidelity and checks for API drift
-- 4-gate validation: signature check → family type check → embedding similarity → LLM verdict
-- Status becomes `FINAL_REVIEW_PASSED` or `FINAL_REVIEW_FAILED`
+## Setup From Scratch
 
-### Phase F — Finalization
+### Prerequisites
 
-- Git commit all modified markdown files with a structured commit message
-- Emit run telemetry to local HTTP API (if configured)
-- Copy run record to production DB (if dual-DB mode is enabled)
+| Tool | Required for | Check |
+|------|--------------|-------|
+| Python 3.10+ | CLI, services, tests | `python --version` |
+| .NET SDK 8.x | Compile/runtime gates and catalog generation | `dotnet --version` |
+| Git | Optional commit/fetch workflows | `git --version` |
+| Aspose content checkout | Real Markdown scans | `ASPOSE_CONTENT_ROOT` points to local content |
+| LLM endpoint/key | LLM fixes, final review, prose audit, LLM auto-learn | `litellm_key` in environment or `.env` |
 
----
+### Install
 
-## 6. Setup From Scratch
-
-### 6.1 Prerequisites
-
-| Tool | Minimum version | Check |
-|------|----------------|-------|
-| Python | 3.10 | `python --version` |
-| .NET SDK | 8.0 | `dotnet --version` |
-| Git | any | `git --version` |
-| LLM endpoint | — | OpenAI-compatible API |
-
-### 6.2 Installation
-
-```bash
+```powershell
 git clone <repo-url>
-cd example-reviewer
+cd example-reviewer-gitlab
 
-# Create and activate virtual environment
-python -m venv venv
-venv\Scripts\activate           # Windows
-# source venv/bin/activate      # Linux / macOS
+python -m venv .venv
+.\.venv\Scripts\activate
 
-# Install Python dependencies
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-pip install -r requirements-dev.txt   # optional — needed for tests
-
-# Run the setup wizard (handles dotnet restore, catalog generation, and test-data scaffolding)
-python scripts/setup/setup_wizard.py
+pip install -r requirements-dev.txt
 ```
 
-> `dotnet restore` for the .NET build project is handled automatically by the setup wizard.
-> To run it manually: `dotnet restore test-examples/AsposeZipValidator.csproj`
+The repo also has a legacy `venv/` convention in older docs. Use the active interpreter you installed into; commands below assume the virtualenv is activated.
 
-### 6.3 Environment Variables
+### Environment
 
-Create a `.env` file in the repo root **before** running the setup wizard (loaded automatically
-at startup):
+Create `.env` from `.env.example` and fill only the values you need.
+
+Important variables:
 
 ```bash
-# Required: API key for your LLM provider (OpenAI-compatible)
-litellm_key=sk-your-api-key-here
+# Required for LLM-backed paths
+litellm_key=sk-your-api-key-or-provider-key
 
-# Optional: GitHub token for higher gist rate limits (60 -> 5000 req/hr)
+# Required for real content scans unless you pass --content-roots
+ASPOSE_CONTENT_ROOT=/path/to/aspose.net/content
+
+# Optional: raises public gist read rate limits
 GITHUB_TOKEN=ghp_read_token
 
-# Optional: telemetry HTTP endpoint
+# Optional: gist publishing/upload modes
+GITHUB_GIST_TOKEN=ghp_token_with_gist_scope
+GIST_PUBLISH_TOKEN=ghp_token_with_gist_scope
+
+# Optional: telemetry API verification target
 TELEMETRY_API_URL=http://localhost:8765
 ```
 
-### 6.4 Global Configuration
+Note: token naming is not fully consistent across `.env.example`, `config/global.json`, and family configs. Check the config path you are using before enabling gist publishing.
 
-Edit `config/global.json`:
+### First-Time Setup Helpers
 
-```json
-{
-  "llm": {
-    "provider": "openai",
-    "model": "gpt-oss",
-    "base_url": "https://your-llm-endpoint/v1",
-    "api_key_env_var": "litellm_key",
-    "temperature": 0.2,
-    "max_retries": 2,
-    "timeout_seconds": 120
-  },
-  "database": {
-    "path": "./data/example_reviewer.db"
-  }
-}
-```
-
-### 6.5 Family Configuration
-
-Each Aspose product has its own `config/families/<family>.json`. The key fields:
-
-```jsonc
-{
-  "family": "zip",
-  "display_name": "Aspose.ZIP",
-  "content_roots": [
-    "C:/content/aspose.net/blog",
-    "C:/content/aspose.net/kb"
-  ],
-  "nuget_config": {
-    "package": "Aspose.Zip",
-    "version": "25.1.0"
-  },
-  "api_catalog": {
-    "path": "config/families/zip_api_catalog.json"
-  },
-  "runtime_validation": {
-    "required_files": ["sample.zip", "alice29.txt"],
-    "timeout_seconds": 30
-  }
-}
-```
-
-### 6.6 Generate API Catalogs (required — not bundled in the repo)
-
-> **API catalog files are not committed to the repository.** They are generated
-> from the compiled NuGet assembly via .NET reflection and must be created locally
-> before the pipeline can run. The setup wizard (step 5) does this automatically.
-> If you skipped the wizard or need to regenerate for a specific family, run the
-> script directly.
-
-```bash
-# Recommended: use the setup wizard (handles all families interactively)
+```powershell
+# Interactive setup wizard
 python scripts/setup/setup_wizard.py
 
-# Or generate a single family's catalog manually:
-python scripts/setup/extract_assembly_catalog.py \
-    Aspose.Zip 25.1.0 Aspose.Zip --full \
-    > config/families/zip_api_catalog.json
+# Generate or refresh one API catalog
+python scripts/setup/bootstrap_catalog.py --family zip --package Aspose.Zip --output config/families/zip_api_catalog.json
 
-# For a family where the package name differs from the DLL name (e.g. Slides):
-python scripts/setup/extract_assembly_catalog.py \
-    Aspose.Slides.NET 25.1.0 Aspose.Slides --dll-name Aspose.Slides --full \
-    > config/families/slides_api_catalog.json
+# Validate generated/bootstrap data for a family
+python scripts/setup/validate_bootstrap.py --family zip
 ```
 
-The script downloads the NuGet package, loads the DLL via .NET reflection, and
-dumps the exported type/enum/constructor/method surface as JSON. This takes
-30–60 seconds per family on first run (subsequent runs are faster as NuGet caches
-the package locally).
+Catalog generation and backfill may download NuGet packages, clone example repositories, or use local caches. If setup fails because content roots are missing, set `ASPOSE_CONTENT_ROOT` or use `--content-roots` on scoped commands.
 
-Without a catalog, the deterministic fixer cannot resolve missing `using` directives
-and the LLM will receive no type context, significantly lowering the fix success rate.
+## Usage
 
-### 6.7 Backfill Test Data
+Prefer deterministic flags and `--safe-workspace` for reproducible local runs, especially in this checkout path under OneDrive.
 
-Download sample test files required by runtime validation:
+```powershell
+# Show the command surface
+python -m src.cli.main --help
 
-```bash
-PYTHONPATH=. python -m src.cli.main backfill --family zip
+# List configured families
+python -m src.cli.main --safe-workspace list-families
+
+# Scan a small number of files
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace scan --family zip --max-files 5
+
+# Extract examples from configured content roots
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace extract --family zip --max-files 5
+
+# Compile a small batch without LLM fixes
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace compile-verify --family zip --max-examples 20
+
+# Runtime verification on a small batch
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace runtime-verify --family zip --max-examples 10
+
+# Full pipeline without LLM fixes
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace run --family zip --max-examples 50 --skip-llm
+
+# Full pipeline dry-run
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace run --family zip --max-examples 50 --dry-run
+
+# Dry-run Markdown update
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace md-update --family zip --dry-run
 ```
 
-### 6.8 Verify the Setup
+Only enable real Markdown writes after reviewing config and diffs:
 
-```bash
-# Run the test suite
+```powershell
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace md-update --family zip --allow-md-write
+```
+
+Run the full pipeline with commit only when the working tree and write targets are intentional:
+
+```powershell
+python -m src.cli.main --deterministic --seed 12345 --safe-workspace run --family zip --max-examples 50 --allow-md-write --commit
+```
+
+Useful scoping options:
+
+```powershell
+# Override content roots without editing config
+python -m src.cli.main --safe-workspace run --family zip --content-roots C:\content\blog\zip C:\content\kb\zip --max-examples 20
+
+# Run against explicit Markdown files
+python -m src.cli.main --safe-workspace run --family zip --files C:\content\zip\article.md --max-examples 5
+
+# Pull work from the DB queue
+python -m src.cli.main --safe-workspace run --from-queue
+```
+
+Operational scripts live under `scripts/ops`. Treat these as maintainer helpers rather than the primary quickstart path; during this README investigation, `run_all_gates.py --help` worked, while some script internals still referenced old `tools/...` paths or passed CLI flags in stale positions.
+
+```powershell
+python scripts/ops/run_all_gates.py --help
+
+$env:PYTHONPATH="src"
+python scripts/ops/run_e2e_zip.py --help
+
+python scripts/ops/run_with_hard_timeout.py --help
+```
+
+Validation scripts live under `scripts/validation`:
+
+```powershell
+python scripts/validation/verify_no_md_changes.py --allow-paths specs/,reports/,docs/,plans/
+python scripts/validation/verify_determinism.py run1/results_summary.json run2/results_summary.json
+python scripts/validation/analyze_cli_imports.py src/cli/main.py
+python scripts/validation/check_doc_links.py
+```
+
+Auto-learn scripts live under `scripts/patterns`:
+
+```powershell
+python scripts/patterns/auto_learn.py --family zip --dry-run
+python scripts/patterns/review_patterns.py --family zip
+```
+
+## MCP and HTTP API
+
+Start the MCP server:
+
+```powershell
+$env:PYTHONPATH="."
+.\.venv\Scripts\python.exe -m src.mcp_tools.server --verbose
+```
+
+The MCP tool surface currently includes:
+
+- `scan`
+- `extract`
+- `compile_verify`
+- `compile_fix`
+- `runtime_verify`
+- `runtime_fix`
+- `md_update`
+- `final_review`
+- `commit`
+- `backfill`
+- `status`
+- `run_pipeline`
+- `validate_articles`
+- `validate_code_snippet`
+
+Start the HTTP wrapper:
+
+```powershell
+uvicorn src.http_server:app --host 0.0.0.0 --port 18800
+```
+
+HTTP endpoints include:
+
+- `GET /healthz`
+- `GET /api/v1/tools`
+- `POST /api/v1/tools/{tool_name}`
+- `POST /api/v1/validate-code`
+
+See `docs/architecture/mcp.md` and `docs/reference/api-reference.md` for protocol and API details.
+
+## Testing and Verification
+
+Install dev requirements first:
+
+```powershell
+pip install -r requirements-dev.txt
+```
+
+Common test commands:
+
+```powershell
+# Full unit-style suite
 pytest tests/ -v --timeout=120
 
-# Run a small discovery scan
-PYTHONPATH=. python -m src.cli.main scan --family zip --max-files 5
+# CI-like unit subset
+pytest tests/ -v --timeout=120 -m "not integration and not runtime" --tb=short
 
-# Check what the pipeline found
-PYTHONPATH=. python -m src.cli.main status --family zip
+# Focused safety and docs checks
+pytest tests/test_path_guard.py tests/test_provenance_guard.py tests/test_doc_validators.py -v
+
+# MCP checks
+pytest tests/test_mcp_server.py tests/test_mcp_tool_definitions.py tests/test_mcp_tools.py -v
+
+# Evidence/claim validators
+python scripts/evals/validate_eval_claims.py
+python scripts/validation/check_evidence_circularity.py
+python scripts/validation/check_baseline_coverage.py
+python scripts/validation/check_assessment_freshness.py
 ```
 
----
+CI notes:
 
-## 7. CLI Reference
+- `.gitlab-ci.yml` is the authoritative CI definition.
+- `.github/workflows/cli_tests.yml` is explicitly marked as a deprecated mirror subset.
+- GitLab CI runs validation, security scanning, static import analysis, unit tests, fallback tests, integration tests, and eval checks.
 
-All commands follow the pattern:
-```bash
-PYTHONPATH=. python -m src.cli.main <command> [options]
+## Generated Files, Cache, Logs, and Evidence
+
+These directories are generated or local-operational data and should not be committed unless a specific evidence artifact is intentionally tracked:
+
+| Path | Purpose |
+|------|---------|
+| `data/` | SQLite DBs and Chroma vector store |
+| `workspace/` | Temporary .NET build/run workspaces |
+| `artifacts/` | Diffs, run artifacts, fixture registries, evidence manifests |
+| `reports/` | Investigation reports, plans, status files, local evidence bundles |
+| `.benchmarks/` | Baseline files used by eval reports |
+| `.pytest_cache/`, `.mypy_cache/`, `.coverage` | Test/tool caches |
+| `.venv/`, `venv/` | Local Python environments |
+
+Per-run evidence is emitted by `src/pipeline/evidence.py` as:
+
+```text
+artifacts/<run_id>/run_evidence.json
 ```
 
-### 7.1 Pipeline Commands
-
-| Command | What it does |
-|---------|-------------|
-| `run` | Run the full pipeline (phases A–F) |
-| `scan` | Phase A: locate markdown files in content roots |
-| `extract` | Phase A: extract code blocks and gist content |
-| `compile-verify` | Phase B: compile without applying fixes |
-| `compile-fix` | Phase B: compile with deterministic + LLM fixes |
-| `runtime-verify` | Phase C: run compiled code without fixes |
-| `runtime-fix` | Phase C: run with LLM fixes for runtime failures |
-| `md-update` | Phase D: overwrite markdown with verified code |
-| `final-review` | Phase E: LLM semantic-drift review |
-| `commit` | Phase F: git commit all verified changes |
-
-### 7.2 Utility Commands
-
-| Command | What it does |
-|---------|-------------|
-| `status` | Show counts per status for the current run |
-| `list-families` | List all configured families |
-| `backfill` | Download test data, API catalogs, and gist source |
-| `visualize-drift` | Show semantic drift scores for recent examples |
-| `drift-trends` | Plot drift score trends over multiple runs |
-| `clean-vector-db` | Remove high-drift entries from the vector store |
-| `review-queue` | List examples awaiting manual review |
-| `telemetry-verify` | Verify the telemetry HTTP API is reachable |
-
-### 7.3 Common Flags
-
-These flags apply to `run` and most phase commands:
-
-```
---family NAME          Required. Which product family to process.
---max-examples N       Cap the number of examples processed in this run.
---content-roots PATH…  Override the content_roots from family config.
---db-path PATH         SQLite database path (default: data/example_reviewer.db).
---workspace-dir PATH   Temp build directory (default: workspace/).
---allow-md-write       Permit overwriting source markdown files.
---dry-run              Preview all changes without writing anything.
---skip-llm             Deterministic fixes only; skip LLM calls entirely.
---safe-workspace       Move DB and workspace to a non-OneDrive path.
---prod-db-path PATH    Enable dual-DB mode; write committed runs here too.
---deterministic        Enable seed-based reproducibility.
---seed N               Random seed for deterministic mode (default: 42).
---verbose / -v         Debug logging.
---json                 Output results as JSON.
-```
-
-### 7.4 Example Invocations
-
-```bash
-# Full pipeline — 50 examples, allow writing, auto-commit
-PYTHONPATH=. python -m src.cli.main run \
-    --family zip \
-    --max-examples 50 \
-    --allow-md-write \
-    --commit
-
-# Deterministic fixes only (zero LLM cost)
-PYTHONPATH=. python -m src.cli.main run --family zip --skip-llm
-
-# Preview everything without writing
-PYTHONPATH=. python -m src.cli.main run --family zip --dry-run
-
-# Override which folders to scan (without editing config)
-PYTHONPATH=. python -m src.cli.main scan \
-    --family zip \
-    --content-roots /path/to/blog /path/to/kb
-
-# Run compile + fix phase in isolation
-PYTHONPATH=. python -m src.cli.main compile-fix --family zip
-
-# Run on a safe workspace (avoids OneDrive SQLite locking on Windows)
-PYTHONPATH=. python -m src.cli.main run --family zip --safe-workspace
-```
-
----
-
-## 8. Advanced Usage
-
-### 8.1 MCP Server — Drive the Pipeline from Claude Desktop
-
-The entire pipeline is exposed as a **Model Context Protocol (MCP) server**. Any MCP-compatible
-client (Claude Desktop, custom agents) can call all 13 pipeline tools without touching the CLI.
-
-**Start the server:**
-
-```bash
-# From repo root (activate venv first)
-PYTHONPATH=. venv/Scripts/python.exe -m src.mcp_tools.server
-
-# With explicit paths
-PYTHONPATH=. venv/Scripts/python.exe -m src.mcp_tools.server \
-    --config-dir config/families \
-    --db-path data/example_reviewer.db \
-    --workspace-dir workspace \
-    --verbose
-```
-
-**Claude Desktop integration** (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "example-reviewer": {
-      "command": "C:/path/to/repo/venv/Scripts/python.exe",
-      "args": ["-m", "src.mcp_tools.server"],
-      "cwd": "C:/path/to/repo",
-      "env": { "PYTHONPATH": "." }
-    }
-  }
-}
-```
-
-**Available MCP tools:**
-
-| Tool | Equivalent CLI command |
-|------|----------------------|
-| `scan` | `scan` |
-| `extract` | `extract` |
-| `compile_verify` | `compile-verify` |
-| `compile_fix` | `compile-fix` |
-| `runtime_verify` | `runtime-verify` |
-| `runtime_fix` | `runtime-fix` |
-| `md_update` | `md-update` |
-| `final_review` | `final-review` |
-| `commit` | `commit` |
-| `run_pipeline` | `run` |
-| `backfill` | `backfill` |
-| `status` | `status` |
-
-See [docs/architecture/mcp.md](docs/architecture/mcp.md) for the full JSON-RPC protocol reference.
-
----
-
-### 8.2 Semantic Drift Detection
-
-The pipeline prevents LLM fixes from silently changing an example's meaning using a
-4-gate validation system:
-
-1. **Signature gate** — API fingerprints (enum members, method signatures, constructor overloads)
-   are compared before and after the fix
-2. **Family type gate** — Types must belong to the correct Aspose product namespace
-3. **Embedding similarity gate** — ChromaDB cosine similarity scored against the original
-4. **LLM review gate** — Final LLM verdict on semantic fidelity
-
-```bash
-# View drift scores for recent examples
-PYTHONPATH=. python -m src.cli.main visualize-drift --family zip
-
-# View drift trends over multiple runs
-PYTHONPATH=. python -m src.cli.main drift-trends --family zip
-
-# Prune high-drift examples from the vector store
-PYTHONPATH=. python -m src.cli.main clean-vector-db --family zip --threshold 0.3
-```
-
-Configure in `config/global.json`:
-
-```json
-{
-  "vector_db": { "enabled": true, "drift_tolerance": 0.02 },
-  "final_review": {
-    "enable_signature_validation": true,
-    "reject_critical_enum_changes": true
-  }
-}
-```
-
----
-
-### 8.3 API Catalog Generation
-
-The deterministic fixer and the LLM context both rely on an **API catalog** — a JSON file
-that lists every exported type, enum, constructor, and method signature from the compiled
-assembly. This is generated via .NET assembly reflection (not markdown parsing):
-
-```bash
-# Basic catalog (types + namespaces only)
-python scripts/setup/extract_assembly_catalog.py \
-    Aspose.Zip 25.1.0 Aspose.Zip \
-    > config/families/zip_api_catalog.json
-
-# Full catalog with enums, constructors, and method signatures
-python scripts/setup/extract_assembly_catalog.py \
-    Aspose.Words 26.1.0 Aspose.Words \
-    --include-enums \
-    --include-constructors \
-    --include-methods \
-    > config/families/words_api_catalog.json
-```
-
-The script downloads the NuGet package, loads the DLL into a temporary C# reflector, and
-dumps the exported surface as JSON.
-
----
-
-### 8.4 Dual-Database Mode
-
-By default, every run (including failures and experiments) goes into `data/example_reviewer.db`.
-Dual-DB mode adds a **production DB** that receives records only after a successful git commit.
-
-Enable in `config/global.json`:
-
-```json
-{
-  "database": {
-    "path": "./data/example_reviewer.db",
-    "production_path": "./data/example_reviewer_prod.db"
-  }
-}
-```
-
-Or per-run via CLI:
-
-```bash
-PYTHONPATH=. python -m src.cli.main run \
-    --family zip \
-    --prod-db-path ./data/example_reviewer_prod.db
-```
-
-The production DB contains only committed, verified runs — useful for dashboards and audits.
-
----
-
-### 8.5 Self-Healing Test Data (Fixture Resolver)
-
-When an example references a test file that doesn't exist, the fixture resolver automatically
-provides one using a 5-tier resolution chain:
-
-1. **Existing** — file already present in the test-data directory
-2. **Registry** — previously registered alias in `fixture-registry.json`
-3. **Reverse alias** — alternate name mapping in the family config
-4. **Extension match** — find any file with the right extension
-5. **Generate** — create a minimal valid file on-the-fly (`.docx`, `.pdf`, `.png`, `.zip`, etc.)
-
-Configure in the family JSON:
-
-```json
-{
-  "fixture_resolver": {
-    "enabled": true,
-    "auto_generate": true
-  }
-}
-```
-
-The resolver runs **proactively** (scanning C# string literals before the first run) and
-**reactively** (triggered by a `FileNotFoundException` at runtime).
-
----
-
-### 8.6 Auto-Learn Pattern Extraction
-
-Successful LLM fixes are clustered and promoted to deterministic patterns automatically.
-This makes future runs faster and cheaper.
-
-```bash
-# Cluster failures from recent runs and extract patterns
-python scripts/auto_learn.py --family zip --min-attempts 5
-
-# Review pending patterns (approve / retire)
-python scripts/review_patterns.py --family zip
-```
-
-Patterns with a success rate below 10% after 10+ uses are auto-retired.
-
----
-
-### 8.7 Dry-Run Mode
-
-Preview all changes without writing to disk or calling `git commit`:
-
-```bash
-# Full pipeline dry-run
-PYTHONPATH=. python -m src.cli.main run --family zip --dry-run
-
-# Inspect what md-update would change
-PYTHONPATH=. python -m src.cli.main md-update --family zip --dry-run
-```
-
----
-
-### 8.8 Safe Workspace (OneDrive / WSL)
-
-SQLite's WAL mode is incompatible with OneDrive sync on Windows and with WSL's DrvFS
-(`/mnt/c`, `/mnt/d`). Use `--safe-workspace` to move the DB and build directory to a
-local path automatically:
-
-```bash
-PYTHONPATH=. python -m src.cli.main run --family zip --safe-workspace
-```
-
-Windows: moves to `%LOCALAPPDATA%\ExampleReviewer\workspaces\<timestamp>`
-Linux/WSL: moves to `~/.cache/example_reviewer/workspaces/<timestamp>`
-
----
-
-## 9. Supported Families
-
-| Family | Config file | Discovered | Verified | Status |
-|--------|------------|------------|----------|--------|
-| Words | `config/families/words.json` | 94 | 84 | Production — 89.4% verified |
-| HTML | `config/families/html.json` | 17 | 15 | Production — 88.2% verified |
-| ZIP | `config/families/zip.json` | 56 | 49 | Production — 87.5% verified |
-| PSD | `config/families/psd.json` | 391 | 336 | Production — 85.9% verified |
-| Email | `config/families/email.json` | 19 | 16 | Production — 84.2% verified |
-| Barcode | `config/families/barcode.json` | 128 | 105 | Production — 82.0% verified |
-| CAD | `config/families/cad.json` | 9 | 7 | Production — 77.8% verified |
-| TeX | `config/families/tex.json` | 45 | 34 | Production — 75.6% verified |
-| PDF | `config/families/pdf.json` | 825 | 621 | Production — 75.3% verified |
-| Imaging | `config/families/imaging.json` | 221 | 138 | Production — 62.4% verified |
-| Cells | `config/families/cells.json` | 192 | 112 | Production — 58.3% verified |
-| Page | `config/families/page.json` | 8 | 1 | Early — 12.5% verified |
-| Slides | `config/families/slides.json` | 551 | 60 | Early — 10.9% verified |
-| OCR | `config/families/ocr.json` | 115 | 12 | Early — 10.4% verified |
-| Medical | `config/families/medical.json` | 88 | 3 | Early — 3.4% verified |
-| Tasks | `config/families/tasks.json` | 6 | 0 | Early — 0% verified |
-
-To add a new family: copy any existing family JSON, update `content_roots` and `nuget_config`,
-generate the API catalog, and run `backfill`.
-
-> Accuracy figures are sourced from committed baseline measurements.
-> See [evals/family_accuracy_report.json](evals/family_accuracy_report.json) for the current
-> machine-readable data, [evals/methodology.md](evals/methodology.md) for measurement
-> methodology, and [docs/assessments/accuracy-audit.md](docs/assessments/accuracy-audit.md) for the unverified
-> fraction analysis.
-> Refresh with: `python scripts/evals/generate_baseline.py --all`
-
----
-
-## 10. Documentation Map
+Run summaries and fingerprints are also exported by the orchestrator into run artifact locations. Accuracy and claim evidence live in:
+
+- `evals/family_accuracy_report.json`
+- `evals/claim_registry.json`
+- `evals/methodology.md`
+- `.benchmarks/baselines/`
+
+## Supported Families
+
+Family configs currently present in `config/families/`:
+
+| Family | Config | Baseline status from `evals/family_accuracy_report.json` |
+|--------|--------|----------------------------------------------------------|
+| barcode | `config/families/barcode.json` | 128 discovered, 105 verified, 82.0%, production DB |
+| cad | `config/families/cad.json` | 9 discovered, 7 verified, 77.8%, production DB |
+| cells | `config/families/cells.json` | 192 discovered, 112 verified, 58.3%, production DB |
+| email | `config/families/email.json` | 19 discovered, 16 verified, 84.2%, production DB |
+| html | `config/families/html.json` | 17 discovered, 15 verified, 88.2%, production DB |
+| imaging | `config/families/imaging.json` | 221 discovered, 138 verified, 62.4%, production DB |
+| medical | `config/families/medical.json` | 88 discovered, 3 verified, 3.4%, production DB, early |
+| ocr | `config/families/ocr.json` | 115 discovered, 12 verified, 10.4%, production DB |
+| page | `config/families/page.json` | 8 discovered, 1 verified, 12.5%, production DB |
+| pdf | `config/families/pdf.json` | 825 discovered, 621 verified, 75.3%, production DB |
+| slides | `config/families/slides.json` | 551 discovered, 60 verified, 10.9%, production DB |
+| smoke | `config/families/smoke.json` | 0 discovered, 0 verified, fallback README-documented source |
+| tasks | `config/families/tasks.json` | 6 discovered, 0 verified, fallback README-documented source |
+| tex | `config/families/tex.json` | 45 discovered, 34 verified, 75.6%, production DB |
+| words | `config/families/words.json` | 94 discovered, 84 verified, 89.4%, production DB |
+| zip | `config/families/zip.json` | 56 discovered, 49 verified, 87.5%, production DB |
+
+The report date is 2026-06-17. Treat the figures as baselines, not guarantees for a fresh checkout. They depend on local content roots, generated catalogs, test data, and the current production DB.
+
+## Known Gaps and Risks
+
+- The current checkout is under OneDrive; CLI commands warn that SQLite WAL mode on OneDrive can cause locking. Use `--safe-workspace`.
+- Running `list-families` with the repo virtualenv succeeded during this README investigation, but initialized DB/vector services and emitted Chroma telemetry errors. The command still returned success.
+- Running the CLI with the ambient system `python` failed because dependencies such as `pydantic` were not installed. Use the project virtualenv or install requirements.
+- `docs/assessments/known-gaps.md` lists missing/stale source-module references and ignored config fields.
+- `config/global.json` currently enables `markdown_write.allow_markdown_write`; confirm this setting before non-dry-run operations.
+- Gist token naming is inconsistent across `.env.example` and config files.
+- Some ops scripts need cleanup before they are reliable copy/paste workflows. `scripts/ops/run_all_gates.py` still has stale command construction for top-level CLI flags, and `scripts/ops/run_e2e_zip.py` needs `PYTHONPATH=src` plus stale provisioning path cleanup.
+- Some older reports contain stale status and mojibake; prefer current source, configs, CI, and eval files over old sprint reports.
+- Full live verification can be expensive or environment-dependent because it may need .NET restore/build, NuGet downloads, content roots, test data, network access, and LLM endpoints.
+
+## Recommended Next Steps
+
+1. Normalize Markdown write defaults so docs, config, and operator expectations agree.
+2. Fix `.env.example` and config token naming for gist read versus gist publish paths.
+3. Replace stale `tools/...` references in docs/agent instructions with `scripts/ops/...` and `scripts/validation/...`.
+4. Fix ops script command construction so `scripts/ops/run_all_gates.py` and `scripts/ops/run_e2e_zip.py` are safe copy/paste workflows again.
+5. Add or document a lightweight smoke dataset that exercises scan -> compile -> runtime without external content roots.
+6. Add live integration test instructions for .NET SDK, NuGet, LLM endpoint, telemetry API, and gist access.
+7. Reduce circular evidence risk for `smoke` and `tasks` baselines by generating production-DB-backed runs or marking them explicitly as no-baseline.
+8. Add a cleanup command or runbook for `workspace/`, `artifacts/`, `data/chroma`, and stale local DBs.
+
+## Maintainer Notes
+
+- Keep deterministic fixes idempotent. Applying them twice should produce the same output as applying them once.
+- Keep run selection stable. Sort file lists and top-N selections deterministically.
+- Use `sys.executable` in subprocess helpers instead of hardcoded Python paths.
+- Do not bypass write guards, drift checks, provenance checks, or final review to make a run pass.
+- Do not commit generated DBs, workspaces, caches, reports, local credentials, or API keys.
+- Prefer `python -m src.cli.main ...` as the primary command form. `python -m cli ...` exists as a compatibility wrapper.
+
+## Documentation Map
 
 | Document | Purpose |
 |----------|---------|
-| [docs/architecture/architecture.md](docs/architecture/architecture.md) | Detailed system design, phase controllers, DB schema |
-| [docs/architecture/overview.md](docs/architecture/overview.md) | Pipeline phases A–F, entities, data flow |
-| [docs/architecture/mcp.md](docs/architecture/mcp.md) | MCP server protocol, tool schemas, Claude Desktop setup |
-| [docs/architecture/entrypoints.md](docs/architecture/entrypoints.md) | CLI and MCP entry points reference |
-| [docs/architecture/llm-code-fixing-flow.md](docs/architecture/llm-code-fixing-flow.md) | LLM fix loop internals |
-| [docs/reference/configuration.md](docs/reference/configuration.md) | Full reference for global.json and family configs |
-| [docs/reference/local-telemetry-api.md](docs/reference/local-telemetry-api.md) | Telemetry event schema (v3.0.0) |
-| [docs/operations/runbook.md](docs/operations/runbook.md) | Operations runbook (pipeline ops, system ops, troubleshooting) |
-| [docs/development/testing-guide.md](docs/development/testing-guide.md) | Unit test patterns and fixture conventions |
-| [docs/development/development-guide.md](docs/development/development-guide.md) | Contributing guide, code conventions |
-| [docs/safety/safety.md](docs/safety/safety.md) | Write guards, path protection, drift controls |
-| [docs/assessments/known-gaps.md](docs/assessments/known-gaps.md) | Known issues, limitations, missing coverage |
-| [docs/assessments/accuracy-audit.md](docs/assessments/accuracy-audit.md) | Family accuracy baselines and audit methodology |
-| [docs/development/family-kb.md](docs/development/family-kb.md) | Knowledge-base subsystem governance |
+| `docs/index.md` | Documentation index |
+| `docs/architecture/overview.md` | Pipeline phases, entities, and data flow |
+| `docs/architecture/architecture.md` | Detailed system design and DB schema |
+| `docs/architecture/entrypoints.md` | CLI and MCP entry points |
+| `docs/architecture/mcp.md` | MCP protocol and tool surface |
+| `docs/architecture/llm-code-fixing-flow.md` | LLM fix loop internals |
+| `docs/reference/configuration.md` | Global and family config reference |
+| `docs/reference/api-reference.md` | HTTP API reference |
+| `docs/reference/local-telemetry-api.md` | Local telemetry API schema |
+| `docs/operations/runbook.md` | Operations runbook |
+| `docs/safety/safety.md` | Safety and write guards |
+| `docs/development/testing-guide.md` | Test guidance |
+| `docs/development/development-guide.md` | Development guide |
+| `docs/development/family-kb.md` | Family KB governance |
+| `docs/assessments/known-gaps.md` | Known gaps and limitations |
+| `docs/assessments/accuracy-audit.md` | Baseline accuracy audit |
 
-Each directory in the repo also contains its own `README.md` with folder-level details.
+## Quick Claim-to-Evidence Table
 
----
-
-## Running Tests
-
-```bash
-# Full test suite
-pytest tests/ -v --timeout=120
-
-# Specific module
-pytest tests/test_semantic_microfixes.py -v
-
-# With coverage
-pytest tests/ --cov=src --cov-report=html
-
-# MCP protocol compliance
-pytest tests/test_mcp_server.py tests/test_mcp_tool_definitions.py -v
-```
+| Claim | Evidence |
+|-------|----------|
+| The CLI exposes the documented command set. | `src/cli/main.py`; verified with `python -m src.cli.main --help` |
+| MCP exposes 14 tools. | `docs/architecture/mcp.md`, `src/mcp_tools/tools.py` |
+| HTTP wrapper delegates to MCP tools. | `src/http_server.py` |
+| The orchestrator includes phases beyond the older A-F diagram. | `src/pipeline/orchestrator.py` |
+| Deterministic microfixes exist. | `src/services/semantic_microfixes.py`, `tests/test_semantic_microfixes.py`, `tests/test_quick_fixes_transformers.py` |
+| Fixture resolver uses a 5-tier chain. | `src/services/fixture_resolver_service.py`, `tests/test_fixture_resolver_service.py` |
+| Markdown writes are guarded by service and path/provenance checks. | `src/services/markdown_service.py`, `src/core/path_guard.py`, `src/core/provenance_guard.py` |
+| GitLab CI is authoritative. | `.gitlab-ci.yml`, `.github/workflows/cli_tests.yml` |
+| Accuracy figures come from eval report, with circular evidence risk noted. | `evals/family_accuracy_report.json`, `evals/claim_registry.json` |
