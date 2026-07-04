@@ -110,10 +110,15 @@ def collect_md_files(changed_only: bool = False) -> list:
         files.add(f.resolve())
 
     # Files in scan roots
+    # _strays_inbox/ is a quarantine area for unreviewed external Markdown files
+    # (moved there by git mv). Those files contain links to external APIs that
+    # cannot resolve within the repo. Skip them here; they are not governed docs.
+    SKIP_DIR_NAMES = {"_strays_inbox"}
     for root in SCAN_ROOTS:
         if root.exists():
             for f in root.rglob("*.md"):
-                files.add(f.resolve())
+                if not any(part in SKIP_DIR_NAMES for part in f.relative_to(root).parts):
+                    files.add(f.resolve())
 
     # Component READMEs in src/, scripts/, config/, migrations/, archive/
     for subdir in ["src", "scripts", "config", "migrations", "archive"]:

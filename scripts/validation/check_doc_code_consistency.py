@@ -72,20 +72,8 @@ def validate_claim(claim: dict) -> list:
                 f"{claim_id}: doc_file '{doc_file}' does not exist"
             )
 
-    # Detect circular evidence (evidence pointing at the same doc)
-    if evidence_file and doc_file:
-        ev_path = Path(evidence_file)
-        doc_path_rel = Path(doc_file)
-        # If evidence file is in evals/ and claims to be grounded by another evals/ file
-        # that references the same doc, that's a potential circularity
-        if claim.get("status") == "grounded":
-            # Check if the evidence is just a report that mirrors the doc
-            if "accuracy_report" in str(ev_path) and "README" in str(doc_path_rel):
-                issues.append(
-                    f"{claim_id}: potential circular evidence — "
-                    f"'{evidence_file}' may source data from '{doc_file}' "
-                    f"(check if baseline is independently generated)"
-                )
+    # Note: circular evidence detection is handled by check_evidence_circularity.py,
+    # which traverses the full claim graph. No duplicate check here.
 
     return issues
 
