@@ -14,6 +14,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from ..core.models import ExampleRecord, ExampleStatus, MarkdownEdit, SourceType
 from ..core.database import Database
 from ..core.path_guard import assert_write_allowed, READ_ONLY_PREFIXES, is_read_only_path, get_workspace_path
+from ..core.authority import Capability, PolicyDecisionPoint
 from .article_validator import ArticleValidator
 from ..core.provenance_guard import (
     validate_batch_provenance,
@@ -92,11 +93,13 @@ class MarkdownUpdateService:
     def __init__(
         self,
         db: Database,
+        pdp: PolicyDecisionPoint,
         artifacts_dir: Optional[Path] = None,
         gist_publisher: Optional[Any] = None,
         gist_upload_mode: str = "inline-only",
         gist_target_account: str = "",
-        allow_markdown_write: bool = False,
+        config_manager: Optional[Any] = None,
+        cli_override: bool = False,
         use_workspace_copy: bool = False,
         workspace_root: Optional[Path] = None,
         run_id: Optional[str] = None,
@@ -111,11 +114,21 @@ class MarkdownUpdateService:
 
         Args:
             db: Database instance
+            pdp: Shared PolicyDecisionPoint (TC-EPIC1-01/02) -- the single place the
+                WRITE_MARKDOWN capability decision is computed. Replaces the
+                allow_markdown_write boolean this service used to own directly.
             artifacts_dir: Directory for storing diff artifacts
             gist_publisher: Optional GistPublisher instance for upload modes
             gist_upload_mode: One of "inline-only", "upload-on-change", "upload-always"
             gist_target_account: GitHub account for new gist shortcodes
-            allow_markdown_write: If True, allow markdown file writes (default: False for safety)
+            config_manager: Optional ConfigurationManager used to read
+                global_config.markdown_write.allow_markdown_write FRESH on every write
+                check (so a mid-run config change is honored without reconstructing
+                this service). If omitted, config_allow is treated as False and only
+                cli_override can authorize writes.
+            cli_override: The --allow-md-write flag / allow_md_write parameter. Fixed
+                for the lifetime of this service instance (it reflects one CLI
+                invocation), unlike config_allow which is read fresh per check.
             use_workspace_copy: If True, write to workspace copies for read-only paths
             workspace_root: Root directory for workspace copies (default: artifacts/workspace)
             run_id: Run ID for workspace isolation
@@ -124,12 +137,14 @@ class MarkdownUpdateService:
             family_hints_str: Formatted family-specific review hints for prose audit (newline-separated)
         """
         self.db = db
+        self.pdp = pdp
         self.artifacts_dir = artifacts_dir or Path("artifacts/diffs")
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.gist_publisher = gist_publisher
         self.gist_upload_mode = gist_upload_mode
         self.gist_target_account = gist_target_account
-        self.allow_markdown_write = allow_markdown_write
+        self.config_manager = config_manager
+        self.cli_override = cli_override
         self.use_workspace_copy = use_workspace_copy
         self.workspace_root = workspace_root or Path("artifacts/workspace")
         self.run_id = run_id or "default"
@@ -139,6 +154,29 @@ class MarkdownUpdateService:
         self.audit_prose = audit_prose
         self.family_hints_str = family_hints_str
         self.article_validator = ArticleValidator()
+
+    def _write_markdown_decision(self, resource: Optional[str] = None):
+        """Single call site computing the WRITE_MARKDOWN decision (TC-EPIC1-02).
+
+        Reads global_config.markdown_write.allow_markdown_write fresh via
+        self.config_manager on every call, per this taskcard's point 5 (a mid-run
+        config change is honored without reconstructing this service).
+        """
+        config_allow = False
+        if self.config_manager is not None:
+            config_allow = bool(
+                self.config_manager.load_global_config().markdown_write.allow_markdown_write
+            )
+        return self.pdp.check(
+            Capability.WRITE_MARKDOWN,
+            resource=resource,
+            context={
+                "config_allow": config_allow,
+                "cli_override": self.cli_override,
+                "use_workspace_copy": self.use_workspace_copy,
+                "run_id": self.run_id,
+            },
+        )
 
     def _get_write_target_path(self, file_path: str) -> str:
         """
@@ -178,10 +216,11 @@ class MarkdownUpdateService:
             # Re-raise as ReadOnlyPathError for backward compatibility
             raise ReadOnlyPathError(str(e))
 
-        # Check markdown write guard
-        if not self.allow_markdown_write:
+        # Check markdown write guard via the Authorization Kernel (TC-EPIC1-02)
+        decision = self._write_markdown_decision(resource=file_path)
+        if not decision.allow:
             raise MarkdownWriteGuardError(
-                f"WRITE BLOCKED: Markdown writes are not authorized.\n"
+                f"WRITE BLOCKED: {decision.reason}\n"
                 f"File: {file_path}\n"
                 f"To allow markdown writes, set allow_markdown_write=True in global config\n"
                 f"or use --allow-md-write CLI flag.\n"
@@ -224,7 +263,7 @@ class MarkdownUpdateService:
         # This prevents manual edits that bypass the verify→fix→verify loop
         # This runs BEFORE filtering by verified_code, so it can catch status=VERIFIED
         # but verified_code=None (anti-pattern: manually setting status without verification)
-        if check_provenance_enabled(self.allow_markdown_write, self.use_workspace_copy):
+        if check_provenance_enabled(self._write_markdown_decision(resource=file_path).allow, self.use_workspace_copy):
             try:
                 provenance_signals = validate_batch_provenance(
                     examples_claiming_verified,

@@ -14,6 +14,7 @@ from datetime import datetime
 from src.core.database import Database
 from src.core.models import ExampleRecord, ExampleStatus, SourceType, Location
 from src.services.markdown_service import MarkdownUpdateService
+from tests.conftest import make_pdp
 
 
 def compute_signature(code: str) -> str:
@@ -51,7 +52,7 @@ class TestMultiBlockMdUpdate:
         """Create markdown update service."""
         return MarkdownUpdateService(
             db=temp_db,
-            allow_markdown_write=True,
+            pdp=make_pdp(allow_writes=True),
             run_id="test-run"
         )
 
@@ -376,7 +377,7 @@ Console.WriteLine("Original");
             # Create service with default (unsafe_first_block=False)
             markdown_service = MarkdownUpdateService(
                 db=temp_db,
-                allow_markdown_write=True,
+                pdp=make_pdp(allow_writes=True),
                 run_id="test-run",
                 unsafe_first_block=False
             )
@@ -448,7 +449,7 @@ Console.WriteLine("Original");
             # Create service with unsafe_first_block=True
             markdown_service = MarkdownUpdateService(
                 db=temp_db,
-                allow_markdown_write=True,
+                pdp=make_pdp(allow_writes=True),
                 run_id="test-run",
                 unsafe_first_block=True  # UNSAFE mode
             )

@@ -35,6 +35,8 @@ from ..services.example_substitution_service import ExampleSubstitutionService, 
 from ..services.semantic_microfixes import apply_semantic_microfixes, BCL_PLATFORM_TYPES
 from .failure_tracker import track_infra_missing_test_data, track_failure, track_compile_failure
 from ..core.path_guard import is_read_only_path
+from ..core.authority import Capability, PolicyDecisionPoint
+from ..core.authority.policies.markdown_write import write_markdown_policy
 from .escalation_classifier import classify_escalation_reason, should_escalate_to_review
 from ..core.models import FailureCategory, FailureResolution
 from .family_service_registry import FamilyServiceRegistry
@@ -164,6 +166,12 @@ class PipelineOrchestrator:
             wal_enabled=self.sqlite_config.get('wal_enabled', True),
         )
         self.db.initialize_schema()
+
+        # Authorization Kernel (TC-EPIC1-01/02): one shared PolicyDecisionPoint per
+        # Orchestrator instance, replacing the independent markdown-write and
+        # commit-authorization derivations documented in FINDINGS_REGISTER.md F-014.
+        self.pdp = PolicyDecisionPoint(config_manager=self.config_manager, database=self.db)
+        self.pdp.register_policy(Capability.WRITE_MARKDOWN, write_markdown_policy)
 
         # Initialize production DB schema if configured
         if self.db.production_db_path:
@@ -450,11 +458,11 @@ class PipelineOrchestrator:
     def markdown_service(self) -> MarkdownUpdateService:
         """Get or initialize markdown service."""
         if self._markdown_service is None:
-            global_config = self.config_manager.load_global_config()
             self._markdown_service = MarkdownUpdateService(
                 self.db,
+                pdp=self.pdp,
                 artifacts_dir=self.artifacts_dir / "diffs",
-                allow_markdown_write=global_config.markdown_write.allow_markdown_write,
+                config_manager=self.config_manager,
                 use_workspace_copy=self.use_workspace_copy,
                 workspace_root=self.artifacts_dir / "workspace",
                 run_id="default",  # Will be overridden when run starts
@@ -5080,7 +5088,11 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
         # ALWAYS recreate service with correct run_id (fixes run_id mismatch bug)
         global_config = self.config_manager.load_global_config()
-        allow_write = allow_md_write or global_config.markdown_write.allow_markdown_write
+        # Authorization Kernel (TC-EPIC1-02): allow_md_write becomes the PDP's
+        # cli_override context input, computed fresh via self.pdp.check() inside
+        # MarkdownUpdateService rather than a second, independently-derived OR
+        # formula (this is exactly the fragmentation FINDINGS_REGISTER.md F-014
+        # documented between this line and the markdown_service property above).
 
         # Resolve audit_prose from merged strategy config (global + per-family overrides)
         _family_config_for_prose = self.config_manager.load_family_config(family)
@@ -5131,8 +5143,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
         self._markdown_service = MarkdownUpdateService(
             self.db,
+            pdp=self.pdp,
             artifacts_dir=self.artifacts_dir / "diffs",
-            allow_markdown_write=allow_write,
+            config_manager=self.config_manager,
+            cli_override=allow_md_write,
             use_workspace_copy=self.use_workspace_copy,
             workspace_root=self.artifacts_dir / "workspace",
             run_id=run_id,  # Always use current run_id, not "default"

@@ -11,6 +11,7 @@ from src.core.path_guard import (
     assert_write_allowed,
 )
 from src.services.markdown_service import MarkdownUpdateService
+from tests.conftest import make_pdp
 from src.core.database import Database
 from src.core.models import ExampleRecord, ExampleStatus, SourceType, Location
 
@@ -81,7 +82,7 @@ class TestWorkspaceCopyMode:
         # Create markdown service with workspace copy enabled
         service = MarkdownUpdateService(
             db=Database(temp_db),
-            allow_markdown_write=True,
+            pdp=make_pdp(allow_writes=True),
             use_workspace_copy=True,
             workspace_root=tmp_path / "workspace",
             run_id="test_run_123"
@@ -105,7 +106,7 @@ class TestWorkspaceCopyMode:
         """Test markdown service without workspace copy mode."""
         service = MarkdownUpdateService(
             db=Database(temp_db),
-            allow_markdown_write=False,
+            pdp=make_pdp(allow_writes=False),
             use_workspace_copy=False,
         )
 

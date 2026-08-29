@@ -22,14 +22,15 @@ def _make_service(
 ):
     """Build a MarkdownUpdateService with a minimal stub DB and optional LLM mock."""
     from src.services.markdown_service import MarkdownUpdateService
+    from tests.conftest import make_pdp
 
     db = MagicMock()
     return MarkdownUpdateService(
         db=db,
+        pdp=make_pdp(allow_writes=allow_markdown_write),
         llm_service=llm_service,
         audit_prose=audit_prose,
         family_hints_str=family_hints_str,
-        allow_markdown_write=allow_markdown_write,
     )
 
 

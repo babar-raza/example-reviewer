@@ -18,6 +18,7 @@ from src.utils.markdown_parser import parse_fenced_blocks, compute_code_signatur
 from src.services.discovery_service import DiscoveryService
 from src.services.markdown_service import MarkdownUpdateService, BlockResolutionResult
 from src.core.database import Database
+from tests.conftest import make_pdp
 from src.core.config import GlobalConfig, FamilyConfig
 from src.core.models import ExampleRecord, ExampleStatus, Location, SourceType
 
@@ -150,7 +151,7 @@ var y = 2;
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             db = Database(str(db_path))
-            service = MarkdownUpdateService(db, run_id="test")
+            service = MarkdownUpdateService(db, pdp=make_pdp(allow_writes=False), run_id="test")
 
             # Resolve
             result = service.resolve_target_block(example, blocks)
@@ -192,7 +193,7 @@ var y = 2;
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             db = Database(str(db_path))
-            service = MarkdownUpdateService(db, run_id="test")
+            service = MarkdownUpdateService(db, pdp=make_pdp(allow_writes=False), run_id="test")
 
             result = service.resolve_target_block(example, blocks)
 
@@ -228,7 +229,7 @@ var x = 1;
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             db = Database(str(db_path))
-            service = MarkdownUpdateService(db, run_id="test")
+            service = MarkdownUpdateService(db, pdp=make_pdp(allow_writes=False), run_id="test")
 
             result = service.resolve_target_block(example, blocks)
 
@@ -258,7 +259,7 @@ var x = 1;
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             db = Database(str(db_path))
-            service = MarkdownUpdateService(db, run_id="test")
+            service = MarkdownUpdateService(db, pdp=make_pdp(allow_writes=False), run_id="test")
 
             result = service.resolve_target_block(example, blocks)
 
@@ -288,7 +289,7 @@ var x = 1;
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             db = Database(str(db_path))
-            service = MarkdownUpdateService(db, run_id="test")
+            service = MarkdownUpdateService(db, pdp=make_pdp(allow_writes=False), run_id="test")
 
             result = service.resolve_target_block(example, blocks)
 

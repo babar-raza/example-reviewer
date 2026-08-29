@@ -20,6 +20,7 @@ import pytest
 from src.core.database import Database
 from src.core.models import ExampleRecord, ExampleStatus, Location, SourceType
 from src.services.markdown_service import MarkdownUpdateService
+from tests.conftest import make_pdp
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ def temp_db(tmp_path):
 
 @pytest.fixture
 def svc(temp_db):
-    return MarkdownUpdateService(db=temp_db, allow_markdown_write=True, run_id="test-run")
+    return MarkdownUpdateService(db=temp_db, pdp=make_pdp(allow_writes=True), run_id="test-run")
 
 
 # ---------------------------------------------------------------------------

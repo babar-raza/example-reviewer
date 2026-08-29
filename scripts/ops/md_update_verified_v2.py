@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.core.database import Database
 from src.services.markdown_service import MarkdownUpdateService
 from src.core.config import ConfigurationManager
+from src.core.authority import Capability, PolicyDecisionPoint
+from src.core.authority.policies.markdown_write import write_markdown_policy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -97,17 +99,20 @@ def main():
 
     # Load configuration
     config_manager = ConfigurationManager(Path("config/families"))
-    global_config = config_manager.load_global_config()
 
-    # Override markdown_write setting if --allow-md-write
-    if args.allow_md_write:
-        global_config.markdown_write.allow_markdown_write = True
+    # Authorization Kernel (TC-EPIC1-01/02): --allow-md-write becomes the PDP's
+    # cli_override context input, computed fresh from config_manager on every
+    # write check, instead of mutating global_config in place.
+    pdp = PolicyDecisionPoint(config_manager=config_manager, database=db)
+    pdp.register_policy(Capability.WRITE_MARKDOWN, write_markdown_policy)
 
     # Initialize MarkdownUpdateService
     md_service = MarkdownUpdateService(
         db=db,
+        pdp=pdp,
         run_id=args.run_id,
-        allow_markdown_write=args.allow_md_write,
+        config_manager=config_manager,
+        cli_override=args.allow_md_write,
         use_workspace_copy=args.use_workspace_copy,
         workspace_root=Path(args.workspace_dir) if args.workspace_dir else None,
         unsafe_first_block=False  # NEVER enable this - we have signatures now

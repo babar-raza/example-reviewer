@@ -14,6 +14,7 @@ import pytest
 
 from src.services.llm_service import LLMService
 from src.services.markdown_service import MarkdownUpdateService
+from tests.conftest import make_pdp
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +141,7 @@ def test_T5_family_hints_str_stored_on_instance(tmp_path):
     """T5: MarkdownUpdateService(family_hints_str='test') stores it on self.family_hints_str."""
     svc = MarkdownUpdateService(
         db=None,
+        pdp=make_pdp(allow_writes=False),
         artifacts_dir=tmp_path,
         family_hints_str="test-hint",
     )
@@ -150,6 +152,7 @@ def test_T5_family_hints_str_defaults_to_empty(tmp_path):
     """T5: MarkdownUpdateService without family_hints_str defaults to ''."""
     svc = MarkdownUpdateService(
         db=None,
+        pdp=make_pdp(allow_writes=False),
         artifacts_dir=tmp_path,
     )
     assert svc.family_hints_str == ""

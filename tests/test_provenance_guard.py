@@ -28,6 +28,7 @@ from src.core.provenance_guard import (
 )
 from src.core.database import Database
 from src.services.markdown_service import MarkdownUpdateService
+from tests.conftest import make_pdp
 from src.utils.markdown_parser import compute_code_signature
 
 
@@ -255,7 +256,7 @@ More text.
             service = MarkdownUpdateService(
                 db=temp_db,
                 artifacts_dir=Path(artifacts_dir),
-                allow_markdown_write=True,  # Enable writes
+                pdp=make_pdp(allow_writes=True),  # Enable writes
                 use_workspace_copy=False,
                 run_id=run_id,
             )
@@ -307,7 +308,7 @@ More text.
             service = MarkdownUpdateService(
                 db=temp_db,
                 artifacts_dir=Path(artifacts_dir),
-                allow_markdown_write=True,
+                pdp=make_pdp(allow_writes=True),
                 use_workspace_copy=False,
                 run_id=run_id,
             )

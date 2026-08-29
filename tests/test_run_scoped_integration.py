@@ -65,8 +65,10 @@ def test_markdown_service_run_scoped_query():
         mock_db = Mock(spec=Database)
         mock_db.get_examples_by_family = Mock(return_value=[])
 
+        from tests.conftest import make_pdp
         service = MarkdownUpdateService(
             db=mock_db,
+            pdp=make_pdp(allow_writes=False),
             run_id="test_run_456"
         )
 

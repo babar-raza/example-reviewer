@@ -51,10 +51,12 @@ class TestUploadAndUpdateGistIntegration:
     def _build_markdown_service(self, gist_publisher, gist_readme_service=None):
         """Build a MarkdownUpdateService with minimal deps."""
         from src.services.markdown_service import MarkdownUpdateService
+        from tests.conftest import make_pdp
 
         db = MagicMock()
         return MarkdownUpdateService(
             db=db,
+            pdp=make_pdp(allow_writes=True),
             gist_publisher=gist_publisher,
             gist_upload_mode="upload-on-change",
             gist_target_account="test-account",
