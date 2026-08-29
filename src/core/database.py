@@ -4067,3 +4067,41 @@ class Database:
                 WHERE queue_id = ?
             """, (status, now, run_id, error, queue_id))
             conn.commit()
+
+    # =========================================================================
+    # AUTHORITY AUDIT (TC-EPIC1-01)
+    # =========================================================================
+
+    def record_authority_decision(
+        self,
+        capability: str,
+        resource: Optional[str],
+        decision: str,
+        policy_id: str,
+        run_id: Optional[str] = None,
+        reason: str = "",
+    ) -> None:
+        """Append one PolicyDecisionPoint decision to the authority_audit table.
+
+        Called for every check() outcome, allow and deny alike, so an operator
+        can query authority_audit and see every gate evaluation rather than
+        only the ones that happened to be logged (see FINDINGS_REGISTER.md F-014).
+        """
+        # Task 2B: Single-writer protection
+        with self._write_lock:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO authority_audit (
+                        capability, resource, decision, policy_id, run_id,
+                        reason, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    capability,
+                    resource,
+                    decision,
+                    policy_id,
+                    run_id,
+                    reason,
+                    datetime.now(timezone.utc).isoformat(),
+                ))
+                conn.commit()
