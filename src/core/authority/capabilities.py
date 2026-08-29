@@ -26,3 +26,10 @@ class Capability(str, Enum):
     PUBLISH_GIST = "publish_gist"
     CALL_LLM_EXTERNAL = "call_llm_external"
     CALL_LLM_LOCAL = "call_llm_local"
+    # TC-EPIC1-06: the original 8-member catalogue (TC-EPIC1-01) had no capability
+    # for "is this inbound HTTP request allowed to proceed" -- auth, CORS, rate
+    # limiting, and body-size are a distinct boundary-layer concern from the
+    # write/execute/commit/publish/LLM capabilities above. Added here rather than
+    # overloading e.g. EXECUTE_CODE, per TC-EPIC1-06's explicit authorization to
+    # add a 9th capability when justified.
+    HTTP_ACCESS = "http_access"

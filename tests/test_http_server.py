@@ -8,11 +8,33 @@ from unittest.mock import patch, MagicMock
 from src.mcp_tools.tools import ToolResult
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """TC-EPIC1-06: every test in this module shares the same TestClient host
+    ("testclient"), and therefore the same rate-limiter bucket key -- reset it
+    before each test so accumulated state can't cause a flaky 429 unrelated to
+    what a given test is checking."""
+    from src.http_server import _rate_limiter
+
+    _rate_limiter.reset()
+    yield
+
+
 @pytest.fixture
 def client():
-    """Create a FastAPI TestClient with mocked MCP server."""
+    """Create a FastAPI TestClient with mocked MCP server.
+
+    TC-EPIC1-06: the HTTP boundary now fails closed when EXAMPLE_REVIEWER_API_KEY
+    is unset, so this fixture explicitly opts into EXAMPLE_REVIEWER_DEV_MODE=true
+    to keep these 155 lines of tool-call-plumbing coverage focused on that, not
+    on auth (auth/CORS/rate-limit/body-size have their own dedicated coverage in
+    tests/test_http_server_security.py). Also resets the module-level rate
+    limiter so cross-test state (same TestClient host "testclient" for every
+    test in this file) can't cause a flaky 429.
+    """
     # Must patch before importing the module (module-level initialization)
-    with patch("src.http_server.mcp_server") as mock_server:
+    with patch("src.http_server.mcp_server") as mock_server, \
+            patch("src.http_server.DEV_MODE", True):
         # Default mock: call_tool returns a successful ToolResult
         mock_server.call_tool.return_value = ToolResult(
             success=True,
@@ -115,7 +137,10 @@ class TestValidateCode:
 
 class TestAuthMiddleware:
     def test_no_auth_when_key_not_set(self, client):
-        """When EXAMPLE_REVIEWER_API_KEY is empty, all requests pass."""
+        """With EXAMPLE_REVIEWER_API_KEY empty AND EXAMPLE_REVIEWER_DEV_MODE=true
+        (this fixture's explicit opt-in, TC-EPIC1-06), requests pass. Without the
+        dev-mode opt-in this would now be a 503 -- see
+        tests/test_http_server_security.py's test_no_api_key_configured_refuses_service."""
         tc, _ = client
         resp = tc.get("/api/v1/tools")
         assert resp.status_code == 200

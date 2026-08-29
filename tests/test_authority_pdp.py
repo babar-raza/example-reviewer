@@ -15,9 +15,15 @@ from src.core.authority import Capability, Decision, PolicyDecisionDeniedError, 
 from src.core.database import Database
 
 
-def test_capability_enum_has_8_members():
-    """Locks the enum surface so a future PR can't silently add/remove a capability."""
-    assert len(list(Capability)) == 8
+def test_capability_enum_has_9_members():
+    """Locks the enum surface so a future PR can't silently add/remove a capability.
+
+    Grew from 8 to 9 in TC-EPIC1-06, which added HTTP_ACCESS for the HTTP
+    transport boundary (auth/CORS/rate-limit/body-size) -- a distinct concern
+    from the write/execute/commit/publish/LLM capabilities TC-EPIC1-01 defined,
+    and explicitly authorized by that taskcard as an in-scope addition.
+    """
+    assert len(list(Capability)) == 9
     assert {c.value for c in Capability} == {
         "write_markdown",
         "write_artifact",
@@ -27,6 +33,7 @@ def test_capability_enum_has_8_members():
         "publish_gist",
         "call_llm_external",
         "call_llm_local",
+        "http_access",
     }
 
 

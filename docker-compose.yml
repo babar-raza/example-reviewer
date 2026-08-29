@@ -10,10 +10,17 @@ services:
     volumes:
       - ./data:/app/data
       - ./config:/app/config:ro
+    env_file:
+      - .env
     environment:
       - DB_PATH=/app/data/example_reviewer.db
       - CONFIG_DIR=/app/config/families
       - WORKSPACE_DIR=/app/workspace
+      # EXAMPLE_REVIEWER_API_KEY must be set in .env (see .env.example) --
+      # TC-EPIC1-06: the HTTP server now fails closed (503) when this is unset,
+      # unless EXAMPLE_REVIEWER_DEV_MODE=true is also set in .env for local-only use.
+      - EXAMPLE_REVIEWER_API_KEY=${EXAMPLE_REVIEWER_API_KEY}
+      - EXAMPLE_REVIEWER_DEV_MODE=${EXAMPLE_REVIEWER_DEV_MODE:-false}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:18800/healthz')"]
       interval: 30s
