@@ -147,7 +147,14 @@ class TestConvenienceMethods:
 
             authority.mark_infra_blocked("ex-1", "run-1", failure_reason="missing fixture")
             mock_transition.assert_called_with(
-                "ex-1", "run-1", ExampleStatus.INFRA_BLOCKED, failure_reason="missing fixture", evidence_ref=None
+                "ex-1", "run-1", ExampleStatus.INFRA_BLOCKED,
+                failure_reason="missing fixture", escalation_reason=None, evidence_ref=None,
+            )
+
+            authority.mark_infra_blocked("ex-1", "run-1", failure_reason="missing fixture", escalation_reason="infra_blocked_rar_fixture")
+            mock_transition.assert_called_with(
+                "ex-1", "run-1", ExampleStatus.INFRA_BLOCKED,
+                failure_reason="missing fixture", escalation_reason="infra_blocked_rar_fixture", evidence_ref=None,
             )
 
             authority.mark_final_review_passed("ex-1", "run-1")
@@ -158,7 +165,7 @@ class TestConvenienceMethods:
                 "ex-1", "run-1", ExampleStatus.FINAL_REVIEW_FAILED, failure_reason="drift detected", evidence_ref=None
             )
 
-        assert mock_transition.call_count == 6
+        assert mock_transition.call_count == 7
 
 
 class TestReusesModelsTransitionTable:
@@ -189,17 +196,27 @@ class TestNegativeControls:
         assert result is True
         assert db.get_example_run_status(run_id, "ex-1") == ExampleStatus.COMMITTED
 
-    def test_lint_script_flags_current_error_router_dead_code(self):
-        """Proves the lint script's detection fires on the real, previously-
-        uncited bypass this investigation surfaced (error_router.py:300's
-        direct .status = assignment inside the currently-uncalled
-        escalate_to_review()), not just a synthetic fixture."""
+    def test_escalate_to_review_removed(self):
+        """NEGATIVE CONTROL (TC-EPIC2-02): error_router.py:300's direct
+        `.status = ExampleStatus.NEEDS_REVIEW` assignment lived inside
+        ErrorRouter.escalate_to_review(), a confirmed-dead method (zero
+        callers anywhere in src/) that also never actually persisted its
+        mutation (it called save_example(example) without threading run_id
+        through, so example_run_state was never touched). Deleted rather than
+        rewired, since fixing a method nothing calls would perpetuate a
+        footgun with no way to prove it works end-to-end. Guards against a
+        future PR silently reintroducing it."""
+        from src.pipeline.error_router import ErrorRouter
+
+        assert not hasattr(ErrorRouter, "escalate_to_review")
+
+    def test_lint_script_confirms_error_router_now_clean(self):
+        """Confirms the real (non-fixture) error_router.py has zero violations
+        post-migration -- contrasted with the pre-migration state this
+        investigation found (line 300's direct assignment)."""
         from scripts.validation.check_no_raw_status_writes import scan
 
         repo_root = Path(__file__).parent.parent
         violations = scan(repo_root / "src")
         error_router_hits = [v for v in violations if v.path.name == "error_router.py"]
-        assert any(v.line == 300 for v in error_router_hits), (
-            f"Expected a violation at error_router.py:300, got lines: "
-            f"{[v.line for v in error_router_hits]}"
-        )
+        assert error_router_hits == []

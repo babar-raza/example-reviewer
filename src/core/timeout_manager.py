@@ -21,6 +21,9 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from datetime import datetime
 
+from .models import ExampleStatus
+from .state_authority import StateAuthority
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
@@ -418,15 +421,23 @@ def create_timeout_callback(
                 except Exception as e:
                     logger.warning(f"Failed to insert failure_details: {e}")
 
-            # 3. Mark example in terminal state
-            if mark_terminal_state and context.example_key:
+            # 3. Mark example in terminal state (TC-EPIC2-02: routed through StateAuthority.
+            # Pre-existing bug fixed incidentally here: status='FAILED' is not a real
+            # ExampleStatus member, and run_id was never passed to update_example_status()
+            # either -- that method requires run_id and logs-and-no-ops without it, so this
+            # block has always silently done nothing. create_timeout_callback() has zero
+            # callers today (confirmed via repo-wide search), so this was unreachable in
+            # practice; fixed here rather than left broken since routing through
+            # StateAuthority requires a real ExampleStatus value regardless.)
+            if mark_terminal_state and context.example_key and context.run_id:
                 try:
-                    db.update_example_status(
-                        example_id=context.example_key,
-                        status='FAILED',
+                    StateAuthority(db).transition(
+                        context.example_key,
+                        context.run_id,
+                        ExampleStatus.RUNTIME_FAILED,
                         failure_reason=f"Timeout: {context.operation_label} exceeded {context.timeout_seconds}s",
                     )
-                    logger.debug(f"Marked example as FAILED due to timeout: {context.example_key}")
+                    logger.debug(f"Marked example as RUNTIME_FAILED due to timeout: {context.example_key}")
                 except Exception as e:
                     logger.warning(f"Failed to mark example as failed: {e}")
 

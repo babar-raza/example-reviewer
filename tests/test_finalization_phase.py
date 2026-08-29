@@ -28,6 +28,7 @@ from src.pipeline.orchestrator import PipelineOrchestrator as Orchestrator
 from src.core.models import ExampleStatus, SourceType
 from src.core.authority import Capability, PolicyDecisionPoint
 from src.core.authority.policies.commit_git import commit_git_policy
+from src.core.state_authority import StateAuthority
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +59,15 @@ def _make_orchestrator():
     # PDP must be constructed and the COMMIT_GIT policy registered here too.
     orch.pdp = PolicyDecisionPoint()
     orch.pdp.register_policy(Capability.COMMIT_GIT, commit_git_policy)
+    # State Authority (TC-EPIC2-02): mark_committed() now routes through here.
+    # orch.db is a MagicMock, so get_example_run_status() must be told to
+    # return a real ExampleStatus (not a MagicMock) or StateAuthority's
+    # scratch-ExampleRecord construction fails Pydantic validation -- these
+    # examples are realistically at FINAL_REVIEW_PASSED by the time the
+    # finalization/commit phase runs, which is also the only status that
+    # legally transitions to COMMITTED.
+    orch.db.get_example_run_status.return_value = ExampleStatus.FINAL_REVIEW_PASSED
+    orch.state_authority = StateAuthority(orch.db)
     return orch
 
 

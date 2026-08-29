@@ -38,6 +38,7 @@ from ..core.path_guard import is_read_only_path
 from ..core.authority import Capability, PolicyDecisionPoint
 from ..core.authority.policies.markdown_write import write_markdown_policy
 from ..core.authority.policies.commit_git import commit_git_policy
+from ..core.state_authority import IllegalTransitionError, StateAuthority
 from .escalation_classifier import classify_escalation_reason, should_escalate_to_review
 from ..core.models import FailureCategory, FailureResolution
 from .family_service_registry import FamilyServiceRegistry
@@ -174,6 +175,12 @@ class PipelineOrchestrator:
         self.pdp = PolicyDecisionPoint(config_manager=self.config_manager, database=self.db)
         self.pdp.register_policy(Capability.WRITE_MARKDOWN, write_markdown_policy)
         self.pdp.register_policy(Capability.COMMIT_GIT, commit_git_policy)
+
+        # State Authority (TC-EPIC2-01/02): the one sanctioned entry point for
+        # changing an example's status, replacing dozens of direct raw-status-write
+        # call sites across this file, markdown_service.py, and timeout_manager.py
+        # (FINDINGS_REGISTER.md Root Cause 2) with a validated transition() call.
+        self.state_authority = StateAuthority(self.db)
 
         # Initialize production DB schema if configured
         if self.db.production_db_path:
@@ -1297,8 +1304,8 @@ class PipelineOrchestrator:
             cs_file_promoted = len(_cs_file_examples)
             if _cs_file_examples:
                 for ex in _cs_file_examples:
-                    self.db.update_example_status(
-                        ex.example_id, ExampleStatus.VERIFIED, run_id=run_id
+                    self.state_authority.mark_verified(
+                        ex.example_id, run_id,
                     )
                     if ex.original_code:
                         self.db.update_example_code(
@@ -1381,7 +1388,9 @@ class PipelineOrchestrator:
                 auto_promoted = 0
                 if md_updated:
                     for ex in md_updated:
-                        self.db.update_example_status(ex.example_id, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id)
+                        self.state_authority.mark_final_review_passed(
+                            ex.example_id, run_id,
+                        )
                         auto_promoted += 1
                     logger.info(f"Auto-promoted {auto_promoted} examples to FINAL_REVIEW_PASSED (Phase E skipped)")
                 results['phases']['final_review'] = {'skipped': True, 'auto_promoted': auto_promoted}
@@ -1793,11 +1802,10 @@ class PipelineOrchestrator:
 
                 if should_escalate:
                     logger.info(f"Example {example.example_id} escalated to NEEDS_REVIEW: {escalation_reason}")
-                    self.db.update_example_status(
-                        example.example_id,
+                    self.state_authority.transition(
+                        example.example_id, run_id,
                         ExampleStatus.NEEDS_REVIEW,
                         escalation_reason=escalation_reason,
-                        run_id=run_id,
                     )
 
                     # Phase-2 Task 3: Record compile attempt even for pre-escalated examples
@@ -1841,11 +1849,10 @@ class PipelineOrchestrator:
                                 f"Example {example.example_id} contains foreign family code: "
                                 f"{foreign_families} - escalating to NEEDS_REVIEW"
                             )
-                            self.db.update_example_status(
-                                example.example_id,
+                            self.state_authority.transition(
+                                example.example_id, run_id,
                                 ExampleStatus.NEEDS_REVIEW,
                                 escalation_reason=f"wrong_family_detected:{','.join(foreign_families)}",
-                                run_id=run_id,
                             )
                             stats['failed'] += 1
                             continue
@@ -1855,11 +1862,10 @@ class PipelineOrchestrator:
                                 f"Example {example.example_id} uses external dependencies: "
                                 f"{external_deps} - escalating to NEEDS_REVIEW"
                             )
-                            self.db.update_example_status(
-                                example.example_id,
+                            self.state_authority.transition(
+                                example.example_id, run_id,
                                 ExampleStatus.NEEDS_REVIEW,
                                 escalation_reason=f"external_dependency_missing:{','.join(external_deps)}",
-                                run_id=run_id,
                             )
                             stats['failed'] += 1
                             continue
@@ -2097,7 +2103,9 @@ class PipelineOrchestrator:
                         )
                     except Exception:
                         pass
-                    self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                    self.state_authority.mark_compiled(
+                        example.example_id, run_id,
+                    )
                     self.db.update_example_code(
                         example.example_id,
                         compilable_code=example.original_code,
@@ -2169,7 +2177,9 @@ class PipelineOrchestrator:
                         # Quick fix worked!
                         stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
                         stats['quick_fixes_applied'] = stats.get('quick_fixes_applied', 0) + 1
-                        self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                        self.state_authority.mark_compiled(
+                            example.example_id, run_id,
+                        )
                         self.db.update_example_code(
                             example.example_id,
                             compilable_code=fixed_code,
@@ -2237,7 +2247,9 @@ class PipelineOrchestrator:
                             # Semantic micro-fixes worked!
                             stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
                             stats['semantic_microfixes_applied'] = stats.get('semantic_microfixes_applied', 0) + 1
-                            self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                            self.state_authority.mark_compiled(
+                                example.example_id, run_id,
+                            )
                             self.db.update_example_code(
                                 example.example_id,
                                 compilable_code=fixed_code,
@@ -2295,7 +2307,9 @@ class PipelineOrchestrator:
                         if success:
                             stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
                             stats['family_compile_fixes'] = stats.get('family_compile_fixes', 0) + 1
-                            self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                            self.state_authority.mark_compiled(
+                                example.example_id, run_id,
+                            )
                             self.db.update_example_code(
                                 example.example_id,
                                 compilable_code=fixed_code,
@@ -2394,8 +2408,8 @@ class PipelineOrchestrator:
                                         current_code = fixed_code
                                         stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
                                         stats['learned_pattern_fixes'] = stats.get('learned_pattern_fixes', 0) + 1
-                                        self.db.update_example_status(
-                                            example.example_id, ExampleStatus.COMPILABLE, run_id=run_id
+                                        self.state_authority.mark_compiled(
+                                            example.example_id, run_id,
                                         )
                                         self.db.update_example_code(
                                             example.example_id,
@@ -2475,7 +2489,9 @@ class PipelineOrchestrator:
                                     current_code = candidate_code
                                     stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
                                     stats['vector_db_retrievals'] = stats.get('vector_db_retrievals', 0) + 1
-                                    self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                                    self.state_authority.mark_compiled(
+                                        example.example_id, run_id,
+                                    )
                                     self.db.update_example_code(
                                         example.example_id,
                                         compilable_code=candidate_code,
@@ -2558,7 +2574,9 @@ class PipelineOrchestrator:
                             current_code = substitute_code
                             stats['compiled_with_fix'] = stats.get('compiled_with_fix', 0) + 1
                             stats['substitutions_applied'] = stats.get('substitutions_applied', 0) + 1
-                            self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                            self.state_authority.mark_compiled(
+                                example.example_id, run_id,
+                            )
                             self.db.update_example_code(
                                 example.example_id,
                                 compilable_code=substitute_code,
@@ -2586,11 +2604,10 @@ class PipelineOrchestrator:
                 # After ALL deterministic fixes (quick fixes, semantic micro-fixes, vector DB, substitution)
                 if skip_llm_fixes:
                     stats['failed'] += 1
-                    self.db.update_example_status(
-                        example.example_id,
+                    self.state_authority.transition(
+                        example.example_id, run_id,
                         ExampleStatus.COMPILE_FAILED,
                         failure_reason='\n'.join(result.errors[:3]),
-                        run_id=run_id,
                     )
                     continue
 
@@ -2608,11 +2625,10 @@ class PipelineOrchestrator:
                         f"{_unfixable_str} - skipping LLM escalation"
                     )
                     stats['failed'] += 1
-                    self.db.update_example_status(
-                        example.example_id,
+                    self.state_authority.transition(
+                        example.example_id, run_id,
                         ExampleStatus.COMPILE_FAILED,
                         failure_reason=f"UNFIXABLE_API: {_unfixable_str}",
-                        run_id=run_id,
                     )
                     continue
 
@@ -2827,11 +2843,10 @@ class PipelineOrchestrator:
                                 "fixed_context": drift_result.fixed_context,
                                 "rejection_reason": drift_result.rejection_reason
                             }
-                            self.db.update_example_status(
-                                run_id=run_id,
-                                example_id=example.example_id,
-                                status=ExampleStatus.COMPILE_FAILED,
-                                failure_reason=f"context_drift_detected: {json.dumps(drift_details)}"
+                            self.state_authority.transition(
+                                example.example_id, run_id,
+                                ExampleStatus.COMPILE_FAILED,
+                                failure_reason=f"context_drift_detected: {json.dumps(drift_details)}",
                             )
                             # Skip this fix attempt and continue to next retry
                             continue
@@ -2914,11 +2929,10 @@ class PipelineOrchestrator:
                                     drift_score=drift_score,
                                     drift_similarity=similarity
                                 )
-                                self.db.update_example_status(
-                                    example.example_id,
+                                self.state_authority.transition(
+                                    example.example_id, run_id,
                                     ExampleStatus.COMPILE_FAILED,
                                     failure_reason=f"Drift threshold exceeded ({drift_score:.3f} > {global_config.drift.threshold})",
-                                    run_id=run_id,
                                 )
                                 stats['failed'] += 1
                                 logger.info(f"Example {example.example_id} marked as compile-failed due to drift")
@@ -2972,11 +2986,10 @@ class PipelineOrchestrator:
                                     if review.get('drift_details'):
                                         drift_reason += f" | Details: {', '.join(review['drift_details'][:3])}"
 
-                                    self.db.update_example_status(
-                                        example.example_id,
+                                    self.state_authority.transition(
+                                        example.example_id, run_id,
                                         ExampleStatus.COMPILE_FAILED,
                                         failure_reason=drift_reason,
-                                        run_id=run_id,
                                     )
                                     logger.info(f"Example {example.example_id} marked as needs-fix due to intent drift")
                                     continue  # Skip to next example
@@ -3018,7 +3031,9 @@ class PipelineOrchestrator:
                             )
                         except Exception:
                             pass
-                        self.db.update_example_status(example.example_id, ExampleStatus.COMPILABLE, run_id=run_id)
+                        self.state_authority.mark_compiled(
+                            example.example_id, run_id,
+                        )
                         self.db.update_example_code(example.example_id, compilable_code=fixed_code, run_id=run_id)
 
                         # Store final drift score for successful fix
@@ -3100,8 +3115,8 @@ class PipelineOrchestrator:
                                     )
                                 except Exception:
                                     pass
-                                self.db.update_example_status(
-                                    example.example_id, ExampleStatus.COMPILABLE, run_id=run_id
+                                self.state_authority.mark_compiled(
+                                    example.example_id, run_id,
                                 )
                                 self.db.update_example_code(
                                     example.example_id, compilable_code=substitute_code, run_id=run_id
@@ -3109,11 +3124,10 @@ class PipelineOrchestrator:
                                 continue  # Skip the failure path
 
                     stats['failed'] += 1
-                    self.db.update_example_status(
-                        example.example_id,
+                    self.state_authority.transition(
+                        example.example_id, run_id,
                         ExampleStatus.COMPILE_FAILED,
                         failure_reason='\n'.join(result.errors[:3]),
-                        run_id=run_id,
                     )
                     
             except Exception as e:
@@ -3121,12 +3135,11 @@ class PipelineOrchestrator:
                 stats['errors'] += 1
 
                 # Mark as NEEDS_REVIEW so it doesn't remain DISCOVERED
-                self.db.update_example_status(
-                    example.example_id,
+                self.state_authority.transition(
+                    example.example_id, run_id,
                     ExampleStatus.NEEDS_REVIEW,
-                    escalation_reason="unprocessed_in_run",
                     failure_reason=f"Exception during processing: {str(e)[:200]}",
-                    run_id=run_id,
+                    escalation_reason="unprocessed_in_run",
                 )
 
         # CRITICAL: Ensure no examples remain in DISCOVERED state
@@ -3139,12 +3152,11 @@ class PipelineOrchestrator:
                 f"Found {len(remaining_discovered)} examples still in DISCOVERED state - marking as NEEDS_REVIEW"
             )
             for leftover in remaining_discovered:
-                self.db.update_example_status(
-                    leftover.example_id,
+                self.state_authority.transition(
+                    leftover.example_id, run_id,
                     ExampleStatus.NEEDS_REVIEW,
-                    escalation_reason="unprocessed_in_run",
                     failure_reason="Example was not processed during compilation phase",
-                    run_id=run_id,
+                    escalation_reason="unprocessed_in_run",
                 )
                 stats['failed'] += 1
 
@@ -3427,12 +3439,10 @@ class PipelineOrchestrator:
                         example.escalation_reason = infra_escalation_reason
 
                         # Mark example as INFRA_BLOCKED with specific reason
-                        self.db.update_example_status(
-                            example.example_id,
-                            ExampleStatus.INFRA_BLOCKED,
-                            escalation_reason=infra_escalation_reason,
+                        self.state_authority.mark_infra_blocked(
+                            example.example_id, run_id,
                             failure_reason=f"missing_test_data: {', '.join(missing_files)}" if missing_files else "infra_blocked",
-                            run_id=run_id,
+                            escalation_reason=infra_escalation_reason,
                         )
 
                         # Log and skip to next example
@@ -3487,7 +3497,9 @@ class PipelineOrchestrator:
 
                 if success:
                     stats['passed_first_try'] += 1
-                    self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                    self.state_authority.mark_verified(
+                        example.example_id, run_id,
+                    )
                     self.db.update_example_code(
                         example.example_id,
                         verified_code=example.compilable_code,
@@ -3581,10 +3593,8 @@ class PipelineOrchestrator:
                                     logger.info(
                                         f"Substitution fixed misclassified compile error for {example.example_id}"
                                     )
-                                    self.db.update_example_status(
-                                        example.example_id,
-                                        ExampleStatus.VERIFIED,
-                                        run_id=run_id,
+                                    self.state_authority.mark_verified(
+                                        example.example_id, run_id,
                                     )
                                     self.db.update_example_code(
                                         example.example_id,
@@ -3599,11 +3609,10 @@ class PipelineOrchestrator:
                     logger.info(
                         f"Reclassifying {example.example_id} as COMPILE_FAILED (contains CSxxxx errors)"
                     )
-                    self.db.update_example_status(
-                        example.example_id,
+                    self.state_authority.transition(
+                        example.example_id, run_id,
                         ExampleStatus.COMPILE_FAILED,
                         failure_reason=f"Misclassified runtime failure (compile errors): {compile_errors[0][:100]}",
-                        run_id=run_id,
                     )
                     stats['failed'] = stats.get('failed', 0) + 1
                     stats['runtime_reclassified'] = stats.get('runtime_reclassified', 0) + 1
@@ -3659,12 +3668,10 @@ class PipelineOrchestrator:
                             reason=f"Missing RAR fixture at runtime: {rar_filename or 'unknown'}",
                         )
 
-                        self.db.update_example_status(
-                            example.example_id,
-                            ExampleStatus.INFRA_BLOCKED,
-                            escalation_reason=EscalationReason.INFRA_BLOCKED_RAR_FIXTURE,
+                        self.state_authority.mark_infra_blocked(
+                            example.example_id, run_id,
                             failure_reason=f"missing_test_data: {rar_filename or 'unknown.rar'}",
-                            run_id=run_id,
+                            escalation_reason=EscalationReason.INFRA_BLOCKED_RAR_FIXTURE,
                         )
                         stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
                         continue
@@ -3696,7 +3703,9 @@ class PipelineOrchestrator:
                             logger.info(f"Example {example.example_id}: family password retry PASSED")
                             stats['passed_first_try'] = stats.get('passed_first_try', 0) + 1
                             stats['verified'] = stats.get('verified', 0) + 1
-                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                            self.state_authority.mark_verified(
+                                example.example_id, run_id,
+                            )
                             self.db.update_example_code(example.example_id, verified_code=_fixed_family_pw, run_id=run_id)
                             continue
                         # Retry failed — log the actual error for diagnosis
@@ -3721,7 +3730,9 @@ class PipelineOrchestrator:
                             logger.info(f"Example {example.example_id}: password retry PASSED")
                             stats['passed_first_try'] = stats.get('passed_first_try', 0) + 1
                             stats['verified'] = stats.get('verified', 0) + 1
-                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                            self.state_authority.mark_verified(
+                                example.example_id, run_id,
+                            )
                             self.db.update_example_code(example.example_id, verified_code=fixed_pw_code, run_id=run_id)
                             continue
                         # Retry also failed — fall through to escalation
@@ -3741,12 +3752,10 @@ class PipelineOrchestrator:
                         metadata={'infra_type': 'password_required'},
                     )
 
-                    self.db.update_example_status(
-                        example.example_id,
-                        ExampleStatus.INFRA_BLOCKED,
-                        escalation_reason=EscalationReason.INFRA_BLOCKED_PASSWORD,
+                    self.state_authority.mark_infra_blocked(
+                        example.example_id, run_id,
                         failure_reason="missing_test_data: password/secret required for archive",
-                        run_id=run_id,
+                        escalation_reason=EscalationReason.INFRA_BLOCKED_PASSWORD,
                     )
                     stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
                     continue
@@ -3764,12 +3773,10 @@ class PipelineOrchestrator:
                         reason="7z format issue at runtime",
                     )
 
-                    self.db.update_example_status(
-                        example.example_id,
-                        ExampleStatus.INFRA_BLOCKED,
-                        escalation_reason=EscalationReason.INFRA_BLOCKED_7Z_FIXTURE,
+                    self.state_authority.mark_infra_blocked(
+                        example.example_id, run_id,
                         failure_reason="missing_test_data: 7z format issue at runtime",
-                        run_id=run_id,
+                        escalation_reason=EscalationReason.INFRA_BLOCKED_7Z_FIXTURE,
                     )
                     stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
                     continue
@@ -3818,8 +3825,8 @@ class PipelineOrchestrator:
                                 if success:
                                     deterministic_fixed = True
                                     stats['fixture_resolved'] = stats.get('fixture_resolved', 0) + 1
-                                    self.db.update_example_status(
-                                        example.example_id, ExampleStatus.VERIFIED, run_id=run_id
+                                    self.state_authority.mark_verified(
+                                        example.example_id, run_id,
                                     )
                                     self.db.update_example_code(
                                         example.example_id,
@@ -3868,7 +3875,9 @@ class PipelineOrchestrator:
                         if success:
                             deterministic_fixed = True
                             stats['deterministic_fixes'] = stats.get('deterministic_fixes', 0) + 1
-                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                            self.state_authority.mark_verified(
+                                example.example_id, run_id,
+                            )
                             self.db.update_example_code(
                                 example.example_id,
                                 verified_code=fixed_code,
@@ -3897,7 +3906,9 @@ class PipelineOrchestrator:
                         if _ff_success:
                             deterministic_fixed = True
                             stats['deterministic_fixes'] = stats.get('deterministic_fixes', 0) + 1
-                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                            self.state_authority.mark_verified(
+                                example.example_id, run_id,
+                            )
                             self.db.update_example_code(
                                 example.example_id, verified_code=_fixed_code, run_id=run_id
                             )
@@ -3923,12 +3934,10 @@ class PipelineOrchestrator:
                     # FileNotFoundException for missing fixtures should be INFRA_BLOCKED
                     if error_category == "missing_file" and result.exception_type == "System.IO.FileNotFoundException":
                         # Mark as INFRA_BLOCKED if it's a missing test fixture
-                        self.db.update_example_status(
-                            example.example_id,
-                            ExampleStatus.INFRA_BLOCKED,
-                            escalation_reason="missing_test_data",
+                        self.state_authority.mark_infra_blocked(
+                            example.example_id, run_id,
                             failure_reason=f"missing_test_data: {failure_reason[:200]}",
-                            run_id=run_id,
+                            escalation_reason="missing_test_data",
                         )
                         logger.info(f"Example {example.example_id}: INFRA_BLOCKED (missing file: {failure_reason[:100]})")
                         stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
@@ -3999,10 +4008,8 @@ class PipelineOrchestrator:
                                                         verified_code=fixed_code,
                                                         run_id=run_id,
                                                     )
-                                                    self.db.update_example_status(
-                                                        example.example_id,
-                                                        ExampleStatus.VERIFIED,
-                                                        run_id=run_id,
+                                                    self.state_authority.mark_verified(
+                                                        example.example_id, run_id,
                                                     )
                                                     stats['passed_with_fix'] = stats.get('passed_with_fix', 0) + 1
                                                     break  # Exit pattern loop
@@ -4283,11 +4290,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                     "fixed_context": drift_result.fixed_context,
                                     "rejection_reason": drift_result.rejection_reason
                                 }
-                                self.db.update_example_status(
-                                    run_id=run_id,
-                                    example_id=example.example_id,
-                                    status=ExampleStatus.RUNTIME_FAILED,
-                                    failure_reason=f"context_drift_detected: {json.dumps(drift_details)}"
+                                self.state_authority.transition(
+                                    example.example_id, run_id,
+                                    ExampleStatus.RUNTIME_FAILED,
+                                    failure_reason=f"context_drift_detected: {json.dumps(drift_details)}",
                                 )
                                 # Skip this fix attempt and continue to next retry
                                 continue
@@ -4370,11 +4376,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                         drift_score=drift_score,
                                         drift_similarity=similarity
                                     )
-                                    self.db.update_example_status(
-                                        example.example_id,
+                                    self.state_authority.transition(
+                                        example.example_id, run_id,
                                         ExampleStatus.RUNTIME_FAILED,
                                         failure_reason=f"Drift threshold exceeded ({drift_score:.3f} > {global_config.drift.threshold})",
-                                        run_id=run_id,
                                     )
                                     stats['failed'] += 1
                                     logger.info(f"Example {example.example_id} marked as runtime-failed due to drift")
@@ -4439,11 +4444,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                         if review.get('drift_details'):
                                             drift_reason += f" | Details: {', '.join(review['drift_details'][:3])}"
 
-                                        self.db.update_example_status(
-                                            example.example_id,
+                                        self.state_authority.transition(
+                                            example.example_id, run_id,
                                             ExampleStatus.RUNTIME_FAILED,
                                             failure_reason=drift_reason,
-                                            run_id=run_id,
                                         )
                                         logger.info(f"Example {example.example_id} marked as runtime failed due to intent drift")
                                         break  # Exit retry loop
@@ -4466,7 +4470,9 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                             stats['passed_with_fix'] += 1
                             self._llm_fixed_example_ids.add(example.example_id)
-                            self.db.update_example_status(example.example_id, ExampleStatus.VERIFIED, run_id=run_id)
+                            self.state_authority.mark_verified(
+                                example.example_id, run_id,
+                            )
                             self.db.update_example_code(
                                 example.example_id,
                                 verified_code=fixed_code,
@@ -4547,11 +4553,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                     )
                 else:
                     failure_reason = "Unknown runtime error (no result)"
-                self.db.update_example_status(
-                    example.example_id,
+                self.state_authority.transition(
+                    example.example_id, run_id,
                     ExampleStatus.RUNTIME_FAILED,
                     failure_reason=failure_reason,
-                    run_id=run_id,
                 )
                 
             except Exception as e:
@@ -4575,23 +4580,20 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                         # Check for RAR file missing
                         if ".rar" in error_lower and ("filenotfound" in error_lower or "could not find file" in error_lower):
-                            self.db.update_example_status(
-                                example.example_id,
-                                ExampleStatus.INFRA_BLOCKED,
-                                escalation_reason="missing_rar_fixture",
+                            self.state_authority.mark_infra_blocked(
+                                example.example_id, run_id,
                                 failure_reason=f"missing_test_data: {error_text[:200]}",
-                                run_id=run_id,
+                                escalation_reason="missing_rar_fixture",
                             )
                             logger.info(f"Marked {example.example_id} as INFRA_BLOCKED (missing RAR fixture)")
                             stats['infra_blocked'] = stats.get('infra_blocked', 0) + 1
                         else:
                             # Other runtime error - mark as RUNTIME_FAILED
                             failure_reason = last_attempt.exception_message or last_attempt.stderr[:200] or "Unknown runtime error"
-                            self.db.update_example_status(
-                                example.example_id,
+                            self.state_authority.transition(
+                                example.example_id, run_id,
                                 ExampleStatus.RUNTIME_FAILED,
                                 failure_reason=failure_reason,
-                                run_id=run_id,
                             )
                             logger.info(f"Marked {example.example_id} as RUNTIME_FAILED")
                             stats['failed'] += 1
@@ -4600,31 +4602,28 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                         # that can't be executed in the current runtime harness
                         app_ctx = getattr(example, 'app_context', None) or ''
                         if app_ctx.startswith('aspnet') or app_ctx == 'library':
-                            self.db.update_example_status(
-                                example.example_id,
+                            self.state_authority.transition(
+                                example.example_id, run_id,
                                 ExampleStatus.NEEDS_REVIEW,
                                 escalation_reason="aspnet_not_runnable",
-                                run_id=run_id,
                             )
                             logger.info(f"Marked {example.example_id} as NEEDS_REVIEW (app_context={app_ctx}, not runnable)")
                             stats['needs_review'] = stats.get('needs_review', 0) + 1
                         else:
-                            self.db.update_example_status(
-                                example.example_id,
+                            self.state_authority.transition(
+                                example.example_id, run_id,
                                 ExampleStatus.RUNTIME_FAILED,
                                 failure_reason="No runtime attempts recorded",
-                                run_id=run_id,
                             )
                             logger.warning(f"Marked {example.example_id} as RUNTIME_FAILED (no runtime attempts)")
                             stats['failed'] += 1
                 except Exception as cleanup_error:
                     logger.error(f"Error cleaning up COMPILABLE example {example.example_id}: {cleanup_error}")
                     # Default to RUNTIME_FAILED as safe fallback
-                    self.db.update_example_status(
-                        example.example_id,
+                    self.state_authority.transition(
+                        example.example_id, run_id,
                         ExampleStatus.RUNTIME_FAILED,
                         failure_reason="Cleanup error",
-                        run_id=run_id,
                     )
                     stats['failed'] += 1
 
@@ -4836,12 +4835,11 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                 stats["blocking_examples"] += 1
                 summary = self.behavioral_pattern_scanner.summarize_findings(blocking)
-                self.db.update_example_status(
-                    example.example_id,
+                self.state_authority.transition(
+                    example.example_id, run_id,
                     ExampleStatus.NEEDS_REVIEW,
                     failure_reason=summary[:500],
                     escalation_reason="behavioral_semantic_mismatch",
-                    run_id=run_id,
                 )
 
         self._behavioral_findings_by_example = findings_by_example
@@ -5024,7 +5022,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
         cs_promoted = 0
         for ex in (verified or []):
             if ex.source_type in (SourceType.CS_FILE, SourceType.EXTRACTED_FROM_WRAPPER):
-                self.db.update_example_status(ex.example_id, ExampleStatus.MD_UPDATED, run_id=run_id)
+                self.state_authority.transition(
+                    ex.example_id, run_id,
+                    ExampleStatus.MD_UPDATED,
+                )
                 cs_promoted += 1
         if cs_promoted:
             logger.info(f"Auto-promoted {cs_promoted} CS_FILE/extracted examples past markdown update")
@@ -5619,8 +5620,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
             # Auto-pass files with zero LLM-fixed examples
             for file_key, file_examples in auto_pass_files.items():
                 for e in file_examples:
-                    self.db.update_example_status(
-                        e.example_id, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id
+                    self.state_authority.mark_final_review_passed(
+                        e.example_id, run_id,
                     )
                 stats['approved'] += 1
                 stats['files_reviewed'] += 1
@@ -5750,8 +5751,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                         logger.info(f"Final review PASSED for {file_path} on attempt {attempt}")
 
                         for e in file_examples:
-                            self.db.update_example_status(
-                                e.example_id, ExampleStatus.FINAL_REVIEW_PASSED, run_id=run_id
+                            self.state_authority.mark_final_review_passed(
+                                e.example_id, run_id,
                             )
                         # Annotate examples where review passed but non-trivial concerns remain open (Addition B)
                         unresolved_concerns = [
@@ -5767,10 +5768,10 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                                 f"{file_path}: {concern_str}"
                             )
                             for e in file_examples:
-                                self.db.update_example_status(
+                                self.state_authority.transition(
                                     e.example_id,
+                                    run_id,
                                     ExampleStatus.FINAL_REVIEW_PASSED,
-                                    run_id=run_id,
                                     escalation_reason=f"CONCERNS_OPEN:{len(unresolved_concerns)}:{concern_str[:200]}",
                                 )
                         break  # Exit retry loop
@@ -5836,8 +5837,8 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 if not file_approved:
                     stats['failed'] += 1
                     for e in file_examples:
-                        self.db.update_example_status(
-                            e.example_id, ExampleStatus.FINAL_REVIEW_FAILED, run_id=run_id
+                        self.state_authority.mark_final_review_failed(
+                            e.example_id, run_id,
                         )
 
             except Exception as e:
@@ -5845,11 +5846,9 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 stats['failed'] += 1
                 # Mark examples as failed on exception
                 for ex in file_examples:
-                    self.db.update_example_status(
-                        ex.example_id,
-                        ExampleStatus.FINAL_REVIEW_FAILED,
+                    self.state_authority.mark_final_review_failed(
+                        ex.example_id, run_id,
                         failure_reason=f"Review error: {str(e)}",
-                        run_id=run_id,
                     )
 
         return stats
@@ -6576,7 +6575,9 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
 
                 # Update example statuses — only for examples whose files were actually staged
                 for e in committed_examples:
-                    self.db.update_example_status(e.example_id, ExampleStatus.COMMITTED, run_id=run_id)
+                    self.state_authority.mark_committed(
+                        e.example_id, run_id,
+                    )
 
         except Exception as e:
             logger.error(f"Git commit failed: {e}")

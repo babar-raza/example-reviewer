@@ -187,7 +187,12 @@ class TestRunStateUpdates:
     """Test run state update methods."""
 
     def test_update_run_state_status(self, temp_db):
-        """Test updating run state status."""
+        """Test updating run state status.
+
+        TC-EPIC2-02: was update_example_run_state_status() -- a second,
+        structurally identical, zero-caller raw status writer, deleted as
+        dead code (FINDINGS_REGISTER.md). update_example_status() is the one
+        sanctioned low-level writer this test now exercises directly."""
         db = Database(temp_db)
         db.initialize_schema()
 
@@ -214,10 +219,10 @@ class TestRunStateUpdates:
         )
 
         # Update status
-        success = db.update_example_run_state_status(
-            run_id=run_id,
+        success = db.update_example_status(
             example_id=example_id,
             status=ExampleStatus.VERIFIED,
+            run_id=run_id,
         )
 
         assert success is True

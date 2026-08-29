@@ -15,6 +15,7 @@ from ..core.models import ExampleRecord, ExampleStatus, MarkdownEdit, SourceType
 from ..core.database import Database
 from ..core.path_guard import assert_write_allowed, READ_ONLY_PREFIXES, is_read_only_path, get_workspace_path
 from ..core.authority import Capability, PolicyDecisionPoint
+from ..core.state_authority import StateAuthority
 from .article_validator import ArticleValidator
 from ..core.provenance_guard import (
     validate_batch_provenance,
@@ -137,6 +138,9 @@ class MarkdownUpdateService:
         """
         self.db = db
         self.pdp = pdp
+        # State Authority (TC-EPIC2-02): the two update_example_status() call
+        # sites in this file (MD_UPDATED, NEEDS_REVIEW) route through here.
+        self.state_authority = StateAuthority(self.db)
         self.artifacts_dir = artifacts_dir or Path("artifacts/diffs")
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.gist_publisher = gist_publisher
@@ -365,7 +369,9 @@ class MarkdownUpdateService:
 
                 # Update example statuses
                 for example in verified_examples:
-                    self.db.update_example_status(example.example_id, ExampleStatus.MD_UPDATED, run_id=self.run_id)
+                    self.state_authority.transition(
+                        example.example_id, self.run_id, ExampleStatus.MD_UPDATED,
+                    )
 
                     # Record edit
                     edit = MarkdownEdit(
@@ -699,11 +705,11 @@ class MarkdownUpdateService:
                 f"Failed to resolve target block for {example.example_id}: "
                 f"{resolution.skip_reason}"
             )
-            self.db.update_example_status(
+            self.state_authority.transition(
                 example.example_id,
+                self.run_id,
                 ExampleStatus.NEEDS_REVIEW,
                 failure_reason=resolution.skip_reason,
-                run_id=self.run_id,
             )
             return None
 

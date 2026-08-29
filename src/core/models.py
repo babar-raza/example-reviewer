@@ -178,7 +178,15 @@ class ExampleRecord(BaseModel):
             ExampleStatus.COMPILE_FAILED: [ExampleStatus.COMPILABLE, ExampleStatus.NEEDS_REVIEW, ExampleStatus.INFRA_BLOCKED],
             ExampleStatus.COMPILABLE: [ExampleStatus.RUNTIME_FAILED, ExampleStatus.VERIFIED, ExampleStatus.NEEDS_REVIEW, ExampleStatus.INFRA_BLOCKED],
             ExampleStatus.RUNTIME_FAILED: [ExampleStatus.VERIFIED, ExampleStatus.NEEDS_REVIEW, ExampleStatus.INFRA_BLOCKED],
-            ExampleStatus.VERIFIED: [ExampleStatus.MD_UPDATED],
+            # NEEDS_REVIEW added here in TC-EPIC2-02: markdown_service.py's
+            # signature-mismatch escalation (a VERIFIED example whose code
+            # block can no longer be located in its markdown file, e.g. the
+            # file was hand-edited after extraction) legitimately needs to
+            # escalate here, and every other non-terminal state already
+            # allows this same escape hatch -- VERIFIED was the one
+            # inconsistent gap, surfaced by StateAuthority's first-ever real
+            # legality check against this call site (previously unvalidated).
+            ExampleStatus.VERIFIED: [ExampleStatus.MD_UPDATED, ExampleStatus.NEEDS_REVIEW],
             ExampleStatus.MD_UPDATED: [ExampleStatus.FINAL_REVIEW_PASSED, ExampleStatus.FINAL_REVIEW_FAILED],
             ExampleStatus.FINAL_REVIEW_PASSED: [ExampleStatus.COMMITTED],
             ExampleStatus.FINAL_REVIEW_FAILED: [],

@@ -189,10 +189,16 @@ class StateAuthority:
         example_id: str,
         run_id: str,
         failure_reason: Optional[str] = None,
+        escalation_reason: Optional[str] = None,
         evidence_ref: Optional[str] = None,
     ) -> TransitionResult:
         return self.transition(
-            example_id, run_id, ExampleStatus.INFRA_BLOCKED, failure_reason=failure_reason, evidence_ref=evidence_ref
+            example_id,
+            run_id,
+            ExampleStatus.INFRA_BLOCKED,
+            failure_reason=failure_reason,
+            escalation_reason=escalation_reason,
+            evidence_ref=evidence_ref,
         )
 
     def mark_final_review_passed(

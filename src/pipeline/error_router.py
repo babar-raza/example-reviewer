@@ -6,7 +6,7 @@ Implements the NEEDS_REVIEW workflow and risk-based error routing.
 
 import logging
 from typing import List, Optional, Tuple
-from ..core.models import ExampleRecord, ExampleStatus, ErrorRisk, FailureCategory, FailureDetail, FailureResolution
+from ..core.models import ExampleRecord, ErrorRisk, FailureCategory, FailureDetail, FailureResolution
 from ..core.database import Database
 from ..services.telemetry_service import TelemetryService
 from .risk_classifier import RiskClassifier
@@ -277,45 +277,6 @@ class ErrorRouter:
         # Continue retrying
         logger.debug(f"Allowing retry for {example.example_id}: risk={risk.value}, attempt={attempt_number}/{max_retries}")
         return True, None
-
-    def escalate_to_review(
-        self,
-        example: ExampleRecord,
-        escalation_reason: str,
-        run_id: str,
-        family: str,
-        phase: str = 'unknown',
-    ) -> None:
-        """
-        Escalate an example to NEEDS_REVIEW state.
-
-        Args:
-            example: Example to escalate
-            escalation_reason: Reason for escalation
-            run_id: Pipeline run ID
-            family: Product family
-            phase: Phase where escalation occurred
-        """
-        # Update example status
-        example.status = ExampleStatus.NEEDS_REVIEW
-        example.escalation_reason = escalation_reason
-        self.db.save_example(example)
-
-        logger.info(f"Escalated {example.example_id} to NEEDS_REVIEW: {escalation_reason}")
-
-        # Emit telemetry
-        if self.telemetry_service:
-            self.telemetry_service.emit_event(
-                run_id=run_id,
-                event_type='escalated_to_review',
-                family=family,
-                phase=phase,
-                example_id=example.example_id,
-                success=False,
-                metadata={
-                    'escalation_reason': escalation_reason,
-                }
-            )
 
     def _record_failure(
         self,

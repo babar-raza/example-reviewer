@@ -1600,42 +1600,6 @@ class Database:
             rows = conn.execute(query, params).fetchall()
             return [dict(row) for row in rows]
 
-    def update_example_run_state_status(
-        self,
-        run_id: str,
-        example_id: str,
-        status: ExampleStatus,
-        failure_reason: Optional[str] = None,
-        escalation_reason: Optional[str] = None,
-    ) -> bool:
-        """
-        Update status for an example in a specific run.
-
-        Args:
-            run_id: Run identifier
-            example_id: Example identifier
-            status: New status
-            failure_reason: Optional failure reason
-            escalation_reason: Optional escalation reason
-
-        Returns:
-            True if successful
-        """
-        with self.get_connection() as conn:
-            conn.execute("""
-                UPDATE example_run_state
-                SET status = ?, failure_reason = ?, escalation_reason = ?, updated_at = ?
-                WHERE run_id = ? AND example_id = ?
-            """, (
-                status.value,
-                failure_reason,
-                escalation_reason,
-                datetime.now(timezone.utc).isoformat(),
-                run_id,
-                example_id,
-            ))
-            return conn.total_changes > 0
-
     def update_example_run_state_code(
         self,
         run_id: str,

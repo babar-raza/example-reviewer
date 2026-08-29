@@ -20,9 +20,9 @@ sanctioned to contain these patterns):
       update_example_status() and StateAuthority entirely).
   (b) any call to ``.update_example_status(`` -- the sanctioned low-level
       writer, but ONLY sanctioned to be called from within StateAuthority
-      itself. This is the check that actually flags orchestrator.py's 53
-      call sites and is why TC-EPIC2-02 exists: it mechanically replaces each
-      one with a StateAuthority call.
+      itself. TC-EPIC2-02 mechanically replaced every previously-flagged call
+      site (54 in orchestrator.py, 2 in markdown_service.py, 1 in
+      timeout_manager.py) with a StateAuthority call.
   (c) any direct ``.status = ExampleStatus.<MEMBER>`` attribute assignment --
       bypasses transition_to()/can_transition_to() at the Python-object level
       (the src/pipeline/error_router.py:300 pattern this investigation found).
@@ -51,11 +51,10 @@ this script's ecosystem closes; flagging that intentional test would be a false
 positive, not a real violation.
 
 Modes:
-  (default) Emit violations and exit 0 (non-blocking) -- TC-EPIC2-01 lands this
-            script in warn-only mode since it is EXPECTED to fail against the
-            current (pre-TC-EPIC2-02) orchestrator.py/error_router.py; flip to
-            --strict once TC-EPIC2-02 migrates all known call sites.
-  --strict  Emit violations and exit 1 if any are found.
+  (default) Emit violations and exit 0 (non-blocking).
+  --strict  Emit violations and exit 1 if any are found -- the mode CI runs in
+            since TC-EPIC2-02 migrated all known call sites (see
+            .gitlab-ci.yml's state-authority-lint job).
 
 Usage:
     python scripts/validation/check_no_raw_status_writes.py
@@ -189,9 +188,8 @@ def main(argv: List[str] = None) -> int:
 
     print(
         "\nRunning in warn-only mode (pass --strict to fail CI on these). "
-        "See reports/investigation/20260829_124758_production_readiness/taskcards/TC-EPIC2-02.md "
-        "-- this script is expected to be red until that taskcard migrates the "
-        "call sites listed above."
+        "All known call sites were migrated in TC-EPIC2-02 -- a violation here "
+        "means a new bypass was introduced; route it through StateAuthority."
     )
     return 0
 
