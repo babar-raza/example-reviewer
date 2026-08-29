@@ -24,6 +24,92 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
+# TC-EPIC2-03: per-migration expected-schema registry, derived directly from
+# reading each migration file (see FINDINGS_REGISTER.md DB-01 / TC-EPIC2-03.md).
+# Consulted by Database._verify_migration_by_registry() on BOTH the
+# fresh-bootstrap and non-fresh execution paths of apply_migrations(), so a
+# SCHEMA constant that has drifted from what a migration actually promises
+# fails loudly instead of silently proceeding (the empirically-confirmed
+# migration-007 gap this taskcard fixes: schema_version + 3 views were never
+# mirrored into SCHEMA, so no fresh clone ever created them despite
+# schema_migrations claiming 007 was applied).
+_MIGRATION_SCHEMA_EXPECTATIONS: Dict[str, Dict[str, Any]] = {
+    "007_failure_details_tracking": {
+        "expected_tables": ["failure_details", "schema_version"],
+        "expected_columns": {
+            "failure_details": [
+                "failure_id", "run_id", "example_id", "phase", "failure_category",
+                "error_category", "error_message", "resolution", "metadata", "timestamp",
+            ],
+            "schema_version": ["version", "description", "applied_at"],
+        },
+        "expected_views": ["v_failure_breakdown", "v_top_error_types", "v_resolution_rates"],
+    },
+    "008_run_scoping": {
+        "expected_tables": ["example_run_state", "schema_migrations"],
+        "expected_columns": {
+            "example_run_state": [
+                "run_id", "example_id", "status", "failure_reason", "escalation_reason",
+                "compilable_code", "verified_code", "drift_score", "needs_human_review",
+                "created_at", "updated_at",
+            ],
+            "compile_attempts": ["run_id"],
+            "runtime_attempts": ["run_id"],
+            "markdown_edits": ["run_id"],
+        },
+    },
+    "009_complete_run_scoping_migration": {
+        "expected_columns": {
+            "example_records": [
+                "example_id", "family", "file_path", "source_type", "language",
+                "original_code", "created_at", "updated_at", "section_heading",
+                "description_context", "topic", "example_key",
+            ],
+        },
+        # Migration 009's rebuild deliberately DROPS these from example_records
+        # (they moved to example_run_state) -- their presence means SCHEMA has
+        # drifted out of sync with the rebuild, not that they're merely absent.
+        "forbidden_columns": {
+            "example_records": ["status", "compilable_code", "verified_code"],
+        },
+    },
+    "010_add_app_context": {
+        "expected_columns": {
+            "example_records": ["app_context"],
+            "example_run_state": ["app_context"],
+        },
+    },
+    "011_add_code_block_location": {
+        "expected_columns": {
+            "example_records": ["code_block_signature", "extraction_warning"],
+        },
+    },
+    "012_add_article_intent": {
+        "expected_columns": {
+            "example_records": ["article_intent"],
+        },
+    },
+    "013_authority_audit_table": {
+        "expected_tables": ["authority_audit"],
+        "expected_columns": {
+            "authority_audit": [
+                "id", "capability", "resource", "decision", "policy_id",
+                "run_id", "reason", "timestamp",
+            ],
+        },
+    },
+    "014_status_transitions_audit": {
+        "expected_tables": ["status_transitions"],
+        "expected_columns": {
+            "status_transitions": [
+                "id", "example_id", "run_id", "from_status", "to_status",
+                "evidence_ref", "timestamp",
+            ],
+        },
+    },
+}
+
+
 class Database:
     """
     SQLite database for Example Reviewer Pipeline.
@@ -287,6 +373,62 @@ class Database:
     CREATE INDEX IF NOT EXISTS idx_failure_timestamp ON failure_details(timestamp);
     CREATE INDEX IF NOT EXISTS idx_failure_example ON failure_details(example_id);
 
+    -- Schema version table + analytics views (Migration 007) -- TC-EPIC2-03:
+    -- confirmed drift fix. These were part of migration 007's SQL but were
+    -- never mirrored into this SCHEMA constant, so every fresh clone (which
+    -- bootstraps from SCHEMA and baseline-marks 007 as "applied" without
+    -- executing its SQL, per apply_migrations()'s fresh-DB branch) silently
+    -- never created them, despite schema_migrations claiming 007 was applied.
+    CREATE TABLE IF NOT EXISTS schema_version (
+        version INTEGER PRIMARY KEY,
+        description TEXT NOT NULL,
+        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT OR IGNORE INTO schema_version (version, description, applied_at)
+    VALUES (7, 'Failure details tracking for comprehensive analytics', datetime('now'));
+
+    CREATE VIEW IF NOT EXISTS v_failure_breakdown AS
+    SELECT
+        failure_category,
+        COUNT(*) as failure_count,
+        COUNT(DISTINCT example_id) as affected_examples,
+        COUNT(DISTINCT run_id) as affected_runs,
+        COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) as fixed_count,
+        COUNT(CASE WHEN resolution = 'needs_review' THEN 1 END) as needs_review_count,
+        COUNT(CASE WHEN resolution = 'abandoned' THEN 1 END) as abandoned_count,
+        COUNT(CASE WHEN resolution = 'pending' THEN 1 END) as pending_count
+    FROM failure_details
+    GROUP BY failure_category
+    ORDER BY failure_count DESC;
+
+    CREATE VIEW IF NOT EXISTS v_top_error_types AS
+    SELECT
+        error_category,
+        failure_category,
+        COUNT(*) as occurrence_count,
+        COUNT(DISTINCT example_id) as affected_examples,
+        COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) as fixed_count,
+        ROUND(100.0 * COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) / COUNT(*), 2) as fix_rate_pct
+    FROM failure_details
+    WHERE error_category IS NOT NULL
+    GROUP BY error_category, failure_category
+    ORDER BY occurrence_count DESC;
+
+    CREATE VIEW IF NOT EXISTS v_resolution_rates AS
+    SELECT
+        phase,
+        failure_category,
+        COUNT(*) as total_failures,
+        COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) as fixed,
+        COUNT(CASE WHEN resolution = 'needs_review' THEN 1 END) as needs_review,
+        COUNT(CASE WHEN resolution = 'abandoned' THEN 1 END) as abandoned,
+        COUNT(CASE WHEN resolution = 'pending' THEN 1 END) as pending,
+        ROUND(100.0 * COUNT(CASE WHEN resolution = 'fixed' THEN 1 END) / COUNT(*), 2) as fix_rate_pct
+    FROM failure_details
+    GROUP BY phase, failure_category
+    ORDER BY phase, total_failures DESC;
+
     -- Review results table (Phase E: Final Review)
     CREATE TABLE IF NOT EXISTS review_results (
         review_id TEXT PRIMARY KEY,
@@ -465,6 +607,40 @@ class Database:
 
     CREATE INDEX IF NOT EXISTS idx_work_queue_status ON work_queue(status, priority DESC);
     CREATE INDEX IF NOT EXISTS idx_work_queue_family ON work_queue(family);
+
+    -- Authority audit table (Migration 013 -- TC-EPIC1-01). Added to SCHEMA here
+    -- per TC-EPIC2-03 (this taskcard), as migration 013's own file explicitly
+    -- requested: without this, a fresh clone's baseline-mark-without-execute
+    -- path would never create it, the same drift class this taskcard's
+    -- schema_version/views fix closes for migration 007.
+    CREATE TABLE IF NOT EXISTS authority_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        capability TEXT NOT NULL,
+        resource TEXT,
+        decision TEXT NOT NULL CHECK(decision IN ('allow', 'deny')),
+        policy_id TEXT NOT NULL,
+        run_id TEXT,
+        reason TEXT,
+        timestamp TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_authority_audit_run ON authority_audit(run_id);
+    CREATE INDEX IF NOT EXISTS idx_authority_audit_capability ON authority_audit(capability);
+
+    -- Status transitions table (Migration 014 -- TC-EPIC2-01). Added to SCHEMA
+    -- here for the same reason as authority_audit above.
+    CREATE TABLE IF NOT EXISTS status_transitions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        example_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        from_status TEXT,
+        to_status TEXT NOT NULL,
+        evidence_ref TEXT,
+        timestamp TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_status_transitions_example ON status_transitions(example_id);
+    CREATE INDEX IF NOT EXISTS idx_status_transitions_run ON status_transitions(run_id);
     """
     
     def __init__(
@@ -640,8 +816,15 @@ class Database:
                 for migration_file in migration_files:
                     migration_id = migration_file.stem
                     if migration_id not in applied:
+                        # TC-EPIC2-03: verify BEFORE recording -- a fresh-bootstrapped
+                        # SCHEMA that has drifted from what this migration promises
+                        # must fail loudly here, not silently get marked "applied"
+                        # (the empirically-confirmed migration-007 gap this taskcard
+                        # fixes: schema_version/its 3 views were never mirrored into
+                        # SCHEMA, so every fresh clone silently never created them).
+                        self._verify_migration_by_registry(conn, migration_id)
                         self._record_migration(conn, migration_id, f"Baseline (fresh DB)")
-                        logger.debug(f"Migration {migration_id} marked as applied (baseline)")
+                        logger.info(f"Migration {migration_id} marked as applied (baseline), schema verified")
                 return
 
             # Apply pending migrations for existing databases
@@ -662,9 +845,9 @@ class Database:
                     # Record migration in schema_migrations (engine records it, not the SQL)
                     self._record_migration(conn, migration_id, f"Applied from {migration_file.name}")
 
-                    # Verify migration 010 specifically (app_context column must exist)
-                    if migration_id == "010_add_app_context":
-                        self._verify_migration_010(conn)
+                    # TC-EPIC2-03: verify EVERY migration's expected schema shape, not
+                    # just 010 (the prior, narrower _verify_migration_010-only check).
+                    self._verify_migration_by_registry(conn, migration_id)
 
                     logger.info(f"Migration {migration_id} applied successfully")
                 except Exception as e:
@@ -740,6 +923,9 @@ class Database:
                 'semantic_signatures',
                 'drift_rejections',
                 'work_queue',  # Added: in SCHEMA but was missing from this set
+                'schema_version',  # TC-EPIC2-03: migration 007, added to SCHEMA in this taskcard
+                'authority_audit',  # TC-EPIC2-03: migration 013, added to SCHEMA in this taskcard
+                'status_transitions',  # TC-EPIC2-03: migration 014, added to SCHEMA in this taskcard
             }
 
             # Check if we have the base schema tables (or subset)
@@ -786,32 +972,91 @@ class Database:
             VALUES (?, ?, ?)
         """, (migration_id, description, now))
 
-    def _verify_migration_010(self, conn: sqlite3.Connection) -> None:
+    def _verify_migration_schema(
+        self,
+        conn: sqlite3.Connection,
+        migration_id: str,
+        expected_columns: Dict[str, List[str]],
+        expected_tables: Optional[List[str]] = None,
+        expected_views: Optional[List[str]] = None,
+        forbidden_columns: Optional[Dict[str, List[str]]] = None,
+    ) -> None:
         """
-        Verify that migration 010 (app_context) was applied correctly.
+        Generalized migration-schema verifier (TC-EPIC2-03), replacing the
+        010-only _verify_migration_010(). Same fail-loud diagnostic style
+        (names what's missing, lists what's actually present) but reusable
+        for any migration's expected tables/views/columns via
+        _MIGRATION_SCHEMA_EXPECTATIONS below, called for every migration on
+        BOTH the fresh-bootstrap and non-fresh execution paths.
 
         Raises:
-            RuntimeError: If app_context column is missing from required tables
+            RuntimeError: If anything expected is missing, or anything
+                forbidden (a column a migration's rebuild was supposed to
+                remove, e.g. migration 009's destructive example_records
+                rebuild) is present.
         """
-        # Check example_records table
-        cursor = conn.execute("PRAGMA table_info(example_records)")
-        example_cols = {row[1] for row in cursor.fetchall()}
-        if 'app_context' not in example_cols:
-            raise RuntimeError(
-                "Migration 010 verification failed: app_context column missing from example_records table. "
-                "Available columns: " + ", ".join(sorted(example_cols))
-            )
+        if expected_tables:
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            existing_tables = {row[0] for row in cursor.fetchall()}
+            missing_tables = [t for t in expected_tables if t not in existing_tables]
+            if missing_tables:
+                raise RuntimeError(
+                    f"Migration {migration_id} verification failed: missing table(s) "
+                    f"{', '.join(missing_tables)}. Available tables: " + ", ".join(sorted(existing_tables))
+                )
 
-        # Check example_run_state table
-        cursor = conn.execute("PRAGMA table_info(example_run_state)")
-        run_state_cols = {row[1] for row in cursor.fetchall()}
-        if 'app_context' not in run_state_cols:
-            raise RuntimeError(
-                "Migration 010 verification failed: app_context column missing from example_run_state table. "
-                "Available columns: " + ", ".join(sorted(run_state_cols))
-            )
+        if expected_views:
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='view'")
+            existing_views = {row[0] for row in cursor.fetchall()}
+            missing_views = [v for v in expected_views if v not in existing_views]
+            if missing_views:
+                raise RuntimeError(
+                    f"Migration {migration_id} verification failed: missing view(s) "
+                    f"{', '.join(missing_views)}. Available views: " + ", ".join(sorted(existing_views))
+                )
 
-        logger.info("Migration 010 verification passed: app_context columns exist in all required tables")
+        for table_name, columns in expected_columns.items():
+            cursor = conn.execute(f"PRAGMA table_info({table_name})")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            missing_columns = [c for c in columns if c not in existing_columns]
+            if missing_columns:
+                raise RuntimeError(
+                    f"Migration {migration_id} verification failed: {table_name} missing "
+                    f"column(s) {', '.join(missing_columns)}. Available columns: "
+                    + ", ".join(sorted(existing_columns))
+                )
+
+        if forbidden_columns:
+            for table_name, columns in forbidden_columns.items():
+                cursor = conn.execute(f"PRAGMA table_info({table_name})")
+                existing_columns = {row[1] for row in cursor.fetchall()}
+                present_forbidden = [c for c in columns if c in existing_columns]
+                if present_forbidden:
+                    raise RuntimeError(
+                        f"Migration {migration_id} verification failed: {table_name} has "
+                        f"forbidden column(s) {', '.join(present_forbidden)} that this "
+                        "migration's rebuild was supposed to remove -- SCHEMA has drifted "
+                        "out of sync with this migration."
+                    )
+
+        logger.info(f"Migration {migration_id} verification passed")
+
+    def _verify_migration_by_registry(self, conn: sqlite3.Connection, migration_id: str) -> None:
+        """Look up migration_id in _MIGRATION_SCHEMA_EXPECTATIONS and verify if a
+        registry entry exists. Migrations with no entry are silently skipped --
+        this is additive safety on top of the migrations that DO register an
+        expectation, not a requirement that every migration file register one."""
+        expectations = _MIGRATION_SCHEMA_EXPECTATIONS.get(migration_id)
+        if expectations is None:
+            return
+        self._verify_migration_schema(
+            conn,
+            migration_id,
+            expected_columns=expectations.get("expected_columns", {}),
+            expected_tables=expectations.get("expected_tables"),
+            expected_views=expectations.get("expected_views"),
+            forbidden_columns=expectations.get("forbidden_columns"),
+        )
 
     def close(self) -> None:
         """Close persistent connection."""
