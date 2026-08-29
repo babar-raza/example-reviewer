@@ -107,6 +107,18 @@ static-analysis:
     - python scripts/validation/analyze_cli_imports.py src/services/llm_service.py
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+state-authority-lint:
+  stage: validate
+  image: python:3.10-slim
+  script:
+    # TC-EPIC2-01: warn-only until TC-EPIC2-02 migrates the known call sites
+    # (orchestrator.py, markdown_service.py, timeout_manager.py, error_router.py)
+    # to route through StateAuthority. Flip to --strict once that lands.
+    - python scripts/validation/check_no_raw_status_writes.py
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 type-check:

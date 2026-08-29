@@ -1133,7 +1133,27 @@ class Database:
                     WHERE run_id = ? AND example_id = ?
                 """, (status.value, failure_reason, escalation_reason, now, run_id, example_id))
                 return conn.total_changes > 0
-    
+
+    def get_example_run_status(self, run_id: str, example_id: str) -> Optional[ExampleStatus]:
+        """Read the current run-scoped status for one example (TC-EPIC2-01).
+
+        Single-field lookup used by StateAuthority.transition() to determine the
+        "from" state before validating a transition -- get_examples_by_family()'s
+        JOIN returns full records for a whole family, which is unnecessary work
+        for a single before-write status read.
+
+        Returns None if no example_run_state row exists for this (run_id,
+        example_id) pair (e.g. discovery hasn't created it yet).
+        """
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT status FROM example_run_state WHERE run_id = ? AND example_id = ?",
+                (run_id, example_id),
+            ).fetchone()
+            if row is None:
+                return None
+            return ExampleStatus(row["status"])
+
     def update_example_code(
         self,
         example_id: str,
@@ -4104,4 +4124,33 @@ class Database:
                     reason,
                     datetime.now(timezone.utc).isoformat(),
                 ))
+                conn.commit()
+
+    # =========================================================================
+    # STATE AUTHORITY (TC-EPIC2-01)
+    # =========================================================================
+
+    def record_status_transition(
+        self,
+        example_id: str,
+        run_id: str,
+        from_status: Optional[str],
+        to_status: str,
+        evidence_ref: Optional[str],
+        timestamp: str,
+    ) -> None:
+        """Append one status_transitions audit row.
+
+        Called by StateAuthority.transition() for BOTH successful and blocked
+        (illegal) transition attempts -- from_status is None only when no prior
+        example_run_state row existed for this (run_id, example_id) pair (the
+        transition is refused for that reason too, see state_authority.py).
+        """
+        with self._write_lock:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO status_transitions (
+                        example_id, run_id, from_status, to_status, evidence_ref, timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (example_id, run_id, from_status, to_status, evidence_ref, timestamp))
                 conn.commit()
