@@ -1,5 +1,9 @@
 # Security Policy
 
+## Threat Model
+
+See [`docs/security/threat-model.md`](docs/security/threat-model.md) for the actor/attack-surface/attack-tree/risk-ranking analysis underlying the security-hardening work tracked in `reports/investigation/20260829_124758_production_readiness/REPAIR_PLAN.md` (Authorization Kernel, State Authority, and Execution Sandbox epics).
+
 ## Supported Versions
 
 | Version | Supported          |
