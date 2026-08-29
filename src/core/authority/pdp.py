@@ -77,6 +77,32 @@ class PolicyDecisionPoint:
         context = context or {}
         run_id = context.get("run_id")
 
+        # TC-EPIC1-04: for the two capabilities whose resource genuinely lives
+        # under this repo's own artifacts/workspace/data roots (compiled
+        # binaries, temp execution dirs), resolve the path first via
+        # resolve_write_target() so a symlink/junction escape or UNC path is
+        # caught before the registered policy even runs. WRITE_MARKDOWN is
+        # deliberately NOT included here: markdown content lives in arbitrary,
+        # externally-configured content roots (not under artifacts/workspace/
+        # data/), so an allowlist restricted to internal repo directories would
+        # incorrectly deny every real markdown write -- its path safety
+        # continues to come from the existing assert_write_allowed()/
+        # is_read_only_path() call already in markdown_service.py, unchanged.
+        if capability in (Capability.WRITE_ARTIFACT, Capability.EXECUTE_CODE) and resource:
+            from src.core.path_guard import resolve_write_target
+
+            resolved = resolve_write_target(resource)
+            if not resolved.allowed:
+                decision = Decision(
+                    allow=False,
+                    reason=f"Path resolution denied: {resolved.reason}",
+                    policy_id="path_guard.resolved_denied",
+                    capability=capability,
+                    resource=resource,
+                )
+                self._record(decision, run_id)
+                return decision
+
         policy_func = self._policies.get(capability)
         if policy_func is None:
             decision = Decision(
