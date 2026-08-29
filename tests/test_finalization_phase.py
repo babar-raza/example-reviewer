@@ -26,6 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.pipeline.orchestrator import PipelineOrchestrator as Orchestrator
 from src.core.models import ExampleStatus, SourceType
+from src.core.authority import Capability, PolicyDecisionPoint
+from src.core.authority.policies.commit_git import commit_git_policy
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +53,11 @@ def _make_orchestrator():
     family_cfg.auto_commit = True
     family_cfg.content_roots = [_GIT_ROOT + "/content"]
     orch.config_manager.load_family_config.return_value = family_cfg
+    # Authorization Kernel (TC-EPIC1-03): _run_finalization_phase now consults
+    # self.pdp directly; this helper bypasses __init__ via object.__new__, so the
+    # PDP must be constructed and the COMMIT_GIT policy registered here too.
+    orch.pdp = PolicyDecisionPoint()
+    orch.pdp.register_policy(Capability.COMMIT_GIT, commit_git_policy)
     return orch
 
 

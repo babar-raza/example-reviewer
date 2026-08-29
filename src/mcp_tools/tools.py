@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, asdict
 
+from src.core.authority import Capability
+
 logger = logging.getLogger(__name__)
 
 
@@ -481,7 +483,28 @@ class ExampleReviewerTools:
                 return ToolResult(success=False, error=f"No completed runs found for family {family}")
 
             run_id = row[0]
-            stats = self.orchestrator._run_finalization_phase(family, run_id, dry_run=False, allow_commit=True)
+            # Authorization Kernel (TC-EPIC1-03): the MCP commit tool requests a
+            # commit (equivalent to CLI's --commit flag) but no longer bypasses the
+            # family auto_commit gate. `commit_requested` below records intent only
+            # ("a commit was explicitly asked for via this tool") -- it is NOT an
+            # authorization decision. This boundary-level check exists purely for
+            # clean audit attribution (tagged source="mcp_tool"; note it cannot see
+            # family_auto_commit here without loading family config, so its own
+            # .allow is not authoritative). The REAL, fully-informed authorization
+            # happens inside _run_finalization_phase, which loads family_config
+            # itself and unconditionally consults auto_commit (defense in depth) --
+            # this is what closes FINDINGS_REGISTER.md F-013's hardcoded-True-value
+            # bug, which previously let this exact call site skip the family gate
+            # entirely.
+            commit_requested = True
+            self.orchestrator.pdp.check(
+                Capability.COMMIT_GIT,
+                resource=family,
+                context={"run_id": run_id, "cli_commit_flag": commit_requested, "source": "mcp_tool"},
+            )
+            stats = self.orchestrator._run_finalization_phase(
+                family, run_id, dry_run=False, allow_commit=commit_requested
+            )
             return ToolResult(success=True, data=stats)
             
         except Exception as e:

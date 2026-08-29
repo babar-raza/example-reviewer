@@ -37,6 +37,7 @@ from .failure_tracker import track_infra_missing_test_data, track_failure, track
 from ..core.path_guard import is_read_only_path
 from ..core.authority import Capability, PolicyDecisionPoint
 from ..core.authority.policies.markdown_write import write_markdown_policy
+from ..core.authority.policies.commit_git import commit_git_policy
 from .escalation_classifier import classify_escalation_reason, should_escalate_to_review
 from ..core.models import FailureCategory, FailureResolution
 from .family_service_registry import FamilyServiceRegistry
@@ -172,6 +173,7 @@ class PipelineOrchestrator:
         # commit-authorization derivations documented in FINDINGS_REGISTER.md F-014.
         self.pdp = PolicyDecisionPoint(config_manager=self.config_manager, database=self.db)
         self.pdp.register_policy(Capability.WRITE_MARKDOWN, write_markdown_policy)
+        self.pdp.register_policy(Capability.COMMIT_GIT, commit_git_policy)
 
         # Initialize production DB schema if configured
         if self.db.production_db_path:
@@ -6389,19 +6391,29 @@ Stderr: {result.stderr[:500] if result.stderr else 'None'}"""
                 logger.warning(f"Telemetry export failed: {e}")
                 stats['telemetry_export_error'] = str(e)
 
-        # Resolve commit permission: CLI --commit flag OR global config
-        commit_enabled = allow_commit or global_config.git.enabled
-        if dry_run or not commit_enabled:
-            if not dry_run and not commit_enabled:
-                logger.info("Git commit skipped (use --commit flag or set git.enabled=true)")
+        # Authorization Kernel (TC-EPIC1-03): single PDP-mediated gate replacing
+        # the old two-step "commit_enabled OR" + "if not allow_commit: check family"
+        # logic. family_config.auto_commit is now consulted UNCONDITIONALLY --
+        # closing the MCP hardcode bug where tools.py's allow_commit=True skipped
+        # the family gate entirely (FINDINGS_REGISTER.md F-013). This check is
+        # deliberately re-run here (defense in depth) even though CLI/MCP callers
+        # are also expected to consult the PDP at their own boundary -- a caller
+        # that bypasses the PDP upstream still cannot skip this enforcement point.
+        family_config = self.config_manager.load_family_config(family)
+        commit_decision = self.pdp.check(
+            Capability.COMMIT_GIT,
+            resource=family,
+            context={
+                "run_id": run_id,
+                "dry_run": dry_run,
+                "cli_commit_flag": allow_commit,
+                "git_enabled": global_config.git.enabled,
+                "family_auto_commit": family_config.auto_commit,
+            },
+        )
+        if not commit_decision.allow:
+            logger.info(f"Git commit skipped: {commit_decision.reason}")
             return stats
-
-        # Family-level gate (only when not using explicit --commit override)
-        if not allow_commit:
-            family_config = self.config_manager.load_family_config(family)
-            if not family_config.auto_commit:
-                logger.info(f"Git commit skipped for '{family}' (auto_commit=false in family config)")
-                return stats
 
         # Get candidate files from FINAL_REVIEW_PASSED examples
         # Exclude CS_FILE (reference-only, different repo) and EXTRACTED_FROM_WRAPPER (never written back)

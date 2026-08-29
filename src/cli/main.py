@@ -1113,6 +1113,12 @@ def main() -> int:
             skip_llm_runtime_fixes=getattr(args, 'skip_llm_runtime_fixes', False),
             dry_run=args.dry_run,
             allow_md_write=getattr(args, 'allow_md_write', False),
+            # Authorization Kernel (TC-EPIC1-03): this flag becomes the PDP's
+            # cli_commit_flag context input inside _run_finalization_phase, which
+            # now unconditionally consults family_config.auto_commit regardless of
+            # this value -- this CLI path was already deriving from the real flag
+            # (not hardcoded like the pre-fix MCP tools.py:484), so no bypass
+            # existed here; only the downstream gate logic changed.
             allow_commit=getattr(args, 'commit', False),
             strategy_config=strategy_config,
             content_roots=content_roots,
