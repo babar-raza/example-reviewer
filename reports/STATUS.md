@@ -1,5 +1,7 @@
 # Sprint Status — Group 9 (Quarterly Score Improvement — Waves 0–4)
 
+> **Investigation override (2026-08-29):** An independent evidence-first production-readiness investigation (`reports/investigation/20260829_124758_production_readiness/`) postdates every entry in this file by 2+ months and found the system NOT_READY, including confirmed Blocker/Critical defects not reflected below. Treat the sprint statuses below as historical record of that quarter's work, not as current system state — see `EXECUTIVE_VERDICT.md` and `FINDINGS_REGISTER.md` in the referenced investigation for the current, evidence-verified status.
+
 > Generated: 2026-04-20
 > Plan source: `C:\Users\prora\.claude\plans\iridescent-wibbling-ladybug.md`
 > Baseline score: Engineering 52.0 · Ranked 51.0

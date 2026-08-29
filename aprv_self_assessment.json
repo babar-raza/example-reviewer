@@ -57,5 +57,11 @@
       "baseline_coverage_check",
       "assessment_freshness_check"
     ]
+  },
+  "investigation_override": {
+    "checked_at": "2026-08-29T00:00:00+00:00",
+    "verdict": "NOT_READY",
+    "source": "reports/investigation/20260829_124758_production_readiness/EXECUTIVE_VERDICT.md",
+    "note": "The levels above (A5/P5/R4/V4, assessed 2026-06-16) predate and are contradicted by an independent evidence-first investigation completed 2026-08-29, which found multiple Blocker/Critical-severity defects (see FINDINGS_REGISTER.md, e.g. F-001 unauthenticated HTTP control plane, F-009 unsandboxed code execution, F-012 non-functional write-authorization, F-040 dead state machine). This override is intentionally NOT a full re-scoring of the levels above -- that is a larger effort tracked as taskcard TC-L7-05 -- it exists only to prevent this file from being read as an unqualified, current readiness claim. Do not treat the levels above as current without independently re-verifying against the referenced investigation."
   }
 }

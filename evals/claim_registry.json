@@ -2,6 +2,10 @@
   "schema_version": "1.0",
   "last_verified": "2026-06-17",
   "notes": "Machine-readable index of claims in README and docs. Each entry maps a human-readable claim to an evidence file path. Status reflects evidence integrity: 'grounded' means independently verified from production DB, 'self-reported' means evidence chain is circular (README figures fed into report, then cited back), 'partial' means some evidence exists but is incomplete. Baselines regenerated from production DB on 2026-06-17.",
+  "investigation_override": {
+    "checked_at": "2026-08-29",
+    "note": "An independent evidence-first investigation completed 2026-08-29 (reports/investigation/20260829_124758_production_readiness/) is more than 2 months more recent than this registry's last_verified date and found the target repository NOT_READY for production (see EXECUTIVE_VERDICT.md). Per-claim 'grounded' status below reflects family-accuracy verification only, not overall production readiness, and was not re-verified against production content in this pass (that requires live Aspose content roots, out of scope for the referenced investigation's constraints -- see CLAIM_TO_EVIDENCE_LEDGER.md). This registry's own claim taxonomy is itself commended as good practice in that investigation's DOCUMENTATION_AND_CONFIG_DRIFT_REPORT.md; this note exists only to flag staleness pending re-verification, not to contradict its methodology."
+  },
   "claims": [
     {
       "claim_id": "CR-001",
