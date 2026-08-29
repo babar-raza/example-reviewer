@@ -18,7 +18,6 @@ from ..core.authority import Capability, PolicyDecisionPoint
 from .article_validator import ArticleValidator
 from ..core.provenance_guard import (
     validate_batch_provenance,
-    check_provenance_enabled,
     generate_provenance_report,
     ProvenanceViolationError,
 )
@@ -263,7 +262,11 @@ class MarkdownUpdateService:
         # This prevents manual edits that bypass the verify→fix→verify loop
         # This runs BEFORE filtering by verified_code, so it can catch status=VERIFIED
         # but verified_code=None (anti-pattern: manually setting status without verification)
-        if check_provenance_enabled(self._write_markdown_decision(resource=file_path).allow, self.use_workspace_copy):
+        # TC-EPIC1-05: check_provenance_enabled() was deleted -- it just echoed
+        # back allow_markdown_write (its use_workspace_copy parameter was
+        # entirely unused despite the docstring's claim otherwise). The PDP
+        # decision's .allow IS that same value now, computed in one place.
+        if self._write_markdown_decision(resource=file_path).allow:
             try:
                 provenance_signals = validate_batch_provenance(
                     examples_claiming_verified,

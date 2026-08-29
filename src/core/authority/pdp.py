@@ -1,12 +1,12 @@
 """PolicyDecisionPoint (TC-EPIC1-01) -- the single place capability decisions are computed.
 
-This module is infrastructure only. It does not yet implement the real WRITE_MARKDOWN
-or COMMIT_GIT policy semantics -- those land in TC-EPIC1-02 and TC-EPIC1-03, which
-register real policy functions via ``PolicyDecisionPoint.register_policy()``. Before
-a policy is registered for a given capability, ``check()`` fails closed: it returns
-``Decision(allow=False, ...)``, never raises, and never allow-by-default -- this is
-the property that ``check_provenance_enabled()`` (src/core/provenance_guard.py:116-137)
-notably lacks today (it just echoes back whatever boolean it's handed).
+Real WRITE_MARKDOWN, COMMIT_GIT, WRITE_ARTIFACT, and EXECUTE_CODE policy semantics
+are registered via ``PolicyDecisionPoint.register_policy()`` by TC-EPIC1-02/03/04.
+Before a policy is registered for a given capability, ``check()`` fails closed: it
+returns ``Decision(allow=False, ...)``, never raises, and never allow-by-default --
+this is the property the now-deleted ``check_provenance_enabled()``
+(src/core/provenance_guard.py, removed in TC-EPIC1-05) notably lacked: it just
+echoed back whatever boolean it was handed.
 """
 
 from __future__ import annotations

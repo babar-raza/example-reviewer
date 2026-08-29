@@ -113,30 +113,6 @@ def validate_batch_provenance(
     return signals
 
 
-def check_provenance_enabled(
-    allow_markdown_write: bool,
-    use_workspace_copy: bool,
-) -> bool:
-    """
-    Check if provenance guards should be enforced.
-
-    Provenance guards are always enforced when:
-    - allow_markdown_write is True (actual writes happening)
-    - use_workspace_copy is False (writing to original locations)
-
-    Args:
-        allow_markdown_write: Whether markdown writes are allowed
-        use_workspace_copy: Whether using workspace copy mode
-
-    Returns:
-        True if provenance guards should be enforced
-    """
-    # Always enforce provenance when markdown writes are enabled
-    # Workspace copies are also protected (even though they're copies,
-    # they should still follow provenance rules)
-    return allow_markdown_write
-
-
 def _build_source_description(example: ExampleRecord) -> str:
     """
     Build human-readable source description for provenance tracking.

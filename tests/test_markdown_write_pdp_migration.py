@@ -63,22 +63,44 @@ def test_cli_override_true_config_false_still_allows():
     assert decision.allow is True
 
 
-def test_provenance_failure_still_blocks_write_even_if_config_allows(monkeypatch):
-    """Proves the in-lined provenance precondition actually runs: even though the
-    WRITE_MARKDOWN capability itself is allowed, per-example provenance validation
-    (unchanged, still in MarkdownUpdateService.update_markdown_file) is what blocks
-    a specific write -- this test confirms check_provenance_enabled's result is
-    still consulted (via the PDP-backed decision) exactly as before migration."""
+def test_provenance_failure_still_blocks_write_even_if_config_allows():
+    """TC-EPIC1-05: proves the provenance precondition actually runs as part of
+    the same check() call when `examples` are supplied in context -- even though
+    the config gate allows writes, an example that hasn't passed verification
+    still blocks the write, converted to a Decision rather than an escaping
+    ProvenanceViolationError."""
+    from unittest.mock import MagicMock
+
+    from src.core.models import ExampleStatus
+
+    pdp = _pdp_with_real_policy()
+    bad_example = MagicMock()
+    bad_example.example_id = "ex-1"
+    bad_example.verified_code = None  # fails validate_provenance's first check
+    bad_example.status = ExampleStatus.DISCOVERED
+
+    decision = pdp.check(
+        Capability.WRITE_MARKDOWN,
+        resource="content/foo.md",
+        context={"config_allow": True, "cli_override": False, "examples": [bad_example]},
+    )
+    assert decision.allow is False
+    assert decision.policy_id == "write_markdown.provenance_violation"
+
+
+def test_no_examples_in_context_skips_provenance_precondition():
+    """When no `examples` are supplied (e.g. the file-level path-authorization
+    check in _validate_write_allowed, which has no specific example objects in
+    scope), the provenance precondition is skipped -- the config/cli_override
+    gate alone determines the outcome, unchanged from TC-EPIC1-02's behavior."""
     pdp = _pdp_with_real_policy()
     decision = pdp.check(
         Capability.WRITE_MARKDOWN,
         resource="content/foo.md",
-        context={"config_allow": True, "cli_override": False, "use_workspace_copy": False},
+        context={"config_allow": True, "cli_override": False},
     )
     assert decision.allow is True
-    # Reason string documents whether provenance enforcement is active for this
-    # write, preserving the diagnostic information the old code path also carried.
-    assert "provenance enforcement=True" in decision.reason
+    assert decision.policy_id == "write_markdown.enabled"
 
 
 def test_markdown_service_no_longer_has_own_allow_flag():

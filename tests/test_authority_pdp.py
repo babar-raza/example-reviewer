@@ -49,8 +49,9 @@ def test_check_fails_closed_for_unknown_capability():
     """No policy registered for a capability -> fail closed, never allow-by-default.
 
     This is the negative control proving the kernel cannot be tricked into
-    allow-by-default the way today's check_provenance_enabled() (provenance_guard.py:
-    116-137) trivially echoes back whatever boolean it's handed.
+    allow-by-default the way the now-deleted check_provenance_enabled()
+    (provenance_guard.py, removed in TC-EPIC1-05) used to trivially echo back
+    whatever boolean it was handed.
     """
     pdp = PolicyDecisionPoint()
     decision = pdp.check(Capability.COMMIT_GIT, resource="repo", context={})
