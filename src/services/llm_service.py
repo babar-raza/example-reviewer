@@ -35,6 +35,8 @@ try:
 except ImportError:
     CIRCUIT_BREAKER_AVAILABLE = False
 
+from .llm_cassette import CassetteMissError, CassetteMode, LlmCassette
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +67,10 @@ class LLMResponse:
     success: bool = True
     error: Optional[str] = None
     raw_prompt: Optional[str] = None  # For telemetry
+    # TC-EPIC3-03: one of "bit_exact", "cassette_replayed", "live_sampled" --
+    # see LLMService._classify_reproducibility(). A "verified" claim built
+    # from this response should never be presented without this label.
+    reproducibility_class: Optional[str] = None
 
 
 @dataclass
@@ -168,6 +174,8 @@ using (var archive = new Archive(settings))
         seed: Optional[int] = None,
         deterministic_mode: bool = False,
         enforce_timeout: bool = True,
+        cassette: Optional[LlmCassette] = None,
+        reproducibility_mode: Optional[str] = None,
     ):
         """
         Initialize LLM service.
@@ -184,6 +192,19 @@ using (var archive = new Archive(settings))
             seed: Random seed for deterministic mode
             deterministic_mode: Enable deterministic mode (use seed)
             enforce_timeout: Enforce application-level timeout
+            cassette: Optional LlmCassette (TC-EPIC3-03) -- when set to REPLAY
+                mode, complete() never makes a live call and returns recorded
+                fixtures instead (raising CassetteMissError on a miss); when
+                set to RECORD mode, complete() makes the real call and also
+                persists the (request, response) pair.
+            reproducibility_mode: Optional explicit declaration of intent --
+                "bit_exact" requires deterministic_mode=True, a real seed, AND
+                temperature=0.0, and raises ValueError immediately at
+                construction if any are missing, rather than silently
+                degrading to live_sampled. Leave None for the default
+                (unvalidated, classification computed per-call from whatever
+                deterministic_mode/seed/temperature/cassette are in effect --
+                see get_reproducibility_class()).
         """
         self.provider = provider
         self.model = model
@@ -194,6 +215,17 @@ using (var archive = new Archive(settings))
         self.seed = seed
         self.deterministic_mode = deterministic_mode
         self.enforce_timeout = enforce_timeout
+        self.cassette = cassette
+        self.reproducibility_mode_requested = reproducibility_mode
+
+        if reproducibility_mode == "bit_exact":
+            if not (deterministic_mode and seed is not None and temperature == 0.0):
+                raise ValueError(
+                    "reproducibility_mode='bit_exact' requires deterministic_mode=True, "
+                    f"a configured seed, and temperature=0.0; got deterministic_mode={deterministic_mode!r}, "
+                    f"seed={seed!r}, temperature={temperature!r}. Refusing to silently "
+                    "degrade to live_sampled -- fix the caller's configuration."
+                )
 
         # Resolve API key from environment if not provided
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -387,6 +419,42 @@ using (var archive = new Archive(settings))
             "enabled" if self.routing_enabled else "disabled",
             "active" if self._circuit_breaker else "disabled",
         )
+
+    def set_cassette(self, cassette: Optional[LlmCassette]) -> None:
+        """Attach (or detach, with None) a cassette (TC-EPIC3-03). See
+        complete()'s cassette interception block and llm_cassette.py's module
+        docstring for the record/replay contract."""
+        self.cassette = cassette
+
+    @staticmethod
+    def _classify_reproducibility(
+        cassette_mode: Optional["CassetteMode"],
+        deterministic_mode: bool,
+        seed_used: Optional[int],
+        temperature: float,
+    ) -> str:
+        """Pure classification function -- one of "bit_exact",
+        "cassette_replayed", "live_sampled" (TC-EPIC3-03's three
+        reproducibility-mode labels). Cassette replay takes priority: a
+        replayed response is byte-identical to whatever was recorded
+        regardless of the sampling parameters that produced the original."""
+        if cassette_mode == CassetteMode.REPLAY:
+            return "cassette_replayed"
+        if deterministic_mode and seed_used is not None and temperature == 0.0:
+            return "bit_exact"
+        return "live_sampled"
+
+    def get_reproducibility_class(self, temperature: Optional[float] = None) -> str:
+        """This service's current reproducibility classification (TC-EPIC3-03).
+
+        Pass the actual per-call temperature when classifying one specific
+        complete() call (it may differ from self.temperature via that call's
+        own override); omit it to classify the service's configured default.
+        """
+        temp = temperature if temperature is not None else self.temperature
+        seed_used = self.seed if (self.deterministic_mode and self.seed is not None) else None
+        cassette_mode = self.cassette.mode if self.cassette else None
+        return self._classify_reproducibility(cassette_mode, self.deterministic_mode, seed_used, temp)
 
     def get_circuit_breaker_snapshot(self) -> Optional[Dict[str, Any]]:
         """Pure-read snapshot of circuit breaker state (TC-EPIC3-06).
@@ -800,6 +868,48 @@ using (var archive = new Archive(settings))
             "routed_models": self._routed_models.copy(),
         }
 
+    # -------------------------------------------------------------------
+    # Reproducibility-class policy (TC-EPIC3-03)
+    #
+    # Every LLMResponse this service produces carries a reproducibility_class
+    # ("bit_exact" / "cassette_replayed" / "live_sampled" -- see
+    # get_reproducibility_class()/_classify_reproducibility()). This is the
+    # single written policy for which call sites are which, closing the
+    # previously-undocumented inconsistency where several sites hardcoded
+    # temperature=0.0 and called it "deterministic" without a seed (a real
+    # determinism guarantee on most providers needs BOTH together):
+    #
+    #   BIT_EXACT (deterministic_mode=True + real seed + temperature=0.0,
+    #   all three required together -- construction raises ValueError if
+    #   reproducibility_mode="bit_exact" is requested without all three):
+    #     - Final review: both construction sites now set this explicitly --
+    #       orchestrator.py's final_review_llm_service property, and
+    #       LLMServiceFactory.from_config(use_final_review=True) below.
+    #     - _review_with_instructor()'s two Instructor request_params dicts
+    #       (temperature=0, seed added when deterministic_mode+seed are set --
+    #       i.e. genuinely bit_exact when called on a bit_exact-constructed
+    #       service, same as the final-review path above).
+    #
+    #   LIVE_SAMPLED (by design, not a gap -- production fix-generation
+    #   should not be forced deterministic):
+    #     - complete()'s primary path (the fix-generation call sites,
+    #       LLMServiceFactory.from_config()'s main/non-final-review branch).
+    #     - The two complete(temperature=0.0) call sites (C# extraction,
+    #       generate_semantic_fix) -- temperature=0 per-call, but the
+    #       SERVICE instance they run on is whatever was constructed for
+    #       fix-generation (live_sampled by default), so these are honestly
+    #       classified live_sampled unless that service happens to also be
+    #       deterministic_mode+seed-configured. Not forced bit_exact here:
+    #       these are still fix-GENERATION calls, in scope for future
+    #       determinism work but not required by this taskcard's exit gate.
+    #
+    #   CASSETTE_REPLAYED: any service with a REPLAY-mode cassette attached
+    #   (set_cassette()) -- see complete()'s replay short-circuit below.
+    #     No live network call is made; a request with no matching fixture
+    #     raises CassetteMissError rather than silently falling back to a
+    #     live call (see llm_cassette.py's module docstring).
+    # -------------------------------------------------------------------
+
     def complete(
         self,
         prompt: str,
@@ -827,6 +937,54 @@ using (var archive = new Archive(settings))
         Returns:
             LLMResponse with content and metadata
         """
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        temp = temperature if temperature is not None else self.temperature
+        timeout = timeout_override if timeout_override is not None else self.timeout_seconds
+
+        # Select model based on error complexity if routing is enabled
+        selected_model = self.model
+        if self.routing_enabled and error_logs:
+            error_code = self._extract_error_code_from_logs(error_logs)
+            if error_code:
+                ctx = routing_context or {}
+                selected_model = self._select_model_for_error(
+                    error_code,
+                    error_logs,
+                    retry_count=ctx.get("retry_count", 0),
+                    all_errors=ctx.get("all_errors", []),
+                )
+                logger.debug(f"Selected model {selected_model} for error {error_code}")
+
+        reproducibility_class = self.get_reproducibility_class(temperature=temp)
+        seed_for_cassette_key = self.seed if (self.deterministic_mode and self.seed is not None) else None
+
+        # Cassette replay (TC-EPIC3-03): checked BEFORE the `if not self._client`
+        # branch below -- deliberately, since replay mode needs no live client
+        # at all (no API key, no network) and must work even when
+        # _init_client() failed or was never attempted. A miss raises
+        # CassetteMissError immediately, never caught here and turned into a
+        # live/fallback call, since that would defeat the entire purpose of
+        # CI hermeticity. Bypasses the retry loop entirely: a replay is a
+        # deterministic lookup, not a flaky network operation.
+        if self.cassette and self.cassette.mode == CassetteMode.REPLAY:
+            cached = self.cassette.replay(selected_model, messages, temp, seed_for_cassette_key, max_tokens)
+            resp = LLMResponse(
+                content=cached["content"],
+                model=cached["model"],
+                usage=cached["usage"],
+                finish_reason=cached["finish_reason"],
+                latency_ms=0,
+                success=True,
+                raw_prompt=prompt,
+                reproducibility_class=reproducibility_class,
+            )
+            self._last_response = resp
+            return resp
+
         if not self._client:
             # Primary client unavailable — attempt fallback if routing is configured
             if self.routing_config and self.routing_config.get("fallback_enabled", True):
@@ -836,10 +994,6 @@ using (var archive = new Archive(settings))
                     logger.warning(
                         f"Primary client not initialized, using fallback: {fallback_model}"
                     )
-                    messages = []
-                    if system_prompt:
-                        messages.append({"role": "system", "content": system_prompt})
-                    messages.append({"role": "user", "content": prompt})
                     try:
                         import time as _time
                         start = _time.time()
@@ -847,7 +1001,7 @@ using (var archive = new Archive(settings))
                             model=fallback_model,
                             messages=messages,
                             max_tokens=max_tokens,
-                            temperature=temperature if temperature is not None else self.temperature,
+                            temperature=temp,
                         )
                         elapsed = int((_time.time() - start) * 1000)
                         content = response.choices[0].message.content if response.choices else ""
@@ -873,33 +1027,19 @@ using (var archive = new Archive(settings))
                 error="LLM client not initialized (primary and fallback both unavailable)"
             )
 
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        temp = temperature if temperature is not None else self.temperature
-        timeout = timeout_override if timeout_override is not None else self.timeout_seconds
-
-        # Select model based on error complexity if routing is enabled
-        selected_model = self.model
-        if self.routing_enabled and error_logs:
-            error_code = self._extract_error_code_from_logs(error_logs)
-            if error_code:
-                ctx = routing_context or {}
-                selected_model = self._select_model_for_error(
-                    error_code,
-                    error_logs,
-                    retry_count=ctx.get("retry_count", 0),
-                    all_errors=ctx.get("all_errors", []),
-                )
-                logger.debug(f"Selected model {selected_model} for error {error_code}")
-
-        # Get capabilities on first call (lazy detection)
+        # Get capabilities on first call (lazy detection) -- only reached for
+        # a live call (RECORD or plain live), never for REPLAY (checked
+        # above, before this point, since replay needs no client at all).
         if not self._capabilities_detected:
             capabilities = self.get_provider_capabilities()
         else:
             capabilities = self._capabilities
+
+        seed_used = (
+            seed_for_cassette_key
+            if (capabilities and capabilities.seed_supported)
+            else None
+        )
 
         last_error = None
         for attempt in range(self.max_retries):
@@ -917,15 +1057,16 @@ using (var archive = new Archive(settings))
                 if stop:
                     request_kwargs["stop"] = stop
 
-                # Add seed if deterministic mode is enabled and seed is configured
-                if self.deterministic_mode and self.seed is not None:
-                    if capabilities and capabilities.seed_supported:
-                        request_kwargs["seed"] = self.seed
-                    else:
-                        logger.warning(
-                            f"Deterministic mode enabled but provider {self.provider} "
-                            f"does not support seed parameter"
-                        )
+                # Add seed if deterministic mode is enabled, a seed is configured,
+                # AND the provider supports it (seed_used already reflects this --
+                # computed once above, before the retry loop).
+                if seed_used is not None:
+                    request_kwargs["seed"] = seed_used
+                elif self.deterministic_mode and self.seed is not None:
+                    logger.warning(
+                        f"Deterministic mode enabled but provider {self.provider} "
+                        f"does not support seed parameter"
+                    )
 
                 # Application-level timeout enforcement (C.5: wall timeout)
                 def make_request():
@@ -951,18 +1092,26 @@ using (var archive = new Archive(settings))
                 latency_ms = int((time.time() - start_time) * 1000)
 
                 choice = response.choices[0]
-                resp = LLMResponse(
-                    content=choice.message.content or "",
-                    model=response.model,
-                    usage={
+                response_dict = {
+                    "content": choice.message.content or "",
+                    "model": response.model,
+                    "usage": {
                         "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
                         "completion_tokens": response.usage.completion_tokens if response.usage else 0,
                         "total_tokens": response.usage.total_tokens if response.usage else 0,
                     },
-                    finish_reason=choice.finish_reason or "stop",
+                    "finish_reason": choice.finish_reason or "stop",
+                }
+
+                if self.cassette and self.cassette.mode == CassetteMode.RECORD:
+                    self.cassette.record(selected_model, messages, temp, seed_for_cassette_key, max_tokens, response_dict)
+
+                resp = LLMResponse(
+                    **response_dict,
                     latency_ms=latency_ms,
                     success=True,
                     raw_prompt=prompt,
+                    reproducibility_class=reproducibility_class,
                 )
                 self._last_response = resp
                 return resp
@@ -989,6 +1138,7 @@ using (var archive = new Archive(settings))
             success=False,
             error=last_error or "Unknown error",
             raw_prompt=prompt,
+            reproducibility_class=reproducibility_class,
         )
         self._last_response = err_resp
         return err_resp
@@ -2257,6 +2407,12 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
                 "max_retries": 3,  # Automatic retry on validation failure
                 "temperature": 0,  # Deterministic for consistency
             }
+            # TC-EPIC3-03: temperature=0 alone is not a determinism guarantee on
+            # every provider without a seed -- add one when configured, completing
+            # the bit_exact chain for callers (e.g. the final-review LLMService)
+            # that set deterministic_mode=True with a real seed.
+            if self.deterministic_mode and self.seed is not None:
+                request_params["seed"] = self.seed
 
             response = client.chat.completions.create(**request_params)
             _instructor_latency = int((time.time() - _instructor_start) * 1000)
@@ -2329,6 +2485,8 @@ ONLY return the JSON object itself. If the code is fine, return: {"approved": tr
                         "max_retries": 2,
                         "temperature": 0,
                     }
+                    if self.deterministic_mode and self.seed is not None:
+                        request_params_retry["seed"] = self.seed
                     response = client2.chat.completions.create(**request_params_retry)
                     _instructor_latency = int((time.time() - _instructor_start) * 1000)
                     self._last_response = LLMResponse(
@@ -3208,9 +3366,14 @@ class LLMServiceFactory:
                 max_retries=1,  # Final review doesn't need retries
                 retry_backoff_seconds=5,
                 timeout_seconds=final_review_config.get('timeout_seconds', 30),
-                seed=None,  # Final review doesn't use seed
-                deterministic_mode=False,
+                # TC-EPIC3-03: temperature=0.0 alone is NOT a determinism guarantee
+                # on every provider without a seed -- final review now sets both
+                # together (deterministic_mode=True + a real seed), genuinely
+                # bit_exact rather than temperature-zero-only.
+                seed=final_review_config.get('seed', 42),
+                deterministic_mode=True,
                 enforce_timeout=True,
+                reproducibility_mode="bit_exact",
             )
         else:
             # Use main llm configuration

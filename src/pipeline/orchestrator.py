@@ -409,9 +409,13 @@ class PipelineOrchestrator:
                 max_retries=1,
                 retry_backoff_seconds=5,
                 timeout_seconds=fr.timeout_seconds,
-                seed=None,
-                deterministic_mode=False,
+                # TC-EPIC3-03: temperature=0.0 alone is NOT a determinism guarantee
+                # on every provider without a seed -- deterministic_mode + a real
+                # seed are now set together, genuinely bit_exact.
+                seed=fr.seed,
+                deterministic_mode=True,
                 enforce_timeout=True,
+                reproducibility_mode="bit_exact",
             )
 
             # Wire routing config for Ollama fallback support

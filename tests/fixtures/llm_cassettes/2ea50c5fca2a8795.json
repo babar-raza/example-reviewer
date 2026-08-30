@@ -1,0 +1,28 @@
+{
+  "request": {
+    "max_tokens": 2048,
+    "messages": [
+      {
+        "content": "You are a code extraction expert.",
+        "role": "system"
+      },
+      {
+        "content": "Extract the C# code from this text.",
+        "role": "user"
+      }
+    ],
+    "model": "gpt-4o",
+    "seed": 42,
+    "temperature": 0.0
+  },
+  "response": {
+    "content": "Console.WriteLine(\"Hello, Aspose.Zip!\");",
+    "finish_reason": "stop",
+    "model": "gpt-4o",
+    "usage": {
+      "completion_tokens": 12,
+      "prompt_tokens": 42,
+      "total_tokens": 54
+    }
+  }
+}

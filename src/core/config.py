@@ -479,6 +479,15 @@ class FinalReviewConfig(BaseModel):
     provider: str = Field(default="anthropic", description="LLM provider for final review")
     model: str = Field(default="claude-3-5-sonnet-latest", description="Model for final review")
     timeout_seconds: int = Field(default=30, ge=1, description="Timeout for final review calls")
+    seed: int = Field(
+        default=42,
+        description=(
+            "Fixed seed for final review's LLM calls (TC-EPIC3-03). Final review "
+            "is constructed with deterministic_mode=True + this seed + temperature=0.0 "
+            "together -- temperature=0.0 alone is not a determinism guarantee on "
+            "every provider without a seed."
+        ),
+    )
     confidence_threshold: float = Field(default=0.85, ge=0.0, le=1.0, description="Confidence threshold for intent drift rejection")
     auto_remediation_enabled: bool = Field(
         default=False,
