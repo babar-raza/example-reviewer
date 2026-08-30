@@ -388,6 +388,22 @@ using (var archive = new Archive(settings))
             "active" if self._circuit_breaker else "disabled",
         )
 
+    def get_circuit_breaker_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Pure-read snapshot of circuit breaker state (TC-EPIC3-06).
+
+        Wraps CircuitBreaker.get_status() (a pure read under its own lock, no
+        state mutation) so a caller -- orchestrator.py at run start, or
+        RunManifest once TC-EPIC3-05 lands -- can answer "was the circuit
+        already open/half-open when this run began" without needing to know
+        this service's internal `_circuit_breaker` attribute exists. Returns
+        None when no circuit breaker was built for this service (no fallback
+        configured, or CIRCUIT_BREAKER_AVAILABLE is False) -- callers must
+        treat that as "no circuit breaker for this run", not an error.
+        """
+        if not self._circuit_breaker:
+            return None
+        return self._circuit_breaker.get_status()
+
     def _get_fallback_client(self) -> Optional[OpenAI]:
         """
         Get or create a fallback client (Ollama).

@@ -1116,6 +1116,20 @@ class PipelineOrchestrator:
         run_id = self.db.create_run(family, "full_pipeline")
         results['run_id'] = run_id
 
+        # Circuit-breaker state visibility (TC-EPIC3-06): snapshot BEFORE any
+        # LLM calls happen this run, so "was the circuit already open/half-open
+        # when this run began" is answerable after the fact -- accessing
+        # self.llm_service here also means this run's LLM connectivity
+        # preflight check happens at run start rather than deferred to
+        # whichever phase first needs it. A snapshot capture failure must
+        # never fail the run itself (best-effort, matches TC-EPIC3-05's
+        # RunManifest non-fatal-capture requirement this field will feed).
+        try:
+            results['circuit_breaker_state_at_start'] = self.llm_service.get_circuit_breaker_snapshot()
+        except Exception as e:
+            logger.warning(f"Circuit breaker snapshot capture failed (non-fatal): {e}")
+            results['circuit_breaker_state_at_start'] = None
+
         # Load global config for resource detection
         global_config = self.config_manager.load_global_config()
 
