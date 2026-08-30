@@ -39,6 +39,7 @@ from ..core.authority import Capability, PolicyDecisionPoint
 from ..core.authority.policies.markdown_write import write_markdown_policy
 from ..core.authority.policies.commit_git import commit_git_policy
 from ..core.state_authority import IllegalTransitionError, StateAuthority
+from ..core.run_manifest import build_run_manifest, finalize_run_manifest
 from .escalation_classifier import classify_escalation_reason, should_escalate_to_review
 from ..core.models import FailureCategory, FailureResolution
 from .family_service_registry import FamilyServiceRegistry
@@ -240,6 +241,10 @@ class PipelineOrchestrator:
         # Pattern-set versioning (TC-EPIC3-04): captured once at run start in
         # run_full_pipeline(), frozen for that run's own pattern eligibility.
         self._pattern_set_version: Optional[int] = None
+
+        # RunManifest (TC-EPIC3-05): built at run start, finalized (with LLM
+        # call stats) at every run_full_pipeline() return point.
+        self._run_manifest = None
 
         # VectorDB and DriftDetector startup decision (Track 1: C.2)
         # Make a single decision at startup, never change mid-run
@@ -1065,6 +1070,25 @@ class PipelineOrchestrator:
         """
         return ""
 
+    def _finalize_run_manifest(self) -> None:
+        """Finalize and re-save this run's RunManifest (TC-EPIC3-05), called
+        at every run_full_pipeline() return point that has one (i.e. every
+        return reached after the manifest was first built and saved).
+
+        Best-effort: a no-op if no manifest exists for this run (build/save
+        at run start failed, or this return point precedes that point in the
+        method), and never lets a finalize failure propagate to fail the
+        underlying pipeline run.
+        """
+        if self._run_manifest is None:
+            return
+        try:
+            finalized = finalize_run_manifest(self._run_manifest, llm_call_stats=self._llm_metrics)
+            self.db.save_run_manifest(finalized)
+            self._run_manifest = finalized
+        except Exception as e:
+            logger.warning(f"RunManifest finalization failed (non-fatal): {e}")
+
     def run_full_pipeline(
         self,
         family: str,
@@ -1157,6 +1181,24 @@ class PipelineOrchestrator:
             self._pattern_set_version = None
         results['pattern_set_version'] = self._pattern_set_version
         self.registry.set_pattern_set_version(self._pattern_set_version)
+
+        # RunManifest (TC-EPIC3-05): aggregates the static fields captured
+        # above (circuit_breaker_state_at_start, pattern_set_version) plus
+        # git_sha/resolved_nuget_versions/docker_image_digest, persisted now
+        # and finalized (with LLM call stats) at every return point below.
+        # Best-effort end to end -- a manifest capture failure must never
+        # fail the underlying pipeline run.
+        self._run_manifest = None
+        try:
+            self._run_manifest = build_run_manifest(
+                run_id=run_id,
+                family_config=family_config,
+                pattern_set_version=self._pattern_set_version,
+                circuit_breaker_state_at_start=results['circuit_breaker_state_at_start'],
+            )
+            self.db.save_run_manifest(self._run_manifest)
+        except Exception as e:
+            logger.warning(f"RunManifest capture failed (non-fatal): {e}")
 
         # Load global config for resource detection
         global_config = self.config_manager.load_global_config()
@@ -1267,6 +1309,7 @@ class PipelineOrchestrator:
 
             if discovery_stats.get('error'):
                 results['success'] = False
+                self._finalize_run_manifest()
                 return results
 
             logger.info(f"Phase A.2: Article validation for {family}")
@@ -1643,6 +1686,7 @@ class PipelineOrchestrator:
             except Exception as sup_err:
                 logger.debug(f"Supervisor analysis skipped: {sup_err}")
 
+        self._finalize_run_manifest()
         return results
 
     def _run_discovery_phase(

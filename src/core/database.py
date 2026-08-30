@@ -10,7 +10,7 @@ import hashlib
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from contextlib import contextmanager
 
 from .models import (
@@ -20,6 +20,9 @@ from .models import (
     ReviewResult, ReviewIssue, IssueSeverity, IssueType,
     FailureDetail, FailureCategory, FailureResolution
 )
+
+if TYPE_CHECKING:
+    from .run_manifest import RunManifest
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +107,16 @@ _MIGRATION_SCHEMA_EXPECTATIONS: Dict[str, Dict[str, Any]] = {
             "status_transitions": [
                 "id", "example_id", "run_id", "from_status", "to_status",
                 "evidence_ref", "timestamp",
+            ],
+        },
+    },
+    "015_run_manifests": {
+        "expected_tables": ["run_manifests"],
+        "expected_columns": {
+            "run_manifests": [
+                "run_id", "git_sha", "resolved_nuget_versions", "docker_image_digest",
+                "pattern_set_version", "circuit_breaker_state_at_start", "llm_call_stats",
+                "per_example_elapsed_seconds", "created_at", "finalized_at",
             ],
         },
     },
@@ -641,6 +654,23 @@ class Database:
 
     CREATE INDEX IF NOT EXISTS idx_status_transitions_example ON status_transitions(example_id);
     CREATE INDEX IF NOT EXISTS idx_status_transitions_run ON status_transitions(run_id);
+
+    -- Run manifests table (Migration 015 -- TC-EPIC3-05). Added to SCHEMA
+    -- here for the same reason as authority_audit/status_transitions above.
+    CREATE TABLE IF NOT EXISTS run_manifests (
+        run_id TEXT PRIMARY KEY,
+        git_sha TEXT,
+        resolved_nuget_versions TEXT,
+        docker_image_digest TEXT,
+        pattern_set_version INTEGER,
+        circuit_breaker_state_at_start TEXT,
+        llm_call_stats TEXT,
+        per_example_elapsed_seconds TEXT,
+        created_at TEXT NOT NULL,
+        finalized_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_run_manifests_created ON run_manifests(created_at);
     """
     
     def __init__(
@@ -926,6 +956,7 @@ class Database:
                 'schema_version',  # TC-EPIC2-03: migration 007, added to SCHEMA in this taskcard
                 'authority_audit',  # TC-EPIC2-03: migration 013, added to SCHEMA in this taskcard
                 'status_transitions',  # TC-EPIC2-03: migration 014, added to SCHEMA in this taskcard
+                'run_manifests',  # TC-EPIC3-05: migration 015, added to SCHEMA in this taskcard
             }
 
             # Check if we have the base schema tables (or subset)
@@ -4363,3 +4394,74 @@ class Database:
                     ) VALUES (?, ?, ?, ?, ?, ?)
                 """, (example_id, run_id, from_status, to_status, evidence_ref, timestamp))
                 conn.commit()
+
+    # =========================================================================
+    # RUN MANIFEST (TC-EPIC3-05)
+    # =========================================================================
+
+    def save_run_manifest(self, manifest: "RunManifest") -> None:
+        """Upsert a RunManifest by run_id (TC-EPIC3-05).
+
+        Called twice per run: once at run start (static fields only,
+        finalized_at=None) and once at run end (finalize_run_manifest()'s
+        output, with llm_call_stats and finalized_at populated) -- both calls
+        are idempotent upserts on run_id, so calling this a third time (e.g.
+        a retry) simply overwrites with the latest state, never duplicates.
+        """
+        with self._write_lock:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO run_manifests (
+                        run_id, git_sha, resolved_nuget_versions, docker_image_digest,
+                        pattern_set_version, circuit_breaker_state_at_start,
+                        llm_call_stats, per_example_elapsed_seconds, created_at, finalized_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(run_id) DO UPDATE SET
+                        git_sha = excluded.git_sha,
+                        resolved_nuget_versions = excluded.resolved_nuget_versions,
+                        docker_image_digest = excluded.docker_image_digest,
+                        pattern_set_version = excluded.pattern_set_version,
+                        circuit_breaker_state_at_start = excluded.circuit_breaker_state_at_start,
+                        llm_call_stats = excluded.llm_call_stats,
+                        per_example_elapsed_seconds = excluded.per_example_elapsed_seconds,
+                        finalized_at = excluded.finalized_at
+                """, (
+                    manifest.run_id,
+                    manifest.git_sha,
+                    json.dumps(manifest.resolved_nuget_versions),
+                    manifest.docker_image_digest,
+                    manifest.pattern_set_version,
+                    json.dumps(manifest.circuit_breaker_state_at_start)
+                        if manifest.circuit_breaker_state_at_start is not None else None,
+                    json.dumps(manifest.llm_call_stats),
+                    json.dumps(manifest.per_example_elapsed_seconds),
+                    manifest.created_at,
+                    manifest.finalized_at,
+                ))
+                conn.commit()
+
+    def get_run_manifest(self, run_id: str) -> Optional["RunManifest"]:
+        """Query interface (TC-EPIC3-05): the single-lookup answer to "why did
+        this run behave this way". Returns None for an unknown run_id."""
+        from .run_manifest import RunManifest
+
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM run_manifests WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return RunManifest(
+            run_id=row["run_id"],
+            git_sha=row["git_sha"],
+            resolved_nuget_versions=json.loads(row["resolved_nuget_versions"] or "{}"),
+            docker_image_digest=row["docker_image_digest"],
+            pattern_set_version=row["pattern_set_version"],
+            circuit_breaker_state_at_start=(
+                json.loads(row["circuit_breaker_state_at_start"]) if row["circuit_breaker_state_at_start"] else None
+            ),
+            llm_call_stats=json.loads(row["llm_call_stats"] or "{}"),
+            per_example_elapsed_seconds=json.loads(row["per_example_elapsed_seconds"] or "{}"),
+            created_at=row["created_at"],
+            finalized_at=row["finalized_at"],
+        )
