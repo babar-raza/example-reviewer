@@ -34,6 +34,14 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class NuGetVersionPinRequiredError(ValueError):
+    """Raised by CompilationService._write_project() (TC-EPIC3-01) when
+    nuget_config.restore_mode='locked' is set but a package has no pinned
+    version. Locked-mode restore exists specifically for byte-identical,
+    non-floating dependency resolution -- silently substituting Version="*"
+    here would defeat that guarantee entirely, so this fails loudly instead."""
+
+
 @dataclass
 class CompileResult:
     """Result of a compilation attempt."""
@@ -83,7 +91,7 @@ class CompilationService:
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <OutputType>Exe</OutputType>
-  </PropertyGroup>
+{lock_file_property}  </PropertyGroup>
   <ItemGroup>
 {package_refs}
   </ItemGroup>
@@ -497,6 +505,17 @@ class CompilationService:
         """
         nuget_config = family_config.nuget_config
 
+        # TC-EPIC3-01: restore_mode="locked" is this pipeline's "CI/production
+        # run" signal -- a run that requests locked-mode (--locked-mode
+        # restore against a committed packages.lock.json) is, by definition,
+        # a run that wants byte-identical, non-floating dependency resolution.
+        # A missing pinned version under that mode is therefore a hard
+        # configuration error, not a silent "*" substitution (which would
+        # defeat the entire point of requesting locked-mode in the first
+        # place). restore_mode="floating" (the default) preserves today's
+        # dev/exploration fallback-to-"*" behavior unchanged.
+        is_locked_mode = bool(nuget_config and nuget_config.restore_mode == "locked")
+
         # Build package references
         package_refs = []
 
@@ -504,7 +523,16 @@ class CompilationService:
             # Primary package
             primary = nuget_config.primary_package
             if primary and primary.name:
-                version = primary.version if primary.version else "*"
+                if primary.version:
+                    version = primary.version
+                elif is_locked_mode:
+                    raise NuGetVersionPinRequiredError(
+                        f"restore_mode='locked' requires a pinned version for primary_package "
+                        f"'{primary.name}', but none is configured. Set nuget_config.primary_package.version "
+                        f"in this family's config, or use restore_mode='floating' for dev/exploration runs."
+                    )
+                else:
+                    version = "*"
                 package_refs.append(
                     f'    <PackageReference Include="{primary.name}" Version="{version}" />'
                 )
@@ -512,7 +540,16 @@ class CompilationService:
             # Additional packages
             for pkg in nuget_config.additional_packages:
                 if pkg.name:
-                    version = pkg.version if pkg.version else "*"
+                    if pkg.version:
+                        version = pkg.version
+                    elif is_locked_mode:
+                        raise NuGetVersionPinRequiredError(
+                            f"restore_mode='locked' requires a pinned version for additional_packages "
+                            f"entry '{pkg.name}', but none is configured. Set its version field, or use "
+                            f"restore_mode='floating' for dev/exploration runs."
+                        )
+                    else:
+                        version = "*"
                     package_refs.append(
                         f'    <PackageReference Include="{pkg.name}" Version="{version}" />'
                     )
@@ -525,8 +562,11 @@ class CompilationService:
         ):
             # Only add if not already present
             if not any('System.Drawing.Common' in ref for ref in package_refs):
+                # TC-EPIC3-01: configurable pinned version, replacing the
+                # previous hardcoded floating Version="8.*".
+                drawing_version = nuget_config.drawing_common_version if nuget_config else "8.0.30"
                 package_refs.append(
-                    '    <PackageReference Include="System.Drawing.Common" Version="8.*" />'
+                    f'    <PackageReference Include="System.Drawing.Common" Version="{drawing_version}" />'
                 )
                 logger.info("Auto-added System.Drawing.Common NuGet package (detected System.Drawing usage)")
 
@@ -538,9 +578,20 @@ class CompilationService:
             project_template = self.PROJECT_TEMPLATE
             logger.debug("Using default console project template")
 
+        # TC-EPIC3-01: only the default PROJECT_TEMPLATE carries the
+        # {lock_file_property} placeholder -- harness-specific templates
+        # (aspnet_core_minimal, mvc, webapi, library) do not yet, so
+        # locked-mode restore is only fully wired for the default console
+        # template today. .format() silently ignores unused kwargs, so this
+        # is safe to pass unconditionally.
+        lock_file_property = (
+            "    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>\n" if is_locked_mode else ""
+        )
+
         # Write project file
         project_content = project_template.format(
-            package_refs='\n'.join(package_refs)
+            package_refs='\n'.join(package_refs),
+            lock_file_property=lock_file_property,
         )
 
         (work_dir / "Compilation.csproj").write_text(project_content, encoding='utf-8')
@@ -552,9 +603,36 @@ class CompilationService:
         start_time = time.time()
         
         try:
+            # TC-EPIC3-01: locked-mode restore validates against
+            # packages.lock.json (RestorePackagesWithLockFile=true in the
+            # .csproj, set by _write_project() above, causes `dotnet restore`
+            # to generate one alongside it). Empirically verified via a real
+            # dotnet restore cycle (evidence:
+            # taskcards/evidence/TC-EPIC3-01/locked_mode_e2e_zip.log) that
+            # --locked-mode's actual behavior differs from what its name
+            # suggests: it fails loudly (NU1004) when an EXISTING lock file
+            # is STALE (inconsistent with the current PackageReference), but
+            # silently CREATES one when none exists yet -- it does not
+            # require a pre-existing lock file to succeed. Since each
+            # compile runs in a fresh, ephemeral work_dir with no persisted
+            # lock file across examples/runs, this flag's practical
+            # protection here is against a work_dir being REUSED across
+            # retries with a since-changed PackageReference (e.g. an LLM fix
+            # that changes the package set) landing on inconsistent
+            # transitive dependencies -- not "no live network resolution
+            # ever occurs," which would require a genuinely pre-seeded,
+            # persisted lock file (a larger, separate follow-up if the team
+            # wants that stronger guarantee). The primary reproducibility
+            # protection TC-EPIC3-01 delivers is the exact top-level version
+            # pin written into PackageReference itself (see _write_project()
+            # above), which this flag complements for transitive deps.
+            restore_cmd = ["dotnet", "restore", "--verbosity", "minimal"]
+            if family_config.nuget_config and family_config.nuget_config.restore_mode == "locked":
+                restore_cmd.append("--locked-mode")
+
             # Restore packages first
             restore_result = subprocess.run(
-                ["dotnet", "restore", "--verbosity", "minimal"],
+                restore_cmd,
                 cwd=work_dir,
                 capture_output=True,
                 text=True,

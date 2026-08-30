@@ -22,6 +22,7 @@
     "primary_package": {
       "name": "Aspose.Page",
       "version_strategy": "latest_stable",
+      "version": "26.8.0",
       "dll_name": "Aspose.Page"
     },
     "additional_packages": [],

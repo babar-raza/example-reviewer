@@ -7,7 +7,8 @@
   "nuget_config": {
     "primary_package": {
       "name": "Newtonsoft.Json",
-      "version_strategy": "latest_stable"
+      "version_strategy": "latest_stable",
+      "version": "13.0.4"
     },
     "target_frameworks": [
       "net8.0"

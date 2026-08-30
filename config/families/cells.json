@@ -23,7 +23,8 @@
   "nuget_config": {
     "primary_package": {
       "name": "Aspose.Cells",
-      "version_strategy": "latest_stable"
+      "version_strategy": "latest_stable",
+      "version": "26.8.0"
     },
     "additional_packages": [],
     "target_frameworks": [

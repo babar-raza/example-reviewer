@@ -22,6 +22,7 @@
     "primary_package": {
       "name": "Aspose.CAD",
       "version_strategy": "latest_stable",
+      "version": "26.7.0",
       "dll_name": "Aspose.CAD"
     },
     "additional_packages": [],

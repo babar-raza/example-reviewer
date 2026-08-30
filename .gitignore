@@ -15,6 +15,12 @@ __pycache__/
 /test-examples/**/obj/
 /test-examples/**/.vs/
 
+# TC-EPIC3-01: locked-mode restore's generated lock files (compile work dirs
+# already live under gitignored artifacts//workspace/ trees, but explicit
+# per this taskcard's own migration guidance -- default to gitignored unless
+# a future taskcard decides to commit per-workspace lock files deliberately.
+packages.lock.json
+
 # Runtime/generated directories
 /artifacts/
 /cache/

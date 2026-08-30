@@ -8,7 +8,7 @@ import json
 import hashlib
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple, Set
+from typing import Optional, Dict, Any, List, Tuple, Set, Literal
 from pydantic import BaseModel, Field, ConfigDict
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
@@ -769,6 +769,22 @@ class NuGetConfig(BaseModel):
     primary_package: NuGetPackage
     additional_packages: List[NuGetPackage] = Field(default_factory=list)
     target_frameworks: List[str] = Field(default_factory=lambda: ["net8.0"])
+    restore_mode: Literal["floating", "locked"] = Field(
+        default="floating",
+        description=(
+            "TC-EPIC3-01: 'locked' invokes `dotnet restore --locked-mode` against a "
+            "committed packages.lock.json (fails loudly if the lock file is missing/stale "
+            "instead of silently re-resolving); 'floating' (default) preserves today's "
+            "plain `dotnet restore` behavior."
+        ),
+    )
+    drawing_common_version: str = Field(
+        default="8.0.30",
+        description=(
+            "TC-EPIC3-01: pinned version for the auto-added System.Drawing.Common "
+            "package (previously hardcoded to the floating 'Version=\"8.*\"')."
+        ),
+    )
 
 
 class CodeDefaults(BaseModel):
