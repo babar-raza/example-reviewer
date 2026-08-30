@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # TC-EPIC3-02: bump-process half of Dockerfile digest pinning. Pinning
+  # without an active bump process trades "silent drift" for "silent
+  # staleness" -- this is not optional. Dependabot opens a PR whenever
+  # either base image's digest moves (a new patch/security release under
+  # the same tag), so a bump becomes a reviewed, deliberate event instead
+  # of an invisible one at the next unrelated Dockerfile edit.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "chore(docker)"

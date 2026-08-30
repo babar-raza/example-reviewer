@@ -4,10 +4,20 @@
 # base image so the API can run compile-capable tools.
 
 # ---- Stage 1: .NET SDK donor ----
-FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS dotnet-sdk
+# Digest resolved fresh from mcr.microsoft.com's registry API on 2026-08-30
+# (TC-EPIC3-01/TC-EPIC3-02). Bump: re-resolve via
+#   curl -s -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+#     https://mcr.microsoft.com/v2/dotnet/sdk/manifests/8.0-bookworm-slim -D - -o /dev/null \
+#     | grep -i docker-content-digest
+FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim@sha256:bb32ba3ba3ea36e38572d9d8db76fa15f7cbf722f3f886e06bca6d528bd4fba8 AS dotnet-sdk
 
 # ---- Stage 2: Python runtime + .NET SDK ----
-FROM python:3.12-slim-bookworm
+# Digest resolved fresh from Docker Hub's registry API on 2026-08-30. Bump:
+#   TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/python:pull" | python3 -c "import json,sys;print(json.load(sys.stdin)['token'])")
+#   curl -s -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+#     https://registry-1.docker.io/v2/library/python/manifests/3.12-slim-bookworm -D - -o /dev/null \
+#     | grep -i docker-content-digest
+FROM python:3.12-slim-bookworm@sha256:0f5b26b9518d002b6173fd61daad821fa340635ebfec5bba471013f9ca114579
 
 COPY --from=dotnet-sdk /usr/share/dotnet /usr/share/dotnet
 RUN ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet

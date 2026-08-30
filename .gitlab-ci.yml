@@ -119,6 +119,16 @@ state-authority-lint:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'
+
+dockerfile-digest-pin-lint:
+  stage: validate
+  image: python:3.10-slim
+  script:
+    # TC-EPIC3-02: fails if either FROM line in Dockerfile reverts to a
+    # floating tag without an @sha256:<digest> pin.
+    - python scripts/validation/check_dockerfile_digest_pins.py
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 type-check:
