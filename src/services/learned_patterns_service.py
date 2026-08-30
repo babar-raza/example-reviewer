@@ -25,6 +25,42 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "api_catalog.db"
 
 
+def capture_pattern_set_version(db_path: Optional[Path] = None) -> Optional[int]:
+    """Capture a pattern_set_version (TC-EPIC3-04): the highest existing
+    learned_patterns.id at the moment of capture.
+
+    Called ONCE per run, before any query_patterns()/preload_all_patterns()
+    call, so a run's pattern eligibility is frozen at its own start point
+    regardless of auto-learn activity during or after that run (Root cause:
+    nothing versioned "which pattern set was active for this run" -- a rerun
+    of identical inputs could silently take a different fix path depending on
+    whether/when auto-learn fired on a prior run).
+
+    Deliberately a monotonic integer (the AUTOINCREMENT id, which SQLite
+    guarantees is strictly increasing and never reused), NOT a wall-clock
+    timestamp: this taskcard's own proposed design explicitly allows either,
+    and a timestamp has a real correctness problem here -- SQLite's
+    ``datetime('now')`` (the same expression learned_patterns.created_at's
+    column default uses) has only whole-second precision, so a version
+    captured and a pattern stored within the same wall-clock second would be
+    indistinguishable, silently admitting a pattern that should have been
+    excluded. An id has no such granularity limit and needs no clock-source
+    reconciliation between Python and SQLite at all.
+
+    Returns None (callers must treat this as "no version filtering, legacy
+    unfiltered behavior -- pre-existing rows are eligible for every run")
+    if the database doesn't exist yet.
+    """
+    path = db_path or DEFAULT_DB_PATH
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(str(path))
+    try:
+        return conn.execute("SELECT COALESCE(MAX(id), 0) FROM learned_patterns").fetchone()[0]
+    finally:
+        conn.close()
+
+
 @dataclass
 class LearnedPattern:
     """Represents a learned fix pattern from the database."""
@@ -90,7 +126,13 @@ class LearnedPatternsService:
     # Registry of code transform functions (name -> callable)
     _transformers: Dict[str, Callable[[str], str]] = {}
 
-    def __init__(self, family: str, db_path: Optional[Path] = None, catalog=None):
+    def __init__(
+        self,
+        family: str,
+        db_path: Optional[Path] = None,
+        catalog=None,
+        pattern_set_version: Optional[int] = None,
+    ):
         """
         Initialize the service for a specific family.
 
@@ -98,10 +140,21 @@ class LearnedPatternsService:
             family: Product family (e.g., 'zip')
             db_path: Path to api_catalog.db (defaults to data/api_catalog.db)
             catalog: Optional API catalog service for LLM context
+            pattern_set_version: TC-EPIC3-04 -- a monotonic integer (the
+                highest learned_patterns.id at capture time, from
+                capture_pattern_set_version()) marking this run's
+                pattern-eligibility cutoff. When set, preload_all_patterns()/
+                query_patterns() only return patterns with id <= this value,
+                so a pattern an auto-learn phase stores mid-run or after this
+                run cannot be selected by this run's own queries. None means
+                no filtering (legacy behavior -- every pre-existing row is
+                eligible, matching "treat all pre-existing rows as version 0"
+                from this taskcard's migration notes).
         """
         self.family = family
         self.db_path = db_path or DEFAULT_DB_PATH
         self._catalog = catalog  # Store catalog for LLM operations
+        self.pattern_set_version = pattern_set_version
         self._connection: Optional[sqlite3.Connection] = None
         # In-run cache: patterns that succeeded during this run get priority boost
         self._run_cache: Dict[str, List[int]] = {}  # error_signature -> [pattern_ids that succeeded]
@@ -111,6 +164,12 @@ class LearnedPatternsService:
         self._applied_llm_patterns: set = set()
         # Whether scope column exists (lazy-detected)
         self._has_scope_column: Optional[bool] = None
+        # Frozen pattern_performance snapshot (TC-EPIC3-04): populated once,
+        # lazily, on first _boost_by_historical_success() call -- never
+        # re-queried live within this instance's lifetime, so a run's pattern
+        # ordering can't drift mid-run as record_application() commits new
+        # performance rows for THIS SAME run's own earlier attempts.
+        self._performance_snapshot: Optional[Dict[int, Tuple[float, int]]] = None
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create database connection."""
@@ -146,6 +205,11 @@ class LearnedPatternsService:
         Includes global-scope patterns (V3) alongside family-specific ones.
         This is called once after Phase A (discovery) to avoid repeated
         database queries during compilation/runtime loops.
+
+        TC-EPIC3-04: when self.pattern_set_version is set, only patterns with
+        id <= that version are eligible -- a pattern an auto-learn phase
+        stores mid-run or after this run's start cannot be preloaded into
+        (or later found by) this run's own cache.
         """
         try:
             conn = self._get_connection()
@@ -154,16 +218,20 @@ class LearnedPatternsService:
                     SELECT * FROM learned_patterns
                     WHERE (family = ? OR scope = 'global')
                       AND auto_approved = TRUE
-                    ORDER BY error_signature, priority ASC, confidence DESC
                 """
             else:
                 query = """
                     SELECT * FROM learned_patterns
                     WHERE family = ?
                       AND auto_approved = TRUE
-                    ORDER BY error_signature, priority ASC, confidence DESC
                 """
-            cursor = conn.execute(query, [self.family])
+            params: List[Any] = [self.family]
+            if self.pattern_set_version is not None:
+                query += " AND id <= ?"
+                params.append(self.pattern_set_version)
+            query += " ORDER BY error_signature, priority ASC, confidence DESC"
+
+            cursor = conn.execute(query, params)
             rows = cursor.fetchall()
 
             # Group by error_signature
@@ -242,6 +310,13 @@ class LearnedPatternsService:
         if approved_only:
             query += " AND auto_approved = TRUE"
 
+        # TC-EPIC3-04: same eligibility cutoff as preload_all_patterns() --
+        # a pattern created after this run's pattern_set_version was captured
+        # (e.g. by an auto-learn phase) is invisible to this run's queries.
+        if self.pattern_set_version is not None:
+            query += " AND id <= ?"
+            params.append(self.pattern_set_version)
+
         query += " ORDER BY priority ASC, confidence DESC LIMIT ?"
         params.append(limit)
 
@@ -269,27 +344,43 @@ class LearnedPatternsService:
             logger.error(f"Error querying patterns: {e}")
             return []
 
+    def _get_performance_snapshot(self) -> Dict[int, Tuple[float, int]]:
+        """Lazily populate and return a FROZEN pattern_performance snapshot
+        (TC-EPIC3-04): pattern_id -> (success_rate, times_applied), read once
+        per instance lifetime and never re-queried afterward.
+
+        This is the fix for the confirmed within-run feedback-loop bug:
+        record_application() commits new performance rows live throughout a
+        run (unchanged -- writes still go live), but _boost_by_historical_success()
+        must not re-read those live rows mid-run, or a run's own earlier
+        successes/failures shift its own later pattern-ordering decisions,
+        making a single run's fix-application order path-dependent instead of
+        reproducible.
+        """
+        if self._performance_snapshot is None:
+            conn = self._get_connection()
+            rows = conn.execute(
+                "SELECT pattern_id, success_rate, times_applied FROM pattern_performance"
+            ).fetchall()
+            self._performance_snapshot = {row[0]: (row[1], row[2]) for row in rows}
+        return self._performance_snapshot
+
     def _boost_by_historical_success(self, patterns: List[LearnedPattern]) -> List[LearnedPattern]:
         """Reorder patterns by historical success rate (cross-run boost).
 
         Patterns with proven track records are prioritized over untested ones.
         Uses Bayesian-like smoothing: success_rate * log10(times_applied + 1).
+
+        TC-EPIC3-04: reads the frozen per-instance snapshot from
+        _get_performance_snapshot(), never a live query -- see that method's
+        docstring for why.
         """
         if len(patterns) <= 1:
             return patterns
 
         try:
             import math
-            conn = self._get_connection()
-            pattern_ids = [p.id for p in patterns]
-            placeholders = ",".join("?" for _ in pattern_ids)
-
-            perf_rows = conn.execute(
-                f"SELECT pattern_id, success_rate, times_applied FROM pattern_performance WHERE pattern_id IN ({placeholders})",  # nosec B608
-                pattern_ids,
-            ).fetchall()
-
-            perf_map = {row[0]: (row[1], row[2]) for row in perf_rows}
+            perf_map = self._get_performance_snapshot()
 
             # Only reorder if we have performance data for at least one pattern
             has_data = any(perf_map.get(p.id, (0.0, 0))[1] > 0 for p in patterns)

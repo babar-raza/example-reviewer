@@ -88,6 +88,7 @@ def _make_orchestrator_stub():
     orch.config_manager = MagicMock()
     orch.config_manager.load_family_config.return_value = MagicMock()
     orch.config_manager.load_global_config.side_effect = RuntimeError("STOP: test boundary")
+    orch.registry = MagicMock()  # TC-EPIC3-04: set_pattern_set_version() touches this
     orch._current_family = None
     orch._vector_db_startup_decision = {}
     orch._drift_enabled = False
@@ -109,8 +110,11 @@ class TestOrchestratorRunStartSnapshot:
         }
         orch._llm_service = primed_llm_service
 
-        with pytest.raises(RuntimeError, match="STOP: test boundary"):
-            orch.run_full_pipeline(family="zip")
+        # Hermetic: don't let capture_pattern_set_version() (TC-EPIC3-04, also
+        # called during this run-start block) touch the real api_catalog.db.
+        with patch("src.pipeline.orchestrator.capture_pattern_set_version", return_value=None):
+            with pytest.raises(RuntimeError, match="STOP: test boundary"):
+                orch.run_full_pipeline(family="zip")
 
         primed_llm_service.get_circuit_breaker_snapshot.assert_called_once()
 
@@ -126,5 +130,6 @@ class TestOrchestratorRunStartSnapshot:
 
         # If the snapshot failure were fatal, this would raise "boom" instead
         # of reaching the stub's deliberate STOP boundary further down.
-        with pytest.raises(RuntimeError, match="STOP: test boundary"):
-            orch.run_full_pipeline(family="zip")
+        with patch("src.pipeline.orchestrator.capture_pattern_set_version", return_value=None):
+            with pytest.raises(RuntimeError, match="STOP: test boundary"):
+                orch.run_full_pipeline(family="zip")

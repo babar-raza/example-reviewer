@@ -41,6 +41,21 @@ class FamilyServiceRegistry:
         self._config_manager = config_manager
         self._artifacts_dir = Path(artifacts_dir)
         self._cache: Dict[str, Dict[str, Any]] = {}  # {family: {service_name: instance}}
+        # TC-EPIC3-04: the current run's pattern-set-eligibility cutoff,
+        # threaded into every LearnedPatternsService this registry constructs
+        # from here on. See set_pattern_set_version()'s docstring.
+        self._pattern_set_version: Optional[int] = None
+
+    def set_pattern_set_version(self, version: Optional[int]) -> None:
+        """Set the pattern_set_version (TC-EPIC3-04) new LearnedPatternsService
+        instances are constructed with. Call once per run, before any family's
+        learned-patterns service is first requested this run -- an
+        ALREADY-cached instance for a family keeps whatever version it was
+        originally constructed with (a disclosed limitation for a long-lived
+        process reusing a cached instance across multiple runs for the same
+        family; the common one-shot-CLI-process case is unaffected since a
+        fresh registry is constructed every process start)."""
+        self._pattern_set_version = version
 
     def get_api_catalog(self, family: str) -> APICatalogService:
         """
@@ -225,7 +240,7 @@ class FamilyServiceRegistry:
         # Will raise FileNotFoundError if db doesn't exist (expected behavior)
         # Pass API catalog for LLM context
         catalog = self.get_api_catalog(family)
-        return LearnedPatternsService(family, catalog=catalog)
+        return LearnedPatternsService(family, catalog=catalog, pattern_set_version=self._pattern_set_version)
 
     def _create_substitution(self, family: str) -> ExampleSubstitutionService:
         """

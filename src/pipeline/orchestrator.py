@@ -54,9 +54,15 @@ except ImportError:
     ContextHarnessService = None
 
 try:
-    from ..services.learned_patterns_service import LearnedPatternsService, extract_error_signature, extract_all_error_signatures
+    from ..services.learned_patterns_service import (
+        LearnedPatternsService,
+        capture_pattern_set_version,
+        extract_error_signature,
+        extract_all_error_signatures,
+    )
 except ImportError:
     LearnedPatternsService = None
+    capture_pattern_set_version = None
     extract_error_signature = None
     extract_all_error_signatures = None
 
@@ -230,6 +236,10 @@ class PipelineOrchestrator:
 
         # Learned patterns service cache (per family)
         self._learned_patterns_service_cache: Dict[str, Optional['LearnedPatternsService']] = {}
+
+        # Pattern-set versioning (TC-EPIC3-04): captured once at run start in
+        # run_full_pipeline(), frozen for that run's own pattern eligibility.
+        self._pattern_set_version: Optional[int] = None
 
         # VectorDB and DriftDetector startup decision (Track 1: C.2)
         # Make a single decision at startup, never change mid-run
@@ -1133,6 +1143,20 @@ class PipelineOrchestrator:
         except Exception as e:
             logger.warning(f"Circuit breaker snapshot capture failed (non-fatal): {e}")
             results['circuit_breaker_state_at_start'] = None
+
+        # Pattern-set versioning (TC-EPIC3-04): captured ONCE here, before any
+        # query_patterns()/preload_all_patterns() call this run, so this run's
+        # pattern eligibility is frozen regardless of auto-learn activity
+        # during or after this run. None (e.g. api_catalog.db doesn't exist
+        # yet) means legacy unfiltered behavior -- non-fatal, matches
+        # TC-EPIC3-05's RunManifest non-fatal-capture requirement.
+        try:
+            self._pattern_set_version = capture_pattern_set_version()
+        except Exception as e:
+            logger.warning(f"Pattern-set version capture failed (non-fatal): {e}")
+            self._pattern_set_version = None
+        results['pattern_set_version'] = self._pattern_set_version
+        self.registry.set_pattern_set_version(self._pattern_set_version)
 
         # Load global config for resource detection
         global_config = self.config_manager.load_global_config()
