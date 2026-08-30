@@ -9,7 +9,7 @@
 #   curl -s -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
 #     https://mcr.microsoft.com/v2/dotnet/sdk/manifests/8.0-bookworm-slim -D - -o /dev/null \
 #     | grep -i docker-content-digest
-FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim@sha256:bb32ba3ba3ea36e38572d9d8db76fa15f7cbf722f3f886e06bca6d528bd4fba8 AS dotnet-sdk
+FROM mcr.microsoft.com/dotnet/sdk:9.0-bookworm-slim@sha256:f190d2dd9eef2899c91ac323caa0bd2b39334a5400ba93013e5199da39dad940 AS dotnet-sdk
 
 # ---- Stage 2: Python runtime + .NET SDK ----
 # Digest resolved fresh from Docker Hub's registry API on 2026-08-30. Bump:
